@@ -67,7 +67,7 @@ class RrpFrameTest {
     @Test
     fun `roundtrip ping pong nonce`() {
         val nonce = ByteArray(8) { it.toByte() }
-        val pong = RrpFrame.parse(RrpFrame.Ping(nonce).encode()) as RrpFrame.Pong? // Ping парсится как Ping
+        val pong = RrpFrame.parse(RrpFrame.Ping(nonce).encode()) as? RrpFrame.Pong // safe cast: ping не является pong
         assertTrue(pong == null) // ping не должен декодироваться как pong
         val p = RrpFrame.parse(RrpFrame.Ping(nonce).encode()) as RrpFrame.Ping
         assertArrayEquals(nonce, p.nonce)

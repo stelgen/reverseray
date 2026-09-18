@@ -60,8 +60,8 @@ class RrpClientException(message: String, cause: Throwable? = null) : IOExceptio
  * оставлен по ТЗ для исходящего OPEN (клиент инициирует и ждёт OPEN_OK).
  */
 class RrpClient(
-    private val host: String,
-    private val port: Int,
+    val host: String,
+    val port: Int,
     private val token: String,
     private val pin: String? = null,
     private val agentName: String = DEFAULT_AGENT,

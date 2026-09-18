@@ -13,6 +13,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        // Legacy multidex обязателен для API < 21 при включённом core desugaring
+        multiDexEnabled = true
 
         // Векторные иконки через support-lib (нужно для minSdk 14)
         vectorDrawables {
@@ -21,6 +23,17 @@ android {
     }
 
     // Universal APK: splits/abiFilters намеренно не объявлены — один APK на все ABI.
+
+    // BouncyCastle jars тянут OSGI-манифесты в META-INF/versions/9 — дубли в пакете
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "META-INF/OSGI-INF/MANIFEST.MF",
+                "META-INF/{AL2.0,LGPL2.1}",
+            )
+        }
+    }
 
     signingConfigs {
         create("release") {
@@ -74,7 +87,10 @@ dependencies {
     implementation(libs.androidx.material)
     implementation(libs.bouncycastle.bcprov)
     implementation(libs.bouncycastle.bctls)
-    implementation(libs.zxing.android.embedded)
+    implementation(libs.bouncycastle.bcutil)
+    // QR-скан (zxing) отложен до UI-фазы: 4.x требует minSdk 19,
+    // подключить вместе с runtime-guard'ом API≥19 и tools:overrideLibrary
+    implementation(libs.androidx.multidex)
 
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 

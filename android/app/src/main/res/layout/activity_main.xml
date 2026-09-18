@@ -17,7 +17,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:paddingTop="8dp"
-        android:text="@string/status_disconnected" />
+        android:text="@string/status_stopped" />
 
     <EditText
         android:id="@+id/config_input"
@@ -38,13 +38,13 @@
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
-            android:text="@string/start" />
+            android:text="@string/btn_start" />
 
         <Button
             android:id="@+id/btn_stop"
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
-            android:text="@string/stop" />
+            android:text="@string/btn_stop" />
     </LinearLayout>
 </LinearLayout>
