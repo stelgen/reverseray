@@ -421,7 +421,7 @@ func toU32(v int) uint32 {
 	if v <= 0 {
 		return 0
 	}
-	if v > int(^uint32(0)) {
+	if uint64(v) > uint64(^uint32(0)) {
 		return ^uint32(0)
 	}
 	return uint32(v)
