@@ -3,17 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ReverseRay — твой телефон = твой VPN</title>
+  <title>ReverseRay — прокси, выходящий через ваше Android-устройство</title>
   <meta name="description" content="ReverseRay: Android-телефон становится egress-узлом. Go-сервер держит SOCKS5/HTTP-прокси, транспорт RRP/1 поверх TLS 1.3, SPKI-pin и anti-SSRF.">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+  <meta property="og:title" content="ReverseRay">
+  <meta property="og:description" content="Personal proxy with an Android device as the egress node. TLS 1.3, SPKI pinning, no VPS provider IP.">
+  <meta property="og:image" content="og-image.png">
+  <meta property="og:type" content="website">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header class="hero">
   <p class="badge">RRP/1 · TLS 1.3 · minSdk 14 · zero third-party SDK</p>
-  <h1>ReverseRay — твой телефон = твой VPN</h1>
+  <h1>ReverseRay — прокси, выходящий через ваше Android-устройство</h1>
   <p class="lead">
-    Трафик выходит с IP твоего телефона — домашнего или мобильного.
+    Исходящий трафик идёт с IP вашего устройства — домашней или мобильной сети.
     Go-сервер на VPS принимает SOCKS5/HTTP и проталкивает его через RRP/1-туннель
     на Android-клиент, который сам диалит цель. NAT и серый IP больше не проблема:
     соединение инициирует телефон.
@@ -35,7 +40,7 @@
 <main>
   <section class="features" aria-label="Возможности">
     <article class="card">
-      <h3>🌐 Egress = твой IP</h3>
+      <h3>🌐 Egress = IP устройства</h3>
       <p>Цель видит телефон, сервер видит только туннель. Домашний Wi-Fi, LTE, чужой город — выходная точка всегда в твоём кармане.</p>
     </article>
     <article class="card">
@@ -64,7 +69,7 @@ docker compose exec reverse-proxy ./reverseray enroll --name Home
       </li>
       <li>
         <b>Проверка:</b>
-        <pre><code>curl --socks5 vps.example:1080 https://ifconfig.me   # → IP твоего телефона</code></pre>
+        <pre><code>curl --socks5 vps.example:1080 https://ifconfig.me   # в ответе — IP устройства</code></pre>
       </li>
     </ol>
   </section>
@@ -80,7 +85,7 @@ docker compose exec reverse-proxy ./reverseray enroll --name Home
 </main>
 
 <footer>
-  <p>ReverseRay · RRP/1 · твой телефон = egress-узел</p>
+  <p>ReverseRay · RRP/1 · Android-устройство как egress-узел</p>
 </footer>
 
 </body>
