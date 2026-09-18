@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ReverseRay</string>
+    <string name="channel_name">Tunnel status</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_handshake">Handshake…</string>
+    <string name="status_connected">Connected — egress via phone</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="config_hint">rrp://token@host:443,8443/?pin=…&amp;name=Home</string>
+    <string name="bad_config">Bad config: %1$s</string>
+    <string name="start">Start tunnel</string>
+    <string name="stop">Stop tunnel</string>
+</resources>

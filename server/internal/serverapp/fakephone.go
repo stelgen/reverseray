@@ -51,16 +51,25 @@ func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
 		NextProtos:         []string{"reverseray/1"},
 		ServerName:         "reverseray.test",
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			// The test server presents leaf only; its SPKI differs from the CA.
-			// So: parse leaf, verify chain against pinned CA is skipped — instead
-			// DialPhone receives the CA pin and the test asserts it separately
-			// via the leaf's issuer signature. We accept leaf whose issuer matches
-			// a CA we trust is pinned by construction (see TestE2E).
-			if len(rawCerts) == 0 {
-				return errors.New("no certs")
+			// Pin the CA: the server presents [leaf, CA]; verify the last cert's
+			// SPKI hash against the configured pin AND the chain link.
+			if len(rawCerts) < 2 {
+				return errors.New("expected leaf+CA chain")
 			}
-			if _, err := x509.ParseCertificate(rawCerts[0]); err != nil {
+			leaf, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
 				return err
+			}
+			ca, err := x509.ParseCertificate(rawCerts[len(rawCerts)-1])
+			if err != nil {
+				return err
+			}
+			if err := leaf.CheckSignatureFrom(ca); err != nil {
+				return errors.New("leaf not signed by presented CA")
+			}
+			sum := sha256.Sum256(ca.RawSubjectPublicKeyInfo)
+			if !bytes.Equal(sum[:], want) {
+				return errors.New("CA pin mismatch")
 			}
 			return nil
 		},

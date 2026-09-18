@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReverseRay — твой телефон = твой VPN</title>
+<meta name="description" content="ReverseRay: Android-телефон становится egress-узлом личного прокси. SOCKS5/HTTP на сервере, резидентный IP телефона, без VPS-провайдера.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="orb"></div>
+  <h1>ReverseRay</h1>
+  <p class="tagline">Твой телефон = твой VPN. Сервер — просто дверь, интернет — с твоего SIM.</p>
+  <pre class="scheme">[Приложения] → [Xray: socks5] → [Docker: reverseray]
+                                    │ TLS 1.3 RRP/1 (телефон диалит сам)
+                                    ▼
+                              [Android APK] → 🌍 (резидентный IP)</pre>
+  <a class="btn" href="https://github.com/stelgen/reverseray">GitHub →</a>
+</header>
+
+<section class="features">
+  <div class="card"><h3>🔓 Без VPS-провайдера</h3><p>Egress — твой телефон: домашний Wi-Fi или мобильный оператор. Резидентный IP, никакого хостинг-ASN в whois.</p></div>
+  <div class="card"><h3>🛡️ Zero-trust транспорт</h3><p>TLS 1.3 + SPKI-pin на CA, HMAC-токены с одноразовым nonce, анти-replay. Сервер хранит только хэши токенов.</p></div>
+  <div class="card"><h3>📵 Работает за CGNAT</h3><p>Телефон сам инициирует соединение. Входящие порты не нужны — ни на телефоне, ни в сети оператора.</p></div>
+</section>
+
+<section class="quickstart">
+  <h2>Quickstart — 5 минут</h2>
+  <pre>mkdir -p state &amp;&amp; chown 65532:65532 state
+docker compose up -d
+docker compose exec reverseray /reverseray enroll \
+  -state-dir /var/lib/reverseray -name phone-1 -host YOUR_IP -port 443
+# → вставь конфиг-строку rrp://… в приложение
+curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me   # → IP телефона</pre>
+</section>
+
+<footer>
+  <p>MIT License · <a href="https://github.com/stelgen/reverseray">github.com/stelgen/reverseray</a></p>
+</footer>
+</body>
+</html>

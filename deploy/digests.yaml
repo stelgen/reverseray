@@ -1,0 +1,6 @@
+# Release digests (источник для прод-compose пиннинов).
+# Формат: тег -> образ digest. Храним последние 3.
+# Обновляется автоматически релиз-пайплайном (см. .github/workflows/release.yml).
+releases:
+  # - tag: v0.1.0
+  #   image: ghcr.io/stelgen/reverseray@sha256:PLACEHOLDER  # заполнится первым CI-пушем

@@ -231,6 +231,16 @@ func TestBadAuthIsRejected(t *testing.T) {
 	}
 }
 
+func TestBadPinIsRejected(t *testing.T) {
+	_, cfg, token := startTestServer(t)
+	badPin := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	_, _, err := DialPhone(t, cfg.Listen.Tunnels, badPin, token, "phone-1",
+		func(host string, port uint16) (net.Conn, error) { return net.Dial("tcp", "127.0.0.1:1") })
+	if err == nil {
+		t.Fatal("wrong CA pin must be rejected")
+	}
+}
+
 func TestAdminAPI(t *testing.T) {
 	app, cfg, _ := startTestServer(t)
 	resp, err := http.Get("http://" + cfg.Listen.AdminTCP + "/healthz")

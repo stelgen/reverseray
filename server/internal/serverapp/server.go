@@ -203,12 +203,20 @@ func (a *App) acceptTunnels(ln net.Listener) {
 	}
 }
 
-// tunnelTLSConfig is shared by the manual TLS wrap in handleTunnel.
 func (a *App) tunnelTLSConfig() *tls.Config {
+	// Present [leaf, CA] so clients can verify against the pinned CA SPKI.
+	leaf := a.bundle.Leaf
+	chain := make([][]byte, 0, 2)
+	chain = append(chain, leaf.Certificate...)
+	chain = append(chain, a.bundle.CA.Raw)
 	return &tls.Config{
-		Certificates: []tls.Certificate{a.bundle.Leaf},
-		MinVersion:   tls.VersionTLS13,
-		NextProtos:   []string{"reverseray/1"},
+		Certificates: []tls.Certificate{{
+			Certificate: chain,
+			PrivateKey:  leaf.PrivateKey,
+			Leaf:        leaf.Leaf,
+		}},
+		MinVersion: tls.VersionTLS13,
+		NextProtos: []string{"reverseray/1"},
 	}
 }
 
@@ -229,7 +237,10 @@ func (a *App) handleTunnel(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	if alpn := tc.ConnectionState().NegotiatedProtocol; alpn != "reverseray/1" {
+	// ALPN: require reverseray/1 when the client offers any ALPN. Some legacy
+	// pure-Java stacks (BC on API 14) cannot send ALPN — accept no-ALPN, keep the
+	// strict gate for ALPN-capable clients.
+	if alpn := tc.ConnectionState().NegotiatedProtocol; alpn != "" && alpn != "reverseray/1" {
 		a.met.AuthFailures.Add(1)
 		_ = conn.Close()
 		return
