@@ -47,6 +47,17 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     raise RuntimeError("DejaVuSans-Bold.ttf not found (install fonts-dejavu-core)")
 
 
+def fit_font(text: str, max_w: int, start_size: int) -> ImageFont.FreeTypeFont:
+    """Largest font size <= start_size whose rendered width fits max_w."""
+    size = start_size
+    while size > 10:
+        f = _font(size)
+        if f.getlength(text) <= max_w:
+            return f
+        size -= 2
+    return _font(size)
+
+
 def og_image() -> Image.Image:
     """1280x640: black background, sphere glyph, wordmark, accent ray, tagline."""
     w, h = 1280, 640
@@ -56,12 +67,11 @@ def og_image() -> Image.Image:
     left = 96
     cy = h // 2 - 40
 
-    # small sphere glyph: outline circle + ray, white on black
+    # small sphere glyph: outline circle + inner dot (no stray lines)
     r = 74
     gcx, gcy = left + r, cy
     d.ellipse([gcx - r, gcy - r, gcx + r, gcy + r], outline=TEXT, width=6)
     d.ellipse([gcx - 26, gcy - 34, gcx + 6, gcy - 2], fill=TEXT)
-    d.line([gcx + r + 14, gcy + r - 8, gcx + r + 150, gcy + r + 118], fill=ACCENT, width=10)
 
     # wordmark
     tx = gcx + r + 96
@@ -80,9 +90,10 @@ def og_image() -> Image.Image:
             od[i, y] = (ACCENT[0], ACCENT[1], ACCENT[2], a)
     img.paste(Image.new("RGB", (line_w, 5), ACCENT), (tx, line_y), overlay)
 
-    # tagline
-    f_tag = _font(38)
-    d.text((tx, line_y + 34), "ANDROID EGRESS   ·   TLS 1.3   ·   SOCKS5/HTTP", font=f_tag, fill=MUTED)
+    # tagline: font auto-fits the remaining width, never clipped
+    tagline = "ANDROID EGRESS   ·   TLS 1.3   ·   SOCKS5/HTTP"
+    f_tag = fit_font(tagline, w - tx - 48, 38)
+    d.text((tx, line_y + 34), tagline, font=f_tag, fill=MUTED)
     return img
 
 

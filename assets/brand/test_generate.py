@@ -53,6 +53,12 @@ class OgImageTest(unittest.TestCase):
         )
         self.assertGreater(accent, 300, "accent line not found")
 
+    def test_tagline_fits_inside_canvas(self):
+        # regression: tagline must never be clipped at the right edge
+        tagline = "ANDROID EGRESS   ·   TLS 1.3   ·   SOCKS5/HTTP"
+        f = generate.fit_font(tagline, 1280 - 340 - 48, 38)
+        self.assertLessEqual(f.getlength(tagline), 1280 - 340 - 48)
+
     def test_deterministic_bytes(self):
         a = generate.og_image()
         b = generate.og_image()
