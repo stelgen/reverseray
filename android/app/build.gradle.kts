@@ -11,8 +11,8 @@ android {
         applicationId = "dev.stelgen.reverseray"
         minSdk = 14
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         // Legacy multidex обязателен для API < 21 при включённом core desugaring
         multiDexEnabled = true
 
