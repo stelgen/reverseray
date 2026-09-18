@@ -79,6 +79,12 @@ android {
     lint {
         abortOnError = true
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -88,11 +94,12 @@ dependencies {
     implementation(libs.bouncycastle.bcprov)
     implementation(libs.bouncycastle.bctls)
     implementation(libs.bouncycastle.bcutil)
-    // QR-скан (zxing) отложен до UI-фазы: 4.x требует minSdk 19,
-    // подключить вместе с runtime-guard'ом API≥19 и tools:overrideLibrary
+    implementation(libs.zxing.android.embedded) // QR-скан (API>=19) и генерация QR; guard в MainActivity
     implementation(libs.androidx.multidex)
 
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core-ktx:1.6.1")
 }

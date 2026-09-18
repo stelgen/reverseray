@@ -9,7 +9,6 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.Random
 import java.util.Vector
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
@@ -40,6 +39,29 @@ import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider
 
 /** Ошибка клиента RRP (TCP/TLS/handshake/соединение). */
 class RrpClientException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+/** Минимальная future для err_code OPEN: CompletableFuture недоступен на API < 24 (minSdk 14). */
+class OpenFuture {
+    private val latch = java.util.concurrent.CountDownLatch(1)
+    @Volatile private var code: Int = RrpClient.ERR_GENERAL
+
+    internal fun complete(errCode: Int) {
+        code = errCode
+        latch.countDown()
+    }
+
+    /** Блокирующе ждёт результата. return err_code (0 = OK). */
+    fun get(): Int {
+        latch.await()
+        return code
+    }
+
+    /** Блокирующе ждёт с таймаутом; по таймауту возвращает ERR_TIMEOUT. */
+    fun get(timeoutMs: Long): Int {
+        latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return code
+    }
+}
 
 /**
  * Клиент RRP/1-туннеля. Pure Kotlin (без android.*).
@@ -111,7 +133,7 @@ class RrpClient(
     @Volatile private var readyFrame: RrpFrame.Ready? = null
     @Volatile private var handshakeError: IOException? = null
 
-    private val pendingOpens = ConcurrentHashMap<Long, CompletableFuture<Int>>()
+    private val pendingOpens = ConcurrentHashMap<Long, OpenFuture>()
     private val streams = ConcurrentHashMap<Long, Stream>()
     private val nextStreamId = AtomicLong(1)
     private val lastPongMs = AtomicLong(0)
@@ -259,8 +281,8 @@ class RrpClient(
      * Возвращает err_code (ERR_OK = 0); без отправки — ERR_NOT_READY /
      * ERR_SSRF_BLOCKED / ERR_BAD_ADDRESS. Отменяется таймаутом OPEN_TIMEOUT_MS → ERR_TIMEOUT.
      */
-    fun sendOpen(addr: String, port: Int): CompletableFuture<Int> {
-        val future = CompletableFuture<Int>()
+    fun sendOpen(addr: String, port: Int): OpenFuture {
+        val future = OpenFuture()
         if (state != State.READY) {
             future.complete(ERR_NOT_READY)
             return future
@@ -282,7 +304,7 @@ class RrpClient(
             sendFrame(RrpFrame.Open(streamId, encoded.atyp, encoded.bytes, port))
         } catch (e: IOException) {
             pendingOpens.remove(streamId)
-            future.completeExceptionally(e)
+            future.complete(ERR_CONNECT_FAILED)
             return future
         }
         try {
@@ -313,12 +335,27 @@ class RrpClient(
             sendOpenOk(streamId, ERR_TOO_MANY_STREAMS)
             return
         }
+        // DNS-resolve выполняем сами и проверяем КАЖДЫЙ адрес по байтам:
+        // hostname может резолвиться в приватный IP (DNS-rebinding bypass строки-гварда)
+        val allowedAddr = try {
+            java.net.InetAddress.getAllByName(targetHost)
+                .firstOrNull { !SsrfGuard.isBlockedAddress(it, allowLan) }
+        } catch (e: Exception) {
+            sendOpenOk(streamId, ERR_BAD_ADDRESS)
+            return
+        }
+        if (allowedAddr == null) {
+            log("OPEN $targetHost:${frame.port}: все резолвы заблокированы SSRF-guard")
+            sendOpenOk(streamId, ERR_SSRF_BLOCKED)
+            return
+        }
         try {
             relayExecutor.execute {
                 var sock: Socket? = null
                 try {
                     val s = Socket()
-                    s.connect(InetSocketAddress(targetHost, frame.port), CONNECT_TIMEOUT_MS)
+                    // коннект на уже проверенный адрес — без повторного DNS-резолва
+                    s.connect(InetSocketAddress(allowedAddr, frame.port), CONNECT_TIMEOUT_MS)
                     s.tcpNoDelay = true
                     sock = s
                     val st = registerStream(streamId, s)
@@ -341,7 +378,8 @@ class RrpClient(
         return st
     }
 
-    /** Поток: сокет цели → DATA кадры (с учётом окна flow-control). */
+    /** Поток: сокет цели → DATA кадры (с учётом окна flow-control).
+     *  acquire с таймаутом: если сервер умер и не наращивает окно — поток не висит вечно. */
     private fun pumpOutgoing(st: Stream) {
         val buf = ByteArray(16 * 1024)
         try {
@@ -350,7 +388,11 @@ class RrpClient(
                 val n = input.read(buf)
                 if (n < 0) break
                 if (n == 0) continue
-                st.sendWindow.acquire(n) // семафор окна 512 КБ на стрим
+                if (!st.sendWindow.tryAcquire(n, WINDOW_ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    log("stream ${st.id}: окно не наращено за ${WINDOW_ACQUIRE_TIMEOUT_MS}мс — закрываю")
+                    sendFrameQuiet(RrpFrame.Close(st.id, ERR_TIMEOUT))
+                    break
+                }
                 sendFrame(RrpFrame.Data(st.id, 0, buf.copyOf(n)))
             }
             if (!st.closed.get()) sendFrameQuiet(RrpFrame.Close(st.id, ERR_OK))
@@ -567,6 +609,7 @@ class RrpClient(
         const val TLS_HANDSHAKE_TIMEOUT_MS = 15_000
         const val HANDSHAKE_TIMEOUT_MS = 20_000L
         const val OPEN_TIMEOUT_MS = 30_000L
+        const val WINDOW_ACQUIRE_TIMEOUT_MS = 30_000L
         const val NONCE_SIZE = 8
         const val MAX_STREAMS_REQUEST = 64
 

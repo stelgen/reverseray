@@ -302,6 +302,21 @@ object SsrfGuard {
         return false
     }
 
+    /**
+     * Проверка уже-резолвнутого адреса по байтам (v4 или v6).
+     * Закрывает DNS-rebinding: hostname прошёл строковый гвард, но резолвится в приватный IP.
+     */
+    fun isBlockedAddress(addr: java.net.InetAddress, allowLan: Boolean = false): Boolean {
+        val b = addr.address
+        return if (b.size == 4) {
+            val v = (b[0].toLong() and 0xFF shl 24) or (b[1].toLong() and 0xFF shl 16) or
+                (b[2].toLong() and 0xFF shl 8) or (b[3].toLong() and 0xFF)
+            checkV4(v, allowLan)
+        } else {
+            checkV6(b, allowLan)
+        }
+    }
+
     private fun checkV6(b: ByteArray, allowLan: Boolean): Boolean {
         var allZero = true
         for (x in b) if (x.toInt() != 0) { allZero = false; break }

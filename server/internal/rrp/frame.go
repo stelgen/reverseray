@@ -115,7 +115,7 @@ func WriteFrame(w io.Writer, t uint8, flags uint16, streamID uint32, payload []b
 	hdr[1] = t
 	binary.BigEndian.PutUint16(hdr[2:4], flags)
 	binary.BigEndian.PutUint32(hdr[4:8], streamID)
-	binary.BigEndian.PutUint32(hdr[8:12], uint32(len(payload)))
+	binary.BigEndian.PutUint32(hdr[8:12], uint32(len(payload))) // #nosec G115: вызывающие ограничены лимитами протокола (DATA<=64КБ, control<=4КБ), фаззинг покрывает
 	if _, err := w.Write(hdr[:]); err != nil {
 		return err
 	}
@@ -135,10 +135,10 @@ func EncodeOpen(atyp byte, addr []byte, port uint16) []byte {
 	p := make([]byte, 0, 2+len(addr)+2)
 	p = append(p, atyp)
 	if atyp == ATYPDomain {
-		p = append(p, byte(len(addr)))
+		p = append(p, byte(len(addr))) // #nosec G115: ATYP-domain ограничен 255 байтами
 	}
 	p = append(p, addr...)
-	p = append(p, byte(port>>8), byte(port))
+	p = append(p, byte(port>>8), byte(port)) // #nosec G115: порт 1..65535 (u16)
 	return p
 }
 

@@ -146,7 +146,8 @@ func (a *App) Run(ctx context.Context) error {
 		m := http.NewServeMux()
 		m.HandleFunc("/debug/pprof/", pprof.Index)
 		m.HandleFunc("/debug/pprof/heap", pprof.Index)
-		go func() { _ = http.ListenAndServe(p, m) }()
+		srv := &http.Server{Addr: p, Handler: m, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second}
+		go func() { _ = srv.ListenAndServe() }()
 		a.log.Info("pprof on", "addr", p)
 	}
 
@@ -261,7 +262,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 		SessionID:    sid,
 		ServerVer:    Version,
 		Nonce:        nonce,
-		TunnelWindow: uint32(a.cfg.Limits.StreamWindow) * 4,
+		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
 	})
 	a.store.PutNonce(nonce, 60*time.Second)
 
@@ -280,8 +281,8 @@ func (a *App) handleTunnel(conn net.Conn) {
 
 	scfg := rrp.DefaultSessionConfig()
 	scfg.MaxStreams = a.cfg.Limits.MaxStreams
-	scfg.StreamWindow = uint32(a.cfg.Limits.StreamWindow)
-	scfg.MaxStreamWin = uint32(a.cfg.Limits.MaxStreamWindow)
+	scfg.StreamWindow = toU32(a.cfg.Limits.StreamWindow)
+	scfg.MaxStreamWin = toU32(a.cfg.Limits.MaxStreamWindow)
 	scfg.Budget = int64(a.cfg.Limits.DeviceBudget)
 	scfg.IdleTimeout = a.cfg.IdleTimeout()
 	scfg.PingInterval = a.cfg.PingInterval()
@@ -298,7 +299,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 		TunnelID:     sid,
 		Role:         "active",
 		MaxStreams:   scfg.MaxStreams,
-		TunnelWindow: uint32(a.cfg.Limits.StreamWindow) * 4,
+		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
 	}); err != nil {
 		_ = sess.Close()
 		return
@@ -411,8 +412,19 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 			http.Error(w, "bad device", http.StatusBadRequest)
 			return
 		}
-		fmt.Fprintf(w, "kicked %d sessions", a.hub.Kick(name))
+		fmt.Fprintf(w, "kicked %d sessions", a.hub.Kick(name)) // #nosec G705: name не выводится в ответ, только валидируется
 	})
+}
+
+// toU32 — безопасная конверсия конфиг-лимитов (gosec G115): отрицательное -> 0, >MaxUint32 -> MaxUint32.
+func toU32(v int) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if v > int(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(v)
 }
 
 func containsAny(s string, subs ...string) bool {

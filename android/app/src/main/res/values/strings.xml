@@ -17,4 +17,9 @@
     <string name="notif_title">ReverseRay — туннель</string>
     <string name="notif_channel_name">Туннель</string>
     <string name="notif_starting">Запуск туннеля…</string>
+    <string name="qr_scan">Сканировать QR</string>
+    <string name="qr_show">Показать QR</string>
+    <string name="qr_prompt">Наведи камеру на QR-конфиг ReverseRay</string>
+    <string name="qr_imported">Конфиг из QR загружен</string>
+    <string name="qr_error">QR недоступен</string>
 </resources>

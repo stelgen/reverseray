@@ -17,4 +17,9 @@
     <string name="notif_title">ReverseRay — tunnel</string>
     <string name="notif_channel_name">Tunnel</string>
     <string name="notif_starting">Starting tunnel…</string>
+    <string name="qr_scan">Scan QR</string>
+    <string name="qr_show">Show QR</string>
+    <string name="qr_prompt">Point the camera at a ReverseRay config QR</string>
+    <string name="qr_imported">Config imported from QR</string>
+    <string name="qr_error">QR unavailable</string>
 </resources>

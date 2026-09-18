@@ -2,6 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- zxing-embedded 4.3.0 декларирует minSdk 19; используем его только на API>=19
+         (кнопка сканера скрыта на 14–18, runtime-guard в MainActivity) -->
+    <!-- REQUIRED на API 34+: receiver с RECEIVER_NOT_EXPORTED (MainActivity.onStart).
+         Без этого — RuntimeException «Permission ... is required» при старте UI. -->
+    <uses-permission android:name="dev.stelgen.reverseray.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+
+    <permission
+        android:name="dev.stelgen.reverseray.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        android:protectionLevel="signature" />
+
+    <uses-sdk tools:overrideLibrary="com.google.zxing.client.android" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

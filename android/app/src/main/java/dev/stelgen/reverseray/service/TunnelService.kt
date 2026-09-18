@@ -43,6 +43,8 @@ class TunnelService : Service() {
 
     private inner class Runner(val target: Target) {
         @Volatile var kick = false
+        /** активный клиент — для форс-закрытия при stopTunnel (иначе стоп ждёт handshake-таймаут до 20с) */
+        @Volatile var client: RrpClient? = null
     }
 
     private val runners = mutableListOf<Runner>()
@@ -108,7 +110,7 @@ class TunnelService : Service() {
         acquireWakeLock()
         for (port in cfg.ports) {
             val r = Runner(Target(cfg.host, port))
-            runners.add(r)
+            synchronized(runners) { runners.add(r) }
             Thread({ runLoop(r) }, "rrp-conn-$port").start()
         }
         registerNetworkWatching()
@@ -127,6 +129,7 @@ class TunnelService : Service() {
                 allowLan = allowLan(),
                 listener = clientListener,
             )
+            r.client = client
             try {
                 client.connect()
                 attempt = 0
@@ -143,6 +146,7 @@ class TunnelService : Service() {
             } finally {
                 try { client.close() } catch (_: Exception) {}
             }
+            r.client = null
             if (stopping) break
             attempt++
             val delay = RrpClient.backoffDelayMs(attempt - 1, rnd)
@@ -171,7 +175,17 @@ class TunnelService : Service() {
 
     private fun stopTunnel() {
         stopping = true
-        runners.clear()
+        // форс-закрытие активных клиентов: мгновенный стоп,
+        // не дожидаемся handshake/connect-таймаутов
+        val active: List<Runner>
+        synchronized(runners) {
+            active = runners.toList()
+            runners.clear()
+        }
+        active.forEach {
+            it.kick = true
+            try { it.client?.close() } catch (_: Exception) {}
+        }
         unregisterNetworkWatching()
         releaseWakeLock()
         updateStatus(getString(R.string.status_stopped))
@@ -217,10 +231,12 @@ class TunnelService : Service() {
 
     private fun unregisterNetworkWatching() {
         networkCallback?.let {
-            try {
-                (applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
-                    .unregisterNetworkCallback(it)
-            } catch (_: Exception) {
+            if (Build.VERSION.SDK_INT >= 21) {
+                try {
+                    (applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
+                        .unregisterNetworkCallback(it)
+                } catch (_: Exception) {
+                }
             }
         }
         networkCallback = null
@@ -252,14 +268,19 @@ class TunnelService : Service() {
         } else {
             Notification.Builder(this)
         }
-        return builder
+        builder
             // android.R.*: системная иконка безопасна для notification small icon на всех API
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(getString(R.string.notif_title))
             .setContentText(text)
             .setContentIntent(contentIntent)
             .setOngoing(true)
-            .build()
+        return if (Build.VERSION.SDK_INT >= 16) {
+            builder.build()
+        } else {
+            @Suppress("DEPRECATION")
+            builder.getNotification() // API 14-15: build() ещё нет
+        }
     }
 
     private fun createChannel() {
