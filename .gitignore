@@ -1,0 +1,20 @@
+# Go
+server/cover.out
+*.test
+*.out
+
+# state
+state/
+*.key
+*.pem
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.jks
+*.keystore
+
+# misc
+.DS_Store
