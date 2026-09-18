@@ -49,3 +49,20 @@ jobs:
           tags: "reverseray:ci"
       - name: Smoke healthcheck binary exists
         run: docker run --rm --entrypoint /reverseray "reverseray:ci" version
+
+  android:
+    name: Android build (debug + unit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build + unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
