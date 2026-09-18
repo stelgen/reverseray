@@ -66,3 +66,17 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
+
+  assets:
+    name: Brand assets (regen + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow
+      - name: Unit tests for generator
+        run: python3 -m unittest discover -s assets/brand -p 'test_*.py' -v
+      - name: Verify committed assets match generator
+        run: python3 assets/brand/generate.py --check
