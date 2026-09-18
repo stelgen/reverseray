@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.ReverseRay" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:statusBarColor">#062A66</item>
+    <!-- Тёмная тема (values-night) -->
+    <style name="Theme.ReverseRay" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">#4FC3F7</item>
+        <item name="colorPrimaryDark">#0B1020</item>
+        <item name="colorAccent">#4FC3F7</item>
+        <item name="android:windowBackground">#0B1020</item>
     </style>
 </resources>

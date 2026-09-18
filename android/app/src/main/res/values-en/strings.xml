@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- EN — зеркальный перевод -->
+    <string name="app_name">ReverseRay</string>
+    <string name="status_idle">Status: stopped</string>
+    <string name="status_stopped">Tunnel stopped</string>
+    <string name="status_connecting">Connecting to %1$s…</string>
+    <string name="status_connected">Ready: port %1$d</string>
+    <string name="status_retry">Port %1$d: reconnecting in %2$d s</string>
+    <string name="status_error">Port %1$d: error — %2$s</string>
+    <string name="status_no_config">No config — paste an rrp:// line</string>
+    <string name="status_already_running">Already running</string>
+    <string name="config_hint">rrp://token@host:443,8443/?pin=BASE64SPKI&amp;name=Home</string>
+    <string name="btn_start">Start tunnel</string>
+    <string name="btn_stop">Stop</string>
+    <string name="invalid_config">Invalid config: %1$s</string>
+    <string name="notif_title">ReverseRay — tunnel</string>
+    <string name="notif_channel_name">Tunnel</string>
+    <string name="notif_starting">Starting tunnel…</string>
+</resources>

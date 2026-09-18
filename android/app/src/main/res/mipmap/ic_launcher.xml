@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Фолбэк для API 14..25: shape-drawable (без векторов — на pre-21 их не надуть) -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#0B1020" />
+        </shape>
+    </item>
+    <item
+        android:left="28dp"
+        android:top="28dp"
+        android:right="28dp"
+        android:bottom="28dp">
+        <shape android:shape="oval">
+            <solid android:color="#1E88E5" />
+        </shape>
+    </item>
+    <item
+        android:left="44dp"
+        android:top="44dp"
+        android:right="44dp"
+        android:bottom="44dp">
+        <shape android:shape="oval">
+            <solid android:color="#81D4FA" />
+        </shape>
+    </item>
+</layer-list>

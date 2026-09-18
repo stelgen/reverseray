@@ -7,37 +7,60 @@ import org.junit.Test
 class RrpUriTest {
 
     @Test
-    fun parseAndRoundtrip() {
-        val uri = "rrp://tok123@srv.example.com:443,8443/?pin=abc-123&name=My%20Home"
-        val p = RrpUri.parse(uri)
-        assertEquals("tok123", p.token)
-        assertEquals("srv.example.com", p.host)
-        assertEquals(listOf(443, 8443), p.ports)
-        assertEquals("abc-123", p.pin)
-        assertEquals("My Home", p.name)
-        assertEquals(uri, p.toUri())
+    fun `parse full uri`() {
+        val cfg = RrpUri.parse("rrp://tok123@vpn.example.net:443,8443/?pin=AAECAw&name=Home")
+        assertEquals("tok123", cfg.token)
+        assertEquals("vpn.example.net", cfg.host)
+        assertEquals(listOf(443, 8443), cfg.ports)
+        assertEquals("AAECAw", cfg.pin)
+        assertEquals("Home", cfg.name)
     }
 
     @Test
-    fun minimalUri() {
-        val p = RrpUri.parse("rrp://t@h:443")
-        assertEquals("h", p.host)
-        assertEquals(listOf(443), p.ports)
-        assertEquals("h", p.name)
+    fun `canonical string serialize roundtrip`() {
+        val raw = "rrp://token@host.example:443,8443/?pin=SPKI&name=Home"
+        assertEquals(raw, RrpUri.parse(raw).serialize())
     }
 
     @Test
-    fun lanFlagRoundtrip() {
-        val p = RrpUri.parse("rrp://t@h:443/?lan=1")
-        assertTrue(p.allowLan)
+    fun `parse-serialize roundtrip with encoding`() {
+        val cfg = RrpUriConfig(
+            token = "tok en/прикол",
+            host = "2001:db8::1",
+            ports = listOf(443, 8443, 9443),
+            pin = "q83hAbcd=",
+            name = "Дом/Работа 1",
+        )
+        val parsed = RrpUri.parse(cfg.serialize())
+        assertEquals(cfg, parsed)
     }
 
     @Test
-    fun rejects() {
-        assertThrows(IllegalArgumentException::class.java) { RrpUri.parse("https://x") }
-        assertThrows(IllegalArgumentException::class.java) { RrpUri.parse("rrp://t@h") }
-        assertThrows(IllegalArgumentException::class.java) { RrpUri.parse("rrp://@h:443") }
-        assertThrows(IllegalArgumentException::class.java) { RrpUri.parse("rrp://t@h:0") }
-        assertThrows(IllegalArgumentException::class.java) { RrpUri.parse("rrp://t@h:99999") }
+    fun `parse without query and with ipv6 host`() {
+        val cfg = RrpUri.parse("rrp://t@[2001:db8::1]:443")
+        assertEquals("t", cfg.token)
+        assertEquals("2001:db8::1", cfg.host)
+        assertEquals(listOf(443), cfg.ports)
+        assertEquals("rrp://t@[2001:db8::1]:443", cfg.serialize())
+    }
+
+    @Test
+    fun `case-insensitive scheme`() {
+        val cfg = RrpUri.parse("RRP://t@h.example:443")
+        assertEquals("t", cfg.token)
+    }
+
+    @Test
+    fun `errors`() {
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("http://t@h:443") }
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://h:443") }          // нет @
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://@h:443") }         // пустой токен
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@h") }            // нет портов
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@h:0") }          // порт < 1
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@h:99999") }      // порт > 65535
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@h:abc") }        // порт не число
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@[2001:db8::1") } // нет ]
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@h:443/?pin=%ZZ") }
+        assertThrows(RrpUriException::class.java) { RrpUri.parse("rrp://t@h:443/?pin=%A") } // обрезанный pct
     }
 }

@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- RU — базовые (default) строки -->
     <string name="app_name">ReverseRay</string>
-    <string name="channel_name">Tunnel status</string>
-    <string name="status_connecting">Connecting…</string>
-    <string name="status_handshake">Handshake…</string>
-    <string name="status_connected">Connected — egress via phone</string>
-    <string name="status_disconnected">Disconnected</string>
-    <string name="config_hint">rrp://token@host:443,8443/?pin=…&amp;name=Home</string>
-    <string name="bad_config">Bad config: %1$s</string>
-    <string name="start">Start tunnel</string>
-    <string name="stop">Stop tunnel</string>
+    <string name="status_idle">Статус: остановлен</string>
+    <string name="status_stopped">Туннель остановлен</string>
+    <string name="status_connecting">Подключение к %1$s…</string>
+    <string name="status_connected">Готов: порт %1$d</string>
+    <string name="status_retry">Порт %1$d: переподключение через %2$d с</string>
+    <string name="status_error">Порт %1$d: ошибка — %2$s</string>
+    <string name="status_no_config">Нет конфига — вставь rrp:// строку</string>
+    <string name="status_already_running">Уже работает</string>
+    <string name="config_hint">rrp://token@host:443,8443/?pin=BASE64SPKI&amp;name=Home</string>
+    <string name="btn_start">Запустить туннель</string>
+    <string name="btn_stop">Остановить</string>
+    <string name="invalid_config">Некорректный конфиг: %1$s</string>
+    <string name="notif_title">ReverseRay — туннель</string>
+    <string name="notif_channel_name">Туннель</string>
+    <string name="notif_starting">Запуск туннеля…</string>
 </resources>

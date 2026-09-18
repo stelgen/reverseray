@@ -565,13 +565,13 @@ class RrpClient(
 
         const val CONNECT_TIMEOUT_MS = 10_000
         const val TLS_HANDSHAKE_TIMEOUT_MS = 15_000
-        const val HANDSHAKE_TIMEOUT_MS = 20_000
-        const val OPEN_TIMEOUT_MS = 30_000
+        const val HANDSHAKE_TIMEOUT_MS = 20_000L
+        const val OPEN_TIMEOUT_MS = 30_000L
         const val NONCE_SIZE = 8
         const val MAX_STREAMS_REQUEST = 64
 
         /** Окно flow-control по умолчанию: 512 КБ на стрим. */
-        const val DEFAULT_TUNNEL_WINDOW = 512 * 1024
+        const val DEFAULT_TUNNEL_WINDOW = 512 * 1024L
 
         // err_code для OPEN/OPEN_OK и sendOpen()
         const val ERR_OK = 0

@@ -1,42 +1,87 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ReverseRay — твой телефон = твой VPN</title>
-<meta name="description" content="ReverseRay: Android-телефон становится egress-узлом личного прокси. SOCKS5/HTTP на сервере, резидентный IP телефона, без VPS-провайдера.">
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReverseRay — твой телефон = твой VPN</title>
+  <meta name="description" content="ReverseRay: Android-телефон становится egress-узлом. Go-сервер держит SOCKS5/HTTP-прокси, транспорт RRP/1 поверх TLS 1.3, SPKI-pin и anti-SSRF.">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
 <header class="hero">
-  <div class="orb"></div>
-  <h1>ReverseRay</h1>
-  <p class="tagline">Твой телефон = твой VPN. Сервер — просто дверь, интернет — с твоего SIM.</p>
-  <pre class="scheme">[Приложения] → [Xray: socks5] → [Docker: reverseray]
-                                    │ TLS 1.3 RRP/1 (телефон диалит сам)
-                                    ▼
-                              [Android APK] → 🌍 (резидентный IP)</pre>
-  <a class="btn" href="https://github.com/stelgen/reverseray">GitHub →</a>
+  <p class="badge">RRP/1 · TLS 1.3 · minSdk 14 · zero third-party SDK</p>
+  <h1>ReverseRay — твой телефон = твой VPN</h1>
+  <p class="lead">
+    Трафик выходит с IP твоего телефона — домашнего или мобильного.
+    Go-сервер на VPS принимает SOCKS5/HTTP и проталкивает его через RRP/1-туннель
+    на Android-клиент, который сам диалит цель. NAT и серый IP больше не проблема:
+    соединение инициирует телефон.
+  </p>
+  <p class="cta">
+    <a class="btn" href="https://github.com/stelgen/reverseray">GitHub →</a>
+    <a class="btn ghost" href="#quickstart">Quickstart за 5 минут</a>
+  </p>
+
+  <pre class="scheme">
+┌────────────────┐   SOCKS5/HTTP   ┌────────────────────┐    RRP/1 (TLS 1.3)    ┌──────────────────┐
+│ браузер / софт │ ──────────────► │   VPS: Go-сервер   │ ◄───────────────────► │ телефон: egress  │
+│  curl, tor, …  │   :1080 / :8080 │  auth · rate-limit │   исходящее с         │ диалит цель,     │
+│                │                 │  анти-DDoS         │   телефона (NAT ok)   │ мобильный IP     │
+└────────────────┘                 └────────────────────┘                       └──────────────────┘
+  </pre>
 </header>
 
-<section class="features">
-  <div class="card"><h3>🔓 Без VPS-провайдера</h3><p>Egress — твой телефон: домашний Wi-Fi или мобильный оператор. Резидентный IP, никакого хостинг-ASN в whois.</p></div>
-  <div class="card"><h3>🛡️ Zero-trust транспорт</h3><p>TLS 1.3 + SPKI-pin на CA, HMAC-токены с одноразовым nonce, анти-replay. Сервер хранит только хэши токенов.</p></div>
-  <div class="card"><h3>📵 Работает за CGNAT</h3><p>Телефон сам инициирует соединение. Входящие порты не нужны — ни на телефоне, ни в сети оператора.</p></div>
-</section>
+<main>
+  <section class="features" aria-label="Возможности">
+    <article class="card">
+      <h3>🌐 Egress = твой IP</h3>
+      <p>Цель видит телефон, сервер видит только туннель. Домашний Wi-Fi, LTE, чужой город — выходная точка всегда в твоём кармане.</p>
+    </article>
+    <article class="card">
+      <h3>🛡 Безопасно по умолчанию</h3>
+      <p>TLS 1.3 на BouncyCastle, SPKI-pin, ALPN <code>reverseray/1</code>, anti-SSRF guard (приватные диапазоны закрыты), flow-control 512 КБ на стрим.</p>
+    </article>
+    <article class="card">
+      <h3>🪶 Лёгкий APK</h3>
+      <p>minSdk 14, universal APK, ноль сторонних SDK кроме BC и zxing (QR-enrollment). Foreground-сервис, автостарт, reconnect с backoff.</p>
+    </article>
+  </section>
 
-<section class="quickstart">
-  <h2>Quickstart — 5 минут</h2>
-  <pre>mkdir -p state &amp;&amp; chown 65532:65532 state
-docker compose up -d
-docker compose exec reverseray /reverseray enroll \
-  -state-dir /var/lib/reverseray -name phone-1 -host YOUR_IP -port 443
-# → вставь конфиг-строку rrp://… в приложение
-curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me   # → IP телефона</pre>
-</section>
+  <section id="quickstart" class="quickstart">
+    <h2>Quickstart — 5 минут</h2>
+    <ol>
+      <li>
+        <b>Сервер (VPS):</b>
+        <pre><code>git clone https://github.com/stelgen/reverseray &amp;&amp; cd reverseray
+docker compose up -d reverse-proxy          # SOCKS5 :1080, HTTP :8080
+docker compose exec reverse-proxy ./reverseray enroll --name Home
+# → rrp://token@vps.example:443,8443/?pin=BASE64SPKI&amp;name=Home</code></pre>
+      </li>
+      <li>
+        <b>Телефон:</b> собери APK и вставь <code>rrp://</code>-строку (или отсканируй QR):
+        <pre><code>./gradlew :app:assembleRelease   # env: RR_KEYSTORE, RR_KEY_ALIAS, RR_KEYSTORE_PASSWORD</code></pre>
+      </li>
+      <li>
+        <b>Проверка:</b>
+        <pre><code>curl --socks5 vps.example:1080 https://ifconfig.me   # → IP твоего телефона</code></pre>
+      </li>
+    </ol>
+  </section>
+
+  <section class="links">
+    <h2>Ссылки</h2>
+    <ul>
+      <li><a href="https://github.com/stelgen/reverseray">GitHub: stelgen/reverseray</a></li>
+      <li><a href="https://github.com/stelgen/reverseray/releases">Releases (APK)</a></li>
+      <li><a href="https://github.com/stelgen/reverseray/issues">Issues</a></li>
+    </ul>
+  </section>
+</main>
 
 <footer>
-  <p>MIT License · <a href="https://github.com/stelgen/reverseray">github.com/stelgen/reverseray</a></p>
+  <p>ReverseRay · RRP/1 · твой телефон = egress-узел</p>
 </footer>
+
 </body>
 </html>
