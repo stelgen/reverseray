@@ -3,19 +3,21 @@ package dev.stelgen.reverseray.service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 
-/** Restarts the tunnel after reboot when it was active (OS persists stickiness too). */
+/**
+ * Автостарт (заглушка): после BOOT_COMPLETED поднимает туннель,
+ * если автостарт включён в настройках (prefs KEY_AUTOSTART).
+ */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED &&
-            context.getSharedPreferences("rrp", Context.MODE_PRIVATE)
-                .getBoolean("autostart", false) &&
-            !TunnelService.isRunning
-        ) {
-            val uri = context.getSharedPreferences("rrp", Context.MODE_PRIVATE)
-                .getString("last_uri", null) ?: return
-            val i = Intent(context, TunnelService::class.java)
-            i.putExtra(TunnelService.EXTRA_URI, uri)
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        val prefs = context.getSharedPreferences(TunnelService.PREFS, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(TunnelService.KEY_AUTOSTART, false)) return
+        val i = Intent(context, TunnelService::class.java).setAction(TunnelService.ACTION_START)
+        if (Build.VERSION.SDK_INT >= 26) {
+            context.startForegroundService(i)
+        } else {
             context.startService(i)
         }
     }

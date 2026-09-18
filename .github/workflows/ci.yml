@@ -62,6 +62,6 @@ jobs:
         with:
           context: ./server
           push: false
-          tags: reverseray:ci
-      - name: Smoke: healthcheck binary exists
-        run: docker run --rm --entrypoint /reverseray reverseray:ci version
+          tags: "reverseray:ci"
+      - name: Smoke healthcheck binary exists
+        run: docker run --rm --entrypoint /reverseray "reverseray:ci" version
