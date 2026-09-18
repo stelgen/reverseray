@@ -50,9 +50,9 @@ func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
 		// resumption отключён: ручной CA-pin в VerifyPeerCertificate обязан
 		// выполняться на КАЖДОМ handshake (gosec G123)
 		SessionTicketsDisabled: true,
-		InsecureSkipVerify: true, // #nosec G402: тестовый fake-phone; подлинность сервера проверяется SPKI-pin в VerifyPeerCertificate // pin verified manually below
-		NextProtos:         []string{"reverseray/1"},
-		ServerName:         "reverseray.test",
+		InsecureSkipVerify:     true, // #nosec G402: тестовый fake-phone; подлинность сервера проверяется SPKI-pin в VerifyPeerCertificate // pin verified manually below
+		NextProtos:             []string{"reverseray/1"},
+		ServerName:             "reverseray.test",
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			// Pin the CA: the server presents [leaf, CA]; verify the last cert's
 			// SPKI hash against the configured pin AND the chain link.
