@@ -1,20 +1,46 @@
 # Changelog
 
-## v0.1.0 — 2026-09-18
+Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
-Первый рабочий релиз сервера.
+## [0.2.1] — 2026-09-18
 
-### Server (Go, ноль внешних зависимостей)
-- RRP/1: кадры 12B, JSON-контроль, мультиплексирование стримов, flow-control (окно 512КБ/стрим, бюджет 16МБ/устройство), PING/PONG, STATS
-- TLS 1.3 only, ALPN reverseray/1, self-signed Ed25519 CA + leaf 90д (авто-ротация), ECDSA P-256 backup
-- Auth: HMAC-SHA256 по SHA256(токен) + одноразовый nonce; rate-limit + lockout по IP
-- Inbound: mixed SOCKS5/HTTP-CONNECT/absolute-URI, опц. user/pass, allowlist
-- Admin API: /healthz /readyz /metrics (Prometheus text) /sessions /tokens/reload /devices/kick; unix socket
-- Docker: distroless non-root, read_only, cap_drop ALL, healthcheck; compose hardened (digest-пины, без автообновлений)
-- CI: gofmt/vet/test -race/coverage + docker smoke; release: бинари amd64/arm64/armv7 + multi-arch ghcr
+### Добавлено
+- Импорт и экспорт конфигурации по QR-коду (сканирование — Android 5.0+, диалог экспорта защищён от скриншотов).
+- Аудит безопасности и его внедрение: защита от DNS-rebinding на уровне резолвнутых адресов, таймаут flow-control, форсированное закрытие активных подключений при остановке сервиса.
+- Автоматизированные тесты Robolectric (API 21/31), тесты SSRF-гварда по байтам адреса, тесты таймингов переподключения.
+- Брендинг: иконки запуска всех плотностей, глиф уведомления, логотип (SVG/PNG), favicon, og-image.
 
-### Android
-- Скелет + pure-Kotlin ядро протокола (кадры, SSRF-guard, URI), юнит-тесты
+### Исправлено
+- Краш приложения при запуске на Android 14 (регистрация broadcast-приёмника без объявления permission).
+- Краш на Android 4.x (вызов `Notification.Builder#build()` без проверки версии API).
+- Обход SSRF-защиты через DNS-rebinding (проверка выполнялась только по имени хоста).
+- Зависание relay-потоков при остановке сервера без наращивания окна flow-control.
+- Задержка остановки сервиса до 20 секунд (ожидались таймауты рукопожатия).
+- Несовместимость с API уровня 14–23: замена `CompletableFuture` на собственную реализацию.
+- Переполнение целочисленного типа при сборке под armv7.
+- Отсутствие таймаутов у отладочного HTTP-сервера (pprof).
 
-### Известные ограничения v0.1
-- UDP через туннель — v1.1; WS-транспорт — v1.1; пул телефонов с балансировкой — v1.2
+### Изменено
+- Обновлены пины BouncyCastle до 1.80.2; добавлен явный `bcutil`.
+- Иконка уведомления заменена на собственный глиф с PNG-провайдером всех плотностей.
+
+## [0.2.0] — 2026-09-18
+
+### Добавлено
+- Android-клиент: RRP/1 поверх TLS 1.3 (BouncyCastle), foreground-сервис, переподключение с экспоненциальной задержкой, реакция на смену сети, хранение конфигурации.
+- Ядро протокола как pure-Kotlin модуль: кодек кадров с лимитами по типам, парсер адресов ATYP, SSRF-гвард, парсер конфигурационной строки `rrp://`.
+- Сервер: admin API, метрики Prometheus, обработчик перечитывания токенов.
+- Деплой: `compose.yaml` с digest-пином, `deploy/digests.yaml`, ререлиз-пайплайн с APK в GitHub Releases.
+- Лендинг на GitHub Pages.
+
+### Исправлено
+- Дублирование реализации SSRF-гварда (унифицирована версия без DNS-резолва).
+- Конфликт `minSdk` с зависимостью zxing (зависимость подключена с runtime-guard на уровне API 19).
+- Конфликт META-INF-манифестов BouncyCastle в APK.
+
+## [0.1.0] — 2026-09-18
+
+### Добавлено
+- Первая работоспособная версия сервера: mixed SOCKS5/HTTP-инбокс, туннели RRP/1, аутентификация токенами (SHA-256 + HMAC), TLS 1.3 с SPKI-пином на CA, self-signed CA с ротацией leaf-сертификатов.
+- Релизный пайплайн: бинарии linux amd64/arm64/armv7, SHA256SUMS, Docker-образ ghcr.io (multi-arch).
+- CI: gofmt/vet/тесты с race-детектором, покрытие, smoke-сборка образа.

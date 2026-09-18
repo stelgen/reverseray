@@ -269,8 +269,7 @@ class TunnelService : Service() {
             Notification.Builder(this)
         }
         builder
-            // android.R.*: системная иконка безопасна для notification small icon на всех API
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_stat_reverseray)
             .setContentTitle(getString(R.string.notif_title))
             .setContentText(text)
             .setContentIntent(contentIntent)

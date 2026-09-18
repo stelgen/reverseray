@@ -1,46 +1,64 @@
 # ReverseRay
 
-**Твой телефон = твой VPN.** Сервер выглядит как обычный SOCKS5/HTTP-прокси,
-но весь трафик физически выходит с твоего Android-телефона (серый/резидентный IP за NAT/CGNAT).
+<img src="assets/brand/og-image.png" alt="ReverseRay" width="640"/>
+
+ReverseRay превращает Android-устройство в выходной узел персонального прокси.
+Сервер, запущенный в Docker, предоставляет стандартный SOCKS5/HTTP-инбокс, но весь
+трафик физически покидает сеть через телефон: устройство само устанавливает
+исходящий TLS-туннель к серверу, поэтому входящие соединения и проброс портов
+не требуются — схема работает из любой мобильной или Wi-Fi сети, включая NAT и CGNAT.
 
 ```
-[Приложения] → [Xray outbound: socks5] → [Docker: reverseray-server]
+[Приложения] → [Xray outbound: socks5] → [Docker: reverseray]
                                               │  TLS 1.3 туннель RRP/1
-                                              │  (телефон инициирует сам → NAT не мешает)
+                                              │  (телефон инициирует соединение сам)
                                               ▼
                                         [Android APK] → [Интернет]
 ```
 
-Сервер **никогда не ходит в интернет сам** — он только просит телефон «диалнуть» хост.
-DNS резолвится на телефоне. Приватность + резидентный IP без VPS-провайдера.
+Сервер не инициирует соединений в интернет: он только запрашивает у телефона
+подключение к целевому хосту. DNS разрешается на стороне телефона.
+
+## Возможности
+
+- **Протокол RRP/1** — мультиплексированные потоки поверх TLS 1.3, flow-control
+  на поток и туннель, лимиты размера кадров, keep-alive с джиттером.
+- **Сервер** (Go, без внешних зависимостей): mixed-инбокс SOCKS5/HTTP на одном
+  порту, HMAC-токены с одноразовым nonce, admin API на localhost/unix-сокете,
+  метрики Prometheus, структурированные логи с редактированием хостов.
+- **Клиент** (Kotlin, minSdk 14, targetSdk 36): foreground-сервис, пул туннелей,
+  reconnect с экспоненциальной задержкой, мгновенный retry при смене сети,
+  импорт конфигурации по QR-коду.
+- **Безопасность**: TLS 1.3 + SPKI-pinning на CA (ротация leaf-сертификата без
+  обновления клиентов), токены хранятся только как SHA-256, защита от SSRF на
+  уровне байтов резолвнутых адресов, ограничение handshake по IP.
 
 ## Состав
 
-| Компонент | Стек | Статус |
+| Компонент | Стек | Состояние |
 |---|---|---|
-| `server/` | Go 1.27, ноль внешних зависимостей | ✅ работает: mixed SOCKS5/HTTP inbound, RRP/1, TLS 1.3, HMAC-токены, admin/metrics |
-| `android/` | Kotlin, minSdk 14, targetSdk 36, BouncyCastle TLS | 🚧 скелет + pure-Kotlin протокольное ядро |
-| `docs/protocol.md` | RRP/1 спека | ✅ |
-| `landing/` | gh-pages | ✅ |
+| `server/` | Go, ноль внешних зависимостей | стабилен: mixed-инбокс, RRP/1, TLS, admin, метрики |
+| `android/` | Kotlin, BouncyCastle TLS | рабочий клиент: туннель, QR, сервис |
+| `docs/protocol.md` | спецификация RRP/1 | актуальна |
+| `landing/` | одностраничный сайт | опубликован на GitHub Pages |
 
-## Быстрый старт (5 минут)
+## Быстрый старт
 
 ### 1. Сервер
 
 ```bash
 mkdir -p state && chown 65532:65532 state
 docker compose up -d
-# печать CA-pin + выдача токена устройству:
+
+# выпуск токена устройства и печать CA-pin:
 docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray \
   -name phone-1 -host YOUR_SERVER_IP -port 443
 ```
 
-Добавь `"phone-1": "<sha256…>"` в `state/tokens.json` → `{"devices":{"phone-1":"…"}}`
-и перечитай токены: `curl -X POST http://127.0.0.1:9090/tokens/reload`.
+### 2. Устройство
 
-### 2. Телефон
-
-Введи в приложении конфиг-строку из `enroll` (или отсканируй QR):
+Установите APK со страницы [Releases](https://github.com/stelgen/reverseray/releases)
+и введите конфигурационную строку из `enroll` либо отсканируйте её QR-код:
 
 ```
 rrp://<token>@YOUR_SERVER_IP:443/?pin=<CA_PIN>&name=phone-1
@@ -50,10 +68,10 @@ rrp://<token>@YOUR_SERVER_IP:443/?pin=<CA_PIN>&name=phone-1
 
 ```bash
 curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
-# → IP твоего телефона
+# в ответе — IP устройства, а не сервера
 ```
 
-Xray outbound:
+### Интеграция с Xray
 
 ```json
 {
@@ -62,37 +80,55 @@ Xray outbound:
 }
 ```
 
-## Сборка сервера без Docker
+## Безопасность
+
+Кратко: TLS 1.3 с обязательным ALPN и SPKI-пином на CA; токены — только в виде
+SHA-256, аутентификация HMAC с одноразовым nonce; лимиты кадров по типам
+(DATA ≤ 64 КБ, управляющие ≤ 4 КБ) и бюджет памяти на устройство; rate-limit
+handshake и блокировка по IP; admin API на localhost/unix-сокете; контейнер —
+distroless, non-root, read-only rootfs, `cap_drop ALL`.
+
+Полная модель угроз и политики раскрытия — в [SECURITY.md](SECURITY.md),
+спецификация протокола — в [docs/protocol.md](docs/protocol.md).
+
+## Эксплуатация
+
+- Обновления контейнера выполняются вручную по digest-пину из `deploy/digests.yaml`
+  (автообновление не используется).
+- Перед обновлением делается резервная копия каталога `state/` (токены, CA).
+- Откат — на предыдущий digest из той же таблицы.
+
+## Сборка из исходников
+
+Сервер:
 
 ```bash
 cd server && go test -race ./... && go build -o reverseray .
 ```
 
-## Hardening (кратко)
+Клиент (JDK 17, Android SDK 36):
 
-- TLS 1.3 only, ALPN обязателен, SPKI-pin на CA, ротация leaf без разрыва клиентов
-- Токены только как SHA-256; HMAC + одноразовый nonce (анти-replay); constant-time
-- Frame-limits по типам (DATA ≤64КБ, control ≤4КБ) — OOM-защита; окна 512КБ/стрим, бюджет 16МБ/устройство
-- Rate-limit handshake + lockout по IP; admin на localhost/unix; redaction хостов в логах
-- Контейнер: distroless, non-root 65532, read_only, cap_drop ALL, no-new-privileges, pids_limit
-- Автообновления контейнера **запрещены** — только digest-пин из `deploy/digests.yaml`
+```bash
+cd android && ./gradlew :app:assembleRelease
+```
 
-Подробно: [docs/protocol.md](docs/protocol.md), [SECURITY.md](SECURITY.md), [TZ-аудит v2](../TZ-reverseray-v2-audit.md).
+Подпись релиза берётся из переменных окружения `RR_KEYSTORE`,
+`RR_KEYSTORE_PASSWORD`, `RR_KEY_ALIAS`, `RR_KEY_PASSWORD`.
 
 ## CI/CD
 
-- `ci.yml`: gofmt + vet + `go test -race` + coverage + docker smoke
-- `release.yml` (тег `v*`): бинари amd64/arm64/armv7 + SHA256SUMS → GitHub Releases; multi-arch образ → `ghcr.io/stelgen/reverseray`
+- `ci.yml` — gofmt, vet, `go test -race`, покрытие, smoke-сборка образа,
+  сборка Android-приложения и unit-тесты (Robolectric, API 21/31).
+- `release.yml` (тег `v*`) — бинарники amd64/arm64/armv7 + SHA256SUMS,
+  multi-arch образ в `ghcr.io/stelgen/reverseray`, APK — в GitHub Releases.
+
+## Совместимость
+
+- Android 4.0 (API 14) — Android 16 (API 36); автоматизированные тесты
+  выполняются на API 21 и 31, для API 14–20 предусмотрен ручной smoke-чеклист.
+- Протокол RRP/1 согласуется через `HELLO.caps`, обратная совместимость
+  сохраняется в рамках мажорной версии протокола.
 
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
-
----
-
-### EN (short)
-
-ReverseRay turns an Android phone into the egress node of your personal proxy.
-The Go server speaks SOCKS5/HTTP locally and relays connections to your phone
-over an outbound-only TLS 1.3 tunnel (RRP/1, see `docs/protocol.md`).
-No VPS provider IP — your phone's residential IP is the exit. See quickstart above.
