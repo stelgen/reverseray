@@ -253,6 +253,9 @@ object SsrfGuard {
         r("172.16.0.0", 12) to true,    // RFC1918 — LAN
         r("192.168.0.0", 16) to true,   // RFC1918 — LAN
         r("198.18.0.0", 15) to false,   // benchmarking
+        r("192.0.2.0", 24) to false,    // TEST-NET-1
+        r("198.51.100.0", 24) to false, // TEST-NET-2
+        r("203.0.113.0", 24) to false,  // TEST-NET-3
         r("224.0.0.0", 4) to false,     // multicast
         r("240.0.0.0", 4) to false,     // reserved (включая 255.255.255.255)
     )

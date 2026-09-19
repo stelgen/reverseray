@@ -37,6 +37,9 @@ func startTestServer(t *testing.T) (*App, *config.Config, string) {
 	cfg.StateDir = dir
 	cfg.TokensFile = tokensPath
 	cfg.Log.Level = "error"
+	if os.Getenv("RR_DEBUG_LOG") != "" {
+		cfg.Log.Level = "debug"
+	}
 
 	// We need real ports; listen first, then patch config is complex —
 	// instead bind manually by choosing free ports.
@@ -44,7 +47,11 @@ func startTestServer(t *testing.T) (*App, *config.Config, string) {
 	cfg.Listen.Mixed = freePort(t)
 	cfg.Listen.AdminTCP = freePort(t)
 
-	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	var logOut io.Writer = io.Discard
+	if os.Getenv("RR_DEBUG_LOG") != "" {
+		logOut = os.Stderr
+	}
+	log := slog.New(slog.NewJSONHandler(logOut, nil))
 	app, err := New(cfg, log)
 	if err != nil {
 		t.Fatalf("New: %v", err)

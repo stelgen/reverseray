@@ -233,8 +233,9 @@ func (a *App) handleTunnel(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 	tc := conn.(*tls.Conn)
 	if err := tc.HandshakeContext(context.Background()); err != nil {
+		// мусорный TLS из WAN — только метрика: lockout за это лочил бы
+		// легитимных клиентов за общим NAT по вине одного сканера
 		a.met.AuthFailures.Add(1)
-		a.store.ReportFailure(ip)
 		_ = conn.Close()
 		return
 	}
@@ -317,7 +318,12 @@ func (a *App) handleTunnel(conn net.Conn) {
 
 func (a *App) rejectHandshake(ip string, conn net.Conn, why string) {
 	a.met.AuthFailures.Add(1)
-	locked := a.store.ReportFailure(ip)
+	// lockout — только за невалидный HMAC (брутфорс токена); прочие ошибки
+	// рукопожатия (сканеры, кривые клиенты) не должны лочить NAT-клиентов
+	locked := false
+	if why == "auth failed" {
+		locked = a.store.ReportFailure(ip)
+	}
 	a.log.Warn("tunnel handshake rejected", "ip", ip, "why", why, "locked", locked)
 	var payload []byte
 	if why == "auth failed" {

@@ -31,7 +31,7 @@ type attempt struct {
 }
 
 const (
-	maxHandshakesPerMin = 10
+	maxHandshakesPerMin = 60
 	maxFailsBeforeLock  = 5
 )
 

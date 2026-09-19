@@ -37,22 +37,15 @@ func rrpWriteS(w io.Writer, t uint8, streamID uint32, payload []byte) error {
 	return rrp.WriteFrame(w, t, 0, streamID, payload)
 }
 
-// DialPhone connects over TLS with CA-SPKI pinning and handshakes RRP/1.
-func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
-	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
-
-	t.Helper()
+func makePhoneTLSConfig(caPinB64 string) (*tls.Config, error) {
 	want, err := base64.RawURLEncoding.DecodeString(caPinB64)
 	if err != nil || len(want) != sha256.Size {
-		return nil, "", errors.New("bad CA pin in test")
+		return nil, errors.New("bad CA pin in test")
 	}
 	cfg := &tls.Config{
-		// resumption отключён: ручной CA-pin в VerifyPeerCertificate обязан
-		// выполняться на КАЖДОМ handshake (gosec G123)
-		SessionTicketsDisabled: true,
-		InsecureSkipVerify:     true, // #nosec G402: тестовый fake-phone; подлинность сервера проверяется SPKI-pin в VerifyPeerCertificate // pin verified manually below
-		NextProtos:             []string{"reverseray/1"},
-		ServerName:             "reverseray.test",
+		InsecureSkipVerify: true, // #nosec G402: тестовый fake-phone; подлинность сервера проверяется SPKI-pin в VerifyPeerCertificate // pin verified manually below
+		NextProtos:         []string{"reverseray/1"},
+		ServerName:         "reverseray.test",
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			// Pin the CA: the server presents [leaf, CA]; verify the last cert's
 			// SPKI hash against the configured pin AND the chain link.
@@ -76,6 +69,18 @@ func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
 			}
 			return nil
 		},
+	}
+	return cfg, nil
+}
+
+// DialPhone connects over TLS with CA-SPKI pinning and handshakes RRP/1.
+func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
+	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+
+	t.Helper()
+	cfg, err := makePhoneTLSConfig(caPinB64)
+	if err != nil {
+		return nil, "", err
 	}
 	raw, err := net.Dial("tcp", serverAddr)
 	if err != nil {
@@ -126,6 +131,11 @@ func clientHandshake(conn net.Conn, token, device string) (string, error) {
 		return "", errors.New("handshake rejected: " + msg)
 	}
 	return hok.SessionID, nil
+}
+
+// WritePing отправляет PING-кадр от лица телефона (для flood-тестов).
+func (p *fakePhone) WritePing(nonce []byte) error {
+	return p.write(rrp.TypePing, 0, nonce)
 }
 
 func (p *fakePhone) write(t uint8, streamID uint32, payload []byte) error {

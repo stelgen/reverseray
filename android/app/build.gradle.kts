@@ -11,8 +11,8 @@ android {
         applicationId = "dev.stelgen.reverseray"
         minSdk = 14
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
         // Legacy multidex обязателен для API < 21 при включённом core desugaring
         multiDexEnabled = true
 
@@ -100,6 +100,7 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
+    testImplementation(libs.bouncycastle.bcpkix) // генерация self-signed сертификата в evil-server тестах
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core-ktx:1.6.1")
 }
