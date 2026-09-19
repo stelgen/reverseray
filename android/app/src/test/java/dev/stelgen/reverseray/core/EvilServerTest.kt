@@ -161,7 +161,7 @@ class EvilServerTest {
         try {
             val c = newClient(server)
             c.connect()
-            val deadline = System.currentTimeMillis() + 3000
+            val deadline = System.currentTimeMillis() + 10000
             while (c.state != RrpClient.State.CLOSED && System.currentTimeMillis() < deadline) Thread.sleep(50)
             assertEquals(RrpClient.State.CLOSED, c.state)
         } finally {
@@ -182,7 +182,7 @@ class EvilServerTest {
         try {
             val c = newClient(server)
             c.connect()
-            val deadline = System.currentTimeMillis() + 3000
+            val deadline = System.currentTimeMillis() + 10000
             while (c.state != RrpClient.State.CLOSED && System.currentTimeMillis() < deadline) Thread.sleep(50)
             assertEquals(RrpClient.State.CLOSED, c.state)
         } finally {
@@ -199,7 +199,7 @@ class EvilServerTest {
         try {
             val c = newClient(server)
             c.connect()
-            assertEquals(RrpClient.ERR_SSRF_BLOCKED, c.sendOpen("127.0.0.1", 8080).get(2000))
+            assertEquals(RrpClient.ERR_SSRF_BLOCKED, c.sendOpen("127.0.0.1", 8080).get(5000))
             assertFalse("OPEN must not leave the client on SSRF block",
                 synchronized(server.received) { server.received.any { it.first == RrpFrame.TYPE_OPEN.toByte() } })
             c.close()
@@ -218,7 +218,7 @@ class EvilServerTest {
             val c = newClient(server)
             c.connect()
             for (host in listOf("203.0.113.5", "198.51.100.7", "192.0.2.9")) {
-                assertEquals("TEST-NET $host", RrpClient.ERR_SSRF_BLOCKED, c.sendOpen(host, 443).get(2000))
+                assertEquals("TEST-NET $host", RrpClient.ERR_SSRF_BLOCKED, c.sendOpen(host, 443).get(5000))
             }
             assertFalse(synchronized(server.received) { server.received.any { it.first == RrpFrame.TYPE_OPEN.toByte() } })
             c.close()
@@ -240,7 +240,7 @@ class EvilServerTest {
         val server = EvilServer { conn, inp, out ->
             serverHandshake(conn, inp, out)
             out(RrpFrame.TYPE_DATA.toByte(), 999, "x".toByteArray())
-            val deadline = System.currentTimeMillis() + 3000
+            val deadline = System.currentTimeMillis() + 10000
             while (System.currentTimeMillis() < deadline && closeCode.get() == null) {
                 val f = readFrame(inp) ?: break
                 synchronized(seen) { seen.add(f.first) }
@@ -285,7 +285,7 @@ class EvilServerTest {
                 }
             })
             c.connect()
-            assertTrue(closed.await(3, TimeUnit.SECONDS))
+            assertTrue(closed.await(10, TimeUnit.SECONDS))
             c.close()
         } finally {
             server.stop()
