@@ -101,6 +101,13 @@ android {
     }
 }
 
+// Изолируем JVM на тест-класс: Robolectric глобально меняет provider/system-свойства
+// и ломает сетевые тесты (EvilServerTest), выполняющиеся после него.
+tasks.withType<Test>().configureEach {
+    setForkEvery(1)
+    maxParallelForks = 2
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
