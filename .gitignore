@@ -22,3 +22,4 @@ android/local.properties
 # python
 __pycache__/
 *.pyc
+!android/app/rr-release.keystore

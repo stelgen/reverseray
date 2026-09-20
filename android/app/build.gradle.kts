@@ -1,3 +1,4 @@
+import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -11,8 +12,8 @@ android {
         applicationId = "dev.stelgen.reverseray"
         minSdk = 14
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.3.1"
         // Legacy multidex обязателен для API < 21 при включённом core desugaring
         multiDexEnabled = true
 
@@ -37,14 +38,29 @@ android {
 
     signingConfigs {
         create("release") {
-            // Подпись целиком из окружения (CI/локально):
-            // RR_KEYSTORE, RR_KEYSTORE_PASSWORD, RR_KEY_ALIAS, RR_KEY_PASSWORD
+            // Приоритет: секреты окружения (личный ключ владельца), затем
+            // репозиторный ключ (android/app/signing.properties + rr-release.keystore).
+            // Репозиторный ключ — открытый (см. SECURITY.md): он гарантирует стабильность
+            // подписи между релизами, но не авторство; авторство верифицируется
+            // SHA256SUMS в GitHub Release.
             val ks = System.getenv("RR_KEYSTORE")
             if (!ks.isNullOrBlank()) {
                 storeFile = file(ks)
                 storePassword = System.getenv("RR_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("RR_KEY_ALIAS")
                 keyPassword = System.getenv("RR_KEY_PASSWORD")
+            } else {
+                val props = Properties().apply {
+                    val f = rootProject.file("app/signing.properties")
+                    if (f.exists()) f.inputStream().use { load(it) }
+                }
+                storeFile = file(props.getProperty("storeFile", "rr-release.keystore"))
+                storePassword = props.getProperty("storePassword", "")
+                keyAlias = props.getProperty("keyAlias", "")
+                keyPassword = props.getProperty("keyPassword", "")
+                enableV1Signing = true // обязателен для установки на API 14-23
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
@@ -57,10 +73,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // signingConfig вешаем только если keystore задан в env
-            if (!System.getenv("RR_KEYSTORE").isNullOrBlank()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            // подпись всегда: env-ключ при наличии, иначе репозиторный (см. signingConfigs)
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
