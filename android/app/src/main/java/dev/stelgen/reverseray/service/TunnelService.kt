@@ -60,6 +60,7 @@ class TunnelService : Service() {
     private val clientListener = object : RrpClient.Listener {
         override fun onLog(client: RrpClient, message: String) {
             Log.d(TAG, "${client.host}:${client.port}: $message")
+            pushLog("${client.host}:${client.port}: $message")
         }
     }
 
@@ -318,6 +319,7 @@ class TunnelService : Service() {
 
     private fun updateStatus(text: String) {
         lastStatus = text
+        pushLog(text)
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_STATUS, text))
         try {
             (applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
@@ -348,5 +350,17 @@ class TunnelService : Service() {
         private const val NET_RETRY_COOLDOWN_MS = 3_000L
 
         @Volatile var lastStatus: String = ""
+
+        /** Журнал статусов/ошибок для копирования из GUI (новые сверху). */
+        private val logLines = ArrayDeque<String>()
+
+        fun snapshotLogs(): List<String> = synchronized(logLines) { logLines.toList() }
+
+        private fun pushLog(line: String) {
+            synchronized(logLines) {
+                logLines.addFirst(line)
+                while (logLines.size > 200) logLines.removeLast()
+            }
+        }
     }
 }

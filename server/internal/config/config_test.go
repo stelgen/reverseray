@@ -62,3 +62,10 @@ func TestLoadPasswordFile(t *testing.T) {
 		t.Fatalf("password file: %q %v", got, err)
 	}
 }
+
+func TestDefaultTunnelPortIs4433(t *testing.T) {
+	c := Default()
+	if c.Listen.Tunnels != ":4433" {
+		t.Fatalf("default tunnels listen = %q, want :4433", c.Listen.Tunnels)
+	}
+}

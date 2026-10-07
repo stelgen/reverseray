@@ -165,6 +165,14 @@ func (a *App) reloadLoop(ctx context.Context) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGHUP)
 	defer signal.Stop(sig)
+
+	// Автоподхват изменений tokens.json: enroll дописывает токен в файл,
+	// сервер перечитывает его без SIGHUP (mtime poll каждые 3 с).
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	var lastMod time.Time
+	tokensPath := a.tokensPath()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -173,8 +181,28 @@ func (a *App) reloadLoop(ctx context.Context) {
 			if err := a.Reload(); err != nil {
 				a.log.Warn("SIGHUP reload failed", "err", err)
 			}
+		case <-ticker.C:
+			if fi, err := os.Stat(tokensPath); err == nil {
+				mod := fi.ModTime()
+				if !mod.Equal(lastMod) {
+					first := lastMod.IsZero()
+					lastMod = mod
+					if !first {
+						if err := a.Reload(); err != nil {
+							a.log.Warn("tokens auto-reload failed", "err", err)
+						} else {
+							a.log.Info("tokens auto-reloaded (file changed)")
+						}
+					}
+				}
+			}
 		}
 	}
+}
+
+// tokensPath возвращает путь к tokens.json (stateDir из конфигурации).
+func (a *App) tokensPath() string {
+	return a.cfg.TokensFile
 }
 
 // Reload re-reads tokens (SIGHUP path) without dropping tunnels.

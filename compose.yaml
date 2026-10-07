@@ -1,15 +1,15 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:v0.1.0
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.4.0}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"
-      - "${RR_TUNNEL_PORT:-443}:443"
+      - "${RR_TUNNEL_PORT:-4433}:4433"
       - "127.0.0.1:${RR_METRICS_PORT:-9090}:9090" # admin/metrics только с localhost
     environment:
       RR_STATE_DIR: /var/lib/reverseray
-      RR_LISTEN_TUNNELS: ":443"
+      RR_LISTEN_TUNNELS: ":4433"
       RR_LISTEN_MIXED: ":1080"
       RR_LISTEN_ADMIN_TCP: ":9090"
       RR_LOG_LEVEL: "info"
@@ -24,7 +24,6 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp:runtime/default
     pids_limit: 100
     ulimits:
       nofile:

@@ -132,6 +132,10 @@ class MainActivity : AppCompatActivity() {
             setText(R.string.qr_show)
             setOnClickListener { showQr() }
         })
+        rows.add(Button(this).apply {
+            setText(R.string.logs_title)
+            setOnClickListener { showLogs() }
+        })
         rows.add(startBtn)
         rows.add(stopBtn)
         rows.forEach { root.addView(it) }
@@ -177,6 +181,31 @@ class MainActivity : AppCompatActivity() {
             .create()
         // конфиг содержит токен — запрещаем скриншоты/запись экрана диалога
         dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        dialog.show()
+    }
+
+    /** Журнал подключения/ошибок: копируемый многострочный текст. */
+    private fun showLogs() {
+        val logText = TunnelService.snapshotLogs()
+            .ifEmpty { listOf(getString(R.string.logs_empty)) }
+            .joinToString("\n")
+        val tv = TextView(this).apply {
+            setTextIsSelectable(true)
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 13f
+            setPadding(24, 24, 24, 24)
+            text = logText
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.logs_title)
+            .setView(tv)
+            .setPositiveButton(android.R.string.ok, null)
+            .setNeutralButton(R.string.logs_copy) { _, _ ->
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("ReverseRay log", logText))
+                Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
+            }
+            .create()
         dialog.show()
     }
 

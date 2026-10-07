@@ -22,4 +22,8 @@
     <string name="qr_prompt">Point the camera at a ReverseRay config QR</string>
     <string name="qr_imported">Config imported from QR</string>
     <string name="qr_error">QR unavailable</string>
+    <string name="logs_title">Log</string>
+    <string name="logs_empty">Log is empty</string>
+    <string name="logs_copy">Copy</string>
+    <string name="logs_copied">Log copied</string>
 </resources>

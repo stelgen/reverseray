@@ -54,7 +54,7 @@ type Config struct {
 // Default returns production-sane defaults.
 func Default() *Config {
 	var c Config
-	c.Listen.Tunnels = ":443"
+	c.Listen.Tunnels = ":4433"
 	c.Listen.Mixed = ":1080"
 	c.Listen.AdminTCP = "127.0.0.1:9090"
 	c.Listen.TLSHosts = []string{"localhost"}

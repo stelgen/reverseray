@@ -9,9 +9,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/stelgen/reverseray/server/internal/config"
 	"github.com/stelgen/reverseray/server/internal/serverapp"
@@ -94,11 +99,11 @@ func cmdEnroll(args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
 	stateDir := fs.String("state-dir", "", "server state dir (default from config or /var/lib/reverseray)")
 	name := fs.String("name", "", "device name")
-	host := fs.String("host", "", "public host or IP of the server")
-	port := fs.String("port", "443", "tunnel port (or comma list)")
+	host := fs.String("host", "", "public host or IP (auto-detected if omitted)")
+	port := fs.String("port", "4433", "tunnel port (or comma list)")
 	_ = fs.Parse(args)
-	if *name == "" || *host == "" {
-		return fmt.Errorf("enroll: -name and -host are required")
+	if *name == "" {
+		return fmt.Errorf("enroll: -name is required")
 	}
 	if *stateDir == "" {
 		*stateDir = os.Getenv("RR_STATE_DIR")
@@ -107,6 +112,16 @@ func cmdEnroll(args []string) error {
 		*stateDir = "/var/lib/reverseray"
 	}
 
+	// Внешний IP: автоопределение, если -host не задан вручную.
+	if *host == "" {
+		ip, err := detectExternalIP()
+		if err != nil {
+			return fmt.Errorf("enroll: не удалось определить внешний IP (%v); задай -host вручную", err)
+		}
+		*host = ip
+	}
+
+	// Генерация токена.
 	raw := make([]byte, 32)
 	if _, err := cryptoRead(raw); err != nil {
 		return err
@@ -115,20 +130,81 @@ func cmdEnroll(args []string) error {
 	sum := sha256.Sum256([]byte(token))
 	hashB64 := base64.RawURLEncoding.EncodeToString(sum[:])
 
+	// Токен сразу пишется в tokens.json: ручное редактирование не требуется.
+	// Сервер подхватывает изменения файла автоматически (poll mtime, до 3 с).
+	if err := upsertToken(*stateDir, *name, hashB64); err != nil {
+		return fmt.Errorf("enroll: записать токен: %v", err)
+	}
+
 	pin := ""
 	pinPath := filepath.Join(*stateDir, "ca.pem")
 	if b, err := os.ReadFile(pinPath); err == nil {
 		pin = caPinFromPEM(b)
 	}
 
-	doc := map[string]string{
-		"device":        *name,
-		"sha256_b64url": hashB64,
-	}
-	inst, _ := json.MarshalIndent(doc, "", "  ")
-	fmt.Printf("# 1) Add to %s in \"devices\" and send SIGHUP (or POST /tokens/reload):\n%s\n\n",
-		filepath.Join(*stateDir, "tokens.json"), inst)
-	fmt.Printf("# 2) Client config string (scan/import in the app):\n")
-	fmt.Printf("rrp://%s@%s:%s/?pin=%s&name=%s\n", token, *host, *port, pin, *name)
+	fmt.Printf("Устройство %q добавлено. Конфигурационная строка для приложения:\n\n", *name)
+	fmt.Printf("rrp://%s@%s:%s/?pin=%s&name=%s\n\n", token, *host, *port, pin, *name)
+	fmt.Printf("Сервер подхватит токен автоматически (до 3 с). Вставь строку в приложение\nили отсканируй QR-код из меню приложения.\n")
 	return nil
+}
+
+// detectExternalIP определяет публичный IPv4 через публичные echo-сервисы.
+// Используется только командой enroll (админ-действие): в штатной работе
+// сервер исходящих соединений не выполняет.
+func detectExternalIP() (string, error) {
+	services := []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://ipecho.net/plain",
+	}
+	client := &http.Client{Timeout: 4 * time.Second}
+	var lastErr error
+	for _, svc := range services {
+		resp, err := client.Get(svc)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		ip := strings.TrimSpace(string(b))
+		if net.ParseIP(ip) != nil && ip != "" {
+			return ip, nil
+		}
+		lastErr = fmt.Errorf("%s вернул не IP: %q", svc, ip)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("нет доступных сервисов")
+	}
+	return "", lastErr
+}
+
+// upsertToken добавляет/обновляет устройство в stateDir/tokens.json,
+// создавая файл и каталог при необходимости (enroll без ручных шагов).
+func upsertToken(stateDir, device, hashB64 string) error {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(stateDir, "tokens.json")
+	doc := struct {
+		Devices map[string]string `json:"devices"`
+	}{Devices: map[string]string{}}
+	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+		if err := json.Unmarshal(b, &doc); err != nil {
+			return fmt.Errorf("%s: %v", path, err)
+		}
+	}
+	if doc.Devices == nil {
+		doc.Devices = map[string]string{}
+	}
+	doc.Devices[device] = hashB64
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o600)
 }

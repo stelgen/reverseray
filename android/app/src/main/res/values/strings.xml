@@ -22,4 +22,8 @@
     <string name="qr_prompt">Наведи камеру на QR-конфиг ReverseRay</string>
     <string name="qr_imported">Конфиг из QR загружен</string>
     <string name="qr_error">QR недоступен</string>
+    <string name="logs_title">Журнал</string>
+    <string name="logs_empty">Журнал пуст</string>
+    <string name="logs_copy">Копировать</string>
+    <string name="logs_copied">Журнал скопирован</string>
 </resources>

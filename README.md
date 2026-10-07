@@ -47,29 +47,57 @@ ReverseRay превращает Android-устройство в выходной
 ### 1. Сервер
 
 ```bash
-mkdir -p state && chown 65532:65532 state
+git clone https://github.com/stelgen/reverseray.git
+cd reverseray
+
+sudo mkdir -p state && sudo chown 65532:65532 state
 docker compose up -d
-
-# выпуск токена устройства и печать CA-pin:
-docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray \
-  -name phone-1 -host YOUR_SERVER_IP -port 443
+docker compose logs reverseray | grep -m1 "ca_pin"   # CA-pin сервера
 ```
 
-### 2. Устройство
+### 2. Выдача токена устройству
 
-Установите APK со страницы [Releases](https://github.com/stelgen/reverseray/releases)
-и введите конфигурационную строку из `enroll` либо отсканируйте её QR-код:
+`enroll` сам определяет внешний IP сервера, сам добавляет токен в
+`state/tokens.json` и печатает готовую конфигурационную строку:
+
+```bash
+docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1
+```
+
+Сервер подхватывает изменения `state/tokens.json` автоматически (до 3 с) —
+редактировать файл и отправлять SIGHUP не нужно.
+
+### 3. Телефон
+
+Установите `app-release.apk` со страницы
+[Releases](https://github.com/stelgen/reverseray/releases) и вставьте
+конфигурационную строку из `enroll` (или отсканируйте её QR-код):
 
 ```
-rrp://<token>@YOUR_SERVER_IP:443/?pin=<CA_PIN>&name=phone-1
+rrp://<token>@<внешний_IP>:4433/?pin=<CA_PIN>&name=phone-1
 ```
 
-### 3. Проверка
+Порт туннеля по умолчанию — **4433** (меняется через `RR_TUNNEL_PORT`).
+Если подключение не удаётся — кнопка «Журнал» в приложении покажет
+последовательность ошибок; её можно скопировать одной кнопкой.
+
+### 4. Проверка
 
 ```bash
 curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 # в ответе — IP устройства, а не сервера
 ```
+
+### Если не подключается
+
+1. Кнопка «Журнал» в приложении — покажет последовательность ошибок,
+   копируется одной кнопкой.
+2. Порт 4433/tcp должен быть открыт на сервере (firewall/облако):
+   `sudo ufw allow 4433/tcp` или аналог в панели облака.
+3. В логах сервера должна быть строка `tokens auto-reloaded` после enroll —
+   иначе проверьте, что `enroll` запускался с `-state-dir /var/lib/reverseray`.
+4. `CA-pin` в конфигурационной строке должен совпадать с выведенным `enroll`
+   (и с `ca_pin` из логов сервера).
 
 ### Интеграция с Xray
 
