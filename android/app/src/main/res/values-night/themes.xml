@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Тёмная тема (values-night) -->
-    <style name="Theme.ReverseRay" parent="Theme.AppCompat.NoActionBar">
+    <style name="Theme.ReverseRay" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">#4FC3F7</item>
         <item name="colorPrimaryDark">#0B1020</item>
         <item name="colorAccent">#4FC3F7</item>

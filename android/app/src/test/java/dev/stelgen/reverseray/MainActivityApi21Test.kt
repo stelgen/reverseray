@@ -35,10 +35,7 @@ class MainActivityApi21Test {
     fun `qr scan button visible at api 21`() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val root = activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as ViewGroup
-                val labels = (0 until root.childCount).mapNotNull {
-                    (root.getChildAt(it) as? Button)?.text?.toString()
-                }
+                val labels = UiFind.buttons(UiFind.contentView(activity)).map { it.text.toString() }
                 assertTrue(labels.contains(activity.getString(R.string.qr_scan)))
                 assertTrue(labels.contains(activity.getString(R.string.qr_show)))
             }

@@ -26,4 +26,10 @@
     <string name="logs_empty">Log is empty</string>
     <string name="logs_copy">Copy</string>
     <string name="logs_copied">Log copied</string>
+    <string name="update_title">Update available: %1$s</string>
+    <string name="update_question">Download and install the latest version?</string>
+    <string name="update_download">Download</string>
+    <string name="update_downloading">Downloading update…</string>
+    <string name="update_latest">You are on the latest version</string>
+    <string name="update_error">Update failed: %1$s</string>
 </resources>

@@ -40,11 +40,7 @@ class MainActivityApi31Test {
     fun `qr buttons visible on api 31`() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0)
-                    as android.view.ViewGroup
-                val labels = (0 until root.childCount).mapNotNull {
-                    (root.getChildAt(it) as? Button)?.text?.toString()
-                }
+                val labels = UiFind.buttons(UiFind.contentView(activity)).map { it.text.toString() }
                 assertTrue(labels.contains(activity.getString(R.string.qr_scan)))
                 assertTrue(labels.contains(activity.getString(R.string.qr_show)))
             }
@@ -55,11 +51,9 @@ class MainActivityApi31Test {
     fun `invalid config does not crash on start`() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0)
-                    as android.view.ViewGroup
-                val edit = (0 until root.childCount).mapNotNull { root.getChildAt(it) as? EditText }[0]
+                val edit = UiFind.editTexts(UiFind.contentView(activity))[0]
                 edit.setText("not-an-rrp-uri")
-                val start = (0 until root.childCount).mapNotNull { root.getChildAt(it) as? Button }
+                val start = UiFind.buttons(UiFind.contentView(activity))
                     .first { it.text == activity.getString(R.string.btn_start) }
                 start.performClick() // должен показать тост, не крашиться
                 assertFalse(activity.isFinishing)
@@ -75,9 +69,7 @@ class MainActivityApi31Test {
         try {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 scenario.onActivity { activity ->
-                    val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
-                        .getChildAt(0) as android.view.ViewGroup
-                    val edit = (0 until root.childCount).mapNotNull { root.getChildAt(it) as? EditText }[0]
+                        val edit = UiFind.editTexts(UiFind.contentView(activity))[0]
                     assertEquals(validConfig, edit.text.toString())
                     // и парсится тем же кодеком, что и скан QR
                     assertEquals("Home", RrpUri.parse(edit.text.toString()).name)

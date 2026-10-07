@@ -37,6 +37,8 @@ func main() {
 		err = cmdHealthcheck(os.Args[2:])
 	case "enroll":
 		err = cmdEnroll(os.Args[2:])
+	case "reset-state":
+		err = cmdResetState(os.Args[2:])
 	case "version", "--version":
 		fmt.Println("reverseray", version)
 	case "help", "--help", "-h":
@@ -207,4 +209,47 @@ func upsertToken(stateDir, device, hashB64 string) error {
 		return err
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o600)
+}
+
+// cmdResetState очищает состояние устройства (токены), оставляя сервер
+// в состоянии «чистый лист» — применяется при повторном деплое новой версии.
+// CA-ключ сохраняется по умолчанию (флаг -keep-ca не нужен: ca.pem не трогаем),
+// флаг -all удаляет и CA (тогда pin у клиентов изменится).
+func cmdResetState(args []string) error {
+	fs := flag.NewFlagSet("reset-state", flag.ExitOnError)
+	stateDir := fs.String("state-dir", "", "server state dir (default from config or /var/lib/reverseray)")
+	all := fs.Bool("all", false, "also remove CA (ca.pem) — clients will need re-enrollment")
+	_ = fs.Parse(args)
+	if *stateDir == "" {
+		*stateDir = os.Getenv("RR_STATE_DIR")
+	}
+	if *stateDir == "" {
+		*stateDir = "/var/lib/reverseray"
+	}
+
+	removed := 0
+	targets := []string{
+		filepath.Join(*stateDir, "tokens.json"),
+		filepath.Join(*stateDir, "sessions.json"),
+	}
+	if *all {
+		targets = append(targets,
+			filepath.Join(*stateDir, "ca.pem"),
+			filepath.Join(*stateDir, "ca.key"),
+			filepath.Join(*stateDir, "leaf.pem"),
+			filepath.Join(*stateDir, "leaf.key"),
+		)
+	}
+	for _, p := range targets {
+		if err := os.Remove(p); err == nil {
+			removed++
+			fmt.Println("removed:", p)
+		}
+	}
+	if removed == 0 {
+		fmt.Println("state already clean:", *stateDir)
+		return nil
+	}
+	fmt.Printf("state reset (%d files removed). Запусти enroll заново для каждого устройства.\n", removed)
+	return nil
 }

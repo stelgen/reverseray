@@ -26,4 +26,10 @@
     <string name="logs_empty">Журнал пуст</string>
     <string name="logs_copy">Копировать</string>
     <string name="logs_copied">Журнал скопирован</string>
+    <string name="update_title">Доступно обновление %1$s</string>
+    <string name="update_question">Скачать и установить последнюю версию?</string>
+    <string name="update_download">Скачать</string>
+    <string name="update_downloading">Скачивание обновления…</string>
+    <string name="update_latest">У вас последняя версия</string>
+    <string name="update_error">Ошибка обновления: %1$s</string>
 </resources>
