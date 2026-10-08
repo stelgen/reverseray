@@ -161,7 +161,7 @@ jobs:
           pattern: apk
       - name: Checksums
         run: cd dist && ls -la && sha256sum * > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body_path: CHANGELOG.md
