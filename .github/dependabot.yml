@@ -20,6 +20,12 @@ updates:
     ignore:
       - dependency-name: "androidx.appcompat:appcompat"
         versions: [">=1.7"]
+      # minSdk 14: core-ktx новее 1.9.0 требует minSdk 19/21 (PR #15 принят намеренно не будет)
+      - dependency-name: "androidx.core:core-ktx"
+        versions: [">=1.10"]
+      # material новее 1.9.0 тоже уходит с minSdk 14
+      - dependency-name: "com.google.android.material:material"
+        versions: [">=1.10"]
       - dependency-name: "com.android.application"
         update-types: ["version-update:semver-major"]
       - dependency-name: "gradle-wrapper"

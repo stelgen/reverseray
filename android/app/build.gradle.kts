@@ -92,9 +92,7 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // Kotlin 2.4: jvmTarget задаётся через kotlin { compilerOptions } (см. ниже)
 
     lint {
         abortOnError = true
@@ -129,5 +127,13 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.bouncycastle.bcpkix) // генерация self-signed сертификата в evil-server тестах
     testImplementation("org.robolectric:robolectric:4.14.1")
-    testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("androidx.test:core-ktx:1.7.0")
+}
+
+// Kotlin 2.4+: jvmTarget через compilerOptions (DSL kotlinOptions удалён);
+// мержит dependabot #12 (kotlin 2.1.0 -> 2.4.20)
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }

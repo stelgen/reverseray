@@ -2,6 +2,20 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [Неиздано]
+
+### Обслуживание
+- Dependabot-пакет: Kotlin **2.1.0 → 2.4.20** (#12, min AGP 8.5.2 — наш 8.7.3 ✓,
+  `kotlinOptions` → `kotlin { compilerOptions }`), BouncyCastle **1.80.2 → 1.86**
+  (#11, согласованный сет из 4 артефактов), Gradle wrapper **8.9 → 8.14.5** (#13),
+  `androidx.test:core-ktx` 1.6.1 → 1.7.0 (#14), группа github-actions — 9 actions
+  (#16: setup-go v7, setup-java v6, codeql v4, artifact v6, gitleaks v3, docker v4).
+- Политика пинов: `androidx.core:core-ktx >=1.10` и `material >=1.10`
+  добавлены в `ignore` Dependabot — новее уходят с minSdk 14, PR #15 закрыт
+  по политике (Android 4+ остаётся заявленной поддержкой).
+- Проверено локально: `go vet + test` (63, зелёные), полная пересборка
+  `compileDebugKotlin + testDebugUnitTest` (101, зелёные) на Kotlin 2.4.20.
+
 ## [0.7.4] — 2026-10-08
 
 ### Исправлено (ГЛАВНОЕ — «ERROR 2: protocol error» на проде 81.25.59.194:4433)

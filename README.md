@@ -10,7 +10,7 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/stelgen/reverseray"></a>
   <img alt="Languages" src="https://img.shields.io/badge/Go%20%7C%20Kotlin-%2300ADD8?logo=go&logoColor=white">
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
-  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.1-7F52FF?logo=kotlin&logoColor=white">
+  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
   <img alt="Tests" src="https://img.shields.io/badge/tests-63%20Go%20%2B%20101%20JVM-2E7D32">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
