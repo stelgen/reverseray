@@ -18,6 +18,8 @@ data class RrpUriConfig(
     val ports: List<Int>,
     val pin: String? = null,
     val name: String? = null,
+    /** Транспорт: "tcp" (сырой RRP/1, по умолчанию) или "ws" (WebSocket-апгрейд /rrp). */
+    val transport: String = RrpUri.TRANSPORT_TCP,
 ) {
     fun serialize(): String = RrpUri.serialize(this)
 }
@@ -25,6 +27,8 @@ data class RrpUriConfig(
 object RrpUri {
 
     const val SCHEME = "rrp://"
+    const val TRANSPORT_TCP = "tcp"
+    const val TRANSPORT_WS = "ws"
 
     fun parse(raw: String): RrpUriConfig {
         val s = raw.trim()
@@ -73,6 +77,7 @@ object RrpUri {
 
         var pin: String? = null
         var name: String? = null
+        var transport = TRANSPORT_TCP
         if (query.isNotEmpty()) {
             for (kv in query.split('&')) {
                 if (kv.isEmpty()) continue
@@ -82,10 +87,17 @@ object RrpUri {
                 when (key) {
                     "pin" -> pin = pctDecode(value)
                     "name" -> name = pctDecode(value)
+                    "transport" -> {
+                        val t = value.lowercase()
+                        if (t != TRANSPORT_TCP && t != TRANSPORT_WS) {
+                            throw RrpUriException("неизвестный transport: $t (tcp|ws)")
+                        }
+                        transport = t
+                    }
                 }
             }
         }
-        return RrpUriConfig(token, host, ports, pin, name)
+        return RrpUriConfig(token, host, ports, pin, name, transport)
     }
 
     fun serialize(config: RrpUriConfig): String {
@@ -100,6 +112,7 @@ object RrpUri {
         val params = mutableListOf<String>()
         config.pin?.let { params.add("pin=" + pctEncode(it)) }
         config.name?.let { params.add("name=" + pctEncode(it)) }
+        if (config.transport.lowercase() == TRANSPORT_WS) params.add("transport=ws")
         if (params.isNotEmpty()) sb.append("/?").append(params.joinToString("&"))
         return sb.toString()
     }

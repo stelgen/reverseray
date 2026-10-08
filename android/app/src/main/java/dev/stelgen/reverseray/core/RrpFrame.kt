@@ -283,6 +283,54 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
+    /** 0x21 S→C: пустой payload, stream_id = id UDP-ассоциации. Телефон отвечает OPEN_OK. */
+    class UdpAssoc(override val streamId: Long) : RrpFrame(TYPE_UDP_ASSOC) {
+        override fun buildPayload(): ByteArray = ByteArray(0)
+    }
+
+    /**
+     * 0x22: [u8 atyp][addr][u16be port][data].
+     * S→C — адрес назначения (телефон шлёт дейтаграмму),
+     * C→S — фактический источник ответа.
+     */
+    class UdpData(
+        override val streamId: Long,
+        val atyp: Int,
+        val addr: ByteArray,
+        val port: Int,
+        val bytes: ByteArray,
+    ) : RrpFrame(TYPE_UDP_DATA) {
+        override fun buildPayload(): ByteArray {
+            val p = ByteArray(1 + addr.size + 2 + bytes.size)
+            p[0] = atyp.toByte()
+            addr.copyInto(p, 1)
+            putU16(p, 1 + addr.size, port)
+            bytes.copyInto(p, 3 + addr.size)
+            return p
+        }
+
+        companion object {
+            internal fun fromPayload(streamId: Long, p: ByteArray): UdpData {
+                if (p.isEmpty()) throw RrpFrameException("UDP_DATA: пустой payload")
+                val atyp = p[0].toInt() and 0xFF
+                val (addrOff, addrLen) = when (atyp) {
+                    RrpAddress.ATYP_IPV4 -> 1 to 4
+                    RrpAddress.ATYP_IPV6 -> 1 to 16
+                    RrpAddress.ATYP_DOMAIN -> {
+                        if (p.size < 2) throw RrpFrameException("UDP_DATA: нет длины домена")
+                        2 to (p[1].toInt() and 0xFF)
+                    }
+                    else -> throw RrpFrameException("UDP_DATA: неизвестный ATYP $atyp")
+                }
+                if (p.size < addrOff + addrLen + 2) throw RrpFrameException("UDP_DATA: короткий payload")
+                val port = getU16(p, addrOff + addrLen)
+                val dataOff = addrOff + addrLen + 2
+                return UdpData(streamId, atyp, p.copyOfRange(addrOff, addrOff + addrLen), port,
+                    p.copyOfRange(dataOff, p.size))
+            }
+        }
+    }
+
     /** 0x20: utf8 JSON */
     class Stats(val json: String) : RrpFrame(TYPE_STATS) {
         override fun buildPayload(): ByteArray = json.toByteArray(Charsets.UTF_8)
@@ -329,13 +377,15 @@ sealed class RrpFrame(val type: Int) {
         const val TYPE_PONG = 0x15
         const val TYPE_OPEN_OK = 0x17
         const val TYPE_STATS = 0x20
+        const val TYPE_UDP_ASSOC = 0x21
+        const val TYPE_UDP_DATA = 0x22
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
         const val MAX_CONTROL_PAYLOAD = 4096
 
         fun maxPayloadFor(type: Int): Int =
-            if (type == TYPE_DATA) MAX_DATA_PAYLOAD else MAX_CONTROL_PAYLOAD
+            if (type == TYPE_DATA || type == TYPE_UDP_DATA) MAX_DATA_PAYLOAD else MAX_CONTROL_PAYLOAD
 
         /** Парсинг кадра из потока: 12 байт заголовка + payload, с проверкой версии/лимитов. */
         fun parse(source: InputStream): RrpFrame {
@@ -373,6 +423,8 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_OPEN_OK -> OpenOk.fromPayload(streamId, payload)
                 TYPE_PING -> Ping.fromPayload(payload)
                 TYPE_PONG -> Pong.fromPayload(payload)
+                TYPE_UDP_ASSOC -> UdpAssoc(streamId)
+                TYPE_UDP_DATA -> UdpData.fromPayload(streamId, payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)
                 else -> throw RrpFrameException("неизвестный тип кадра 0x${Integer.toHexString(type)}")

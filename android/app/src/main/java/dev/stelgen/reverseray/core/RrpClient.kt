@@ -1,7 +1,9 @@
 package dev.stelgen.reverseray.core
 
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
@@ -36,7 +38,7 @@ import org.bouncycastle.tls.TlsCredentials
 import org.bouncycastle.tls.TlsFatalAlert
 import org.bouncycastle.tls.TlsServerCertificate
 import org.bouncycastle.tls.crypto.TlsCrypto
-import org.bouncycastle.tls.crypto.impl.jcajce.JcaTlsCryptoProvider
+import org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto
 
 /** Ошибка клиента RRP (TCP/TLS/handshake/соединение). */
 class RrpClientException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -90,6 +92,8 @@ class RrpClient(
     private val agentName: String = DEFAULT_AGENT,
     private val allowLan: Boolean = false,
     private val listener: Listener? = null,
+    /** Транспорт: "tcp" (сырой RRP/1) или "ws" (WebSocket-апгрейд /rrp). */
+    private val transport: String = TRANSPORT_TCP,
 ) {
 
     interface Listener {
@@ -115,6 +119,18 @@ class RrpClient(
 
     @Volatile private var socket: Socket? = null
     @Volatile private var tls: TlsClientProtocol? = null
+
+    /** Ввод/вывод поверх TLS: сырой поток или WebSocket-обёртка. */
+    @Volatile private var wireIn: InputStream? = null
+    @Volatile private var wireOut: OutputStream? = null
+    @Volatile private var wireWs: WsStream? = null
+
+    /** Счётчики трафика (байты payload'ов DATA/UDP_DATA) для графика в UI. */
+    private val txBytes = AtomicLong(0)
+    private val rxBytes = AtomicLong(0)
+
+    /** UDP-ассоциации: stream_id → локальный relay (DatagramSocket). */
+    private val udpAssocs = ConcurrentHashMap<Long, UdpAssoc>()
 
     @Volatile var state: State = State.DISCONNECTED
         private set
@@ -173,6 +189,25 @@ class RrpClient(
             throw RrpClientException("TLS $host:$port: ${e.message}", e)
         }
 
+        // Транспорт поверх TLS (v0.7): ws → HTTP-апгрейд /rrp; tcp → сырые кадры.
+        if (transport.equals(TRANSPORT_WS, ignoreCase = true)) {
+            try {
+                sock.soTimeout = WS_HANDSHAKE_TIMEOUT_MS
+                val ws = WsStream(protocol.inputStream, protocol.outputStream, host, port)
+                ws.handshake()
+                sock.soTimeout = 0
+                wireWs = ws
+                wireIn = ws
+                wireOut = WsOutput(ws)
+            } catch (e: IOException) {
+                close()
+                throw RrpClientException("WebSocket $host:$port: ${e.message}", e)
+            }
+        } else {
+            wireIn = protocol.inputStream
+            wireOut = protocol.outputStream
+        }
+
         running.set(true)
         setState(State.HANDSHAKE)
         Thread({ readerLoop() }, "rrp-reader-$port").apply { isDaemon = true }.start()
@@ -222,9 +257,9 @@ class RrpClient(
 
     private fun readerLoop() {
         try {
-            val proto = tls ?: throw RrpClientException("TLS не инициализирован")
+            val input = wireIn ?: throw RrpClientException("транспорт не инициализирован")
             while (running.get()) {
-                dispatch(RrpFrame.parse(proto.getInputStream()))
+                dispatch(RrpFrame.parse(input))
             }
         } catch (e: Throwable) {
             if (state != State.READY && handshakeError == null) {
@@ -253,7 +288,15 @@ class RrpClient(
             is RrpFrame.Hello -> log("HELLO от сервера не ожидается")
             is RrpFrame.Open -> handleIncomingOpen(frame)
             is RrpFrame.OpenOk -> pendingOpens.remove(frame.streamId)?.complete(frame.errCode)
-            is RrpFrame.Data -> handleData(frame)
+            is RrpFrame.Data -> {
+                rxBytes.addAndGet(frame.bytes.size.toLong())
+                handleData(frame)
+            }
+            is RrpFrame.UdpAssoc -> handleIncomingUdpAssoc(frame)
+            is RrpFrame.UdpData -> {
+                rxBytes.addAndGet(frame.bytes.size.toLong())
+                handleUdpData(frame)
+            }
             is RrpFrame.Close -> closeStream(frame.streamId, notify = false)
             is RrpFrame.Window -> streams[frame.streamId]?.sendWindow
                 ?.release(frame.increment.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
@@ -449,6 +492,122 @@ class RrpClient(
         sendFrameQuiet(RrpFrame.OpenOk(streamId, errCode))
     }
 
+    // ------------------------------------------------------------------ UDP (v0.7)
+
+    /** S→C UDP_ASSOC: сервер просит поднять UDP-релей. Ответ — OPEN_OK c err_code. */
+    private fun handleIncomingUdpAssoc(frame: RrpFrame.UdpAssoc) {
+        val id = frame.streamId
+        if (udpAssocs.size >= maxStreams) {
+            sendOpenOk(id, ERR_TOO_MANY_STREAMS)
+            return
+        }
+        val assoc = try {
+            UdpAssoc(id)
+        } catch (e: Exception) {
+            log("UDP assoc: не удалось поднять сокет: ${e.message}")
+            sendOpenOk(id, ERR_CONNECT_FAILED)
+            return
+        }
+        udpAssocs[id] = assoc
+        sendOpenOk(id, ERR_OK)
+        Thread({ udpReceiveLoop(assoc) }, "rrp-udp-$id").apply { isDaemon = true }.start()
+    }
+
+    /** Приём дейтаграмм из интернета → UDP_DATA C→S (источник = фактический отправитель). */
+    private fun udpReceiveLoop(assoc: UdpAssoc) {
+        val buf = ByteArray(UDP_RECV_BUFFER)
+        while (running.get() && !assoc.closed.get()) {
+            val pkt = DatagramPacket(buf, buf.size)
+            try {
+                assoc.socket.receive(pkt)
+            } catch (_: Exception) {
+                break
+            }
+            if (pkt.length <= 0) continue
+            val src = pkt.address
+            val atyp = if (src.address.size == 4) RrpAddress.ATYP_IPV4 else RrpAddress.ATYP_IPV6
+            sendFrameQuiet(RrpFrame.UdpData(assoc.id, atyp, src.address, pkt.port, buf.copyOf(pkt.length)))
+        }
+    }
+
+    /** S→C UDP_DATA: дейтаграмма на адрес назначения (с SSRF-guard; порт 53 = DNS+ разрешён). */
+    private fun handleUdpData(frame: RrpFrame.UdpData) {
+        val assoc = udpAssocs[frame.streamId]
+        if (assoc == null || assoc.closed.get()) return
+        val targetHost = try {
+            RrpAddress.decodeAddr(frame.atyp, frame.addr)
+        } catch (e: Exception) {
+            return
+        }
+        // Порт 53 разрешён даже в приватные сети: это DNS-релей телефона,
+        // тот же резолвер, которым телефон пользуется сам (документировано в protocol.md).
+        val allow = allowLan || frame.port == 53
+        if (SsrfGuard.isBlocked(targetHost, allow)) {
+            log("UDP $targetHost:${frame.port} заблокирован SSRF-guard")
+            return
+        }
+        val dst: java.net.InetAddress = when (frame.atyp) {
+            RrpAddress.ATYP_IPV4, RrpAddress.ATYP_IPV6 -> try {
+                java.net.InetAddress.getByAddress(frame.addr)
+            } catch (e: Exception) {
+                return
+            }
+            else -> {
+                // домен: резолвим сами и проверяем каждый адрес (DNS-rebinding)
+                val resolved = try {
+                    java.net.InetAddress.getAllByName(targetHost)
+                        .firstOrNull { !SsrfGuard.isBlockedAddress(it, allow) }
+                } catch (e: Exception) {
+                    null
+                }
+                if (resolved == null) {
+                    log("UDP $targetHost:${frame.port}: резолв заблокирован SSRF-guard")
+                    return
+                }
+                resolved
+            }
+        }
+        if (SsrfGuard.isBlockedAddress(dst, allow)) {
+            log("UDP $targetHost:${frame.port}: адрес заблокирован SSRF-guard")
+            return
+        }
+        if (frame.bytes.isEmpty()) return
+        try {
+            assoc.socket.send(DatagramPacket(frame.bytes, frame.bytes.size, dst, frame.port))
+        } catch (e: Exception) {
+            log("udp send failed: ${e.message}")
+        }
+    }
+
+    /** Локальная UDP-ассоциация: DatagramSocket + поток приёма. */
+    private inner class UdpAssoc(val id: Long) {
+        val socket: java.net.DatagramSocket = java.net.DatagramSocket()
+        val closed = AtomicBoolean(false)
+
+        init {
+            socket.reuseAddress = true
+        }
+
+        fun closeQuietly() {
+            if (closed.compareAndSet(false, true)) {
+                try { socket.close() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    /** OutputStream-адаптер над WsStream: один вызов write = одно binary-сообщение. */
+    private class WsOutput(private val ws: WsStream) : OutputStream() {
+        override fun write(b: Int) = throw UnsupportedOperationException("WS: побайтовая запись не поддерживается")
+        override fun write(b: ByteArray) {
+            ws.writeMessage(b)
+        }
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            ws.writeMessage(if (off == 0 && len == b.size) b else b.copyOfRange(off, off + len))
+        }
+        override fun flush() {}
+        override fun close() = ws.closeFrame()
+    }
+
     // ------------------------------------------------------------------ PING
 
     private fun scheduleNextPing() {
@@ -470,9 +629,13 @@ class RrpClient(
     // ------------------------------------------------------------------ frame IO
 
     private fun sendFrame(frame: RrpFrame) {
-        val proto = tls ?: throw RrpClientException("нет TLS-соединения")
+        val out = wireOut ?: throw RrpClientException("нет соединения")
+        when (frame) {
+            is RrpFrame.Data -> txBytes.addAndGet(frame.bytes.size.toLong())
+            is RrpFrame.UdpData -> txBytes.addAndGet(frame.bytes.size.toLong())
+            else -> {}
+        }
         synchronized(sendLock) {
-            val out: OutputStream = proto.getOutputStream()
             out.write(frame.encode())
             out.flush()
         }
@@ -502,11 +665,22 @@ class RrpClient(
         streams.clear()
         pendingOpens.values.forEach { it.complete(ERR_CONNECTION_CLOSED) }
         pendingOpens.clear()
+        udpAssocs.values.forEach { it.closeQuietly() }
+        udpAssocs.clear()
+        try { wireWs?.closeFrame() } catch (_: Exception) {}
         try { tls?.close() } catch (_: Exception) {}
         closeQuietly(socket)
+        wireIn = null
+        wireOut = null
+        wireWs = null
         tls = null
         socket = null
     }
+
+    // ------------------------------------------------------------------ трафик
+
+    /** [tx, rx] суммарные байты payload'ов с момента connect (для графика UI). */
+    fun bytesSnapshot(): Pair<Long, Long> = txBytes.get() to rxBytes.get()
 
     // ------------------------------------------------------------------ misc
 
@@ -533,9 +707,10 @@ class RrpClient(
 
     private fun buildTlsClient(): DefaultTlsClient {
         ensureFullBouncyCastle()
-        val crypto: TlsCrypto = JcaTlsCryptoProvider()
-            .setProvider("BC")
-            .create(SecureRandom())
+        // BcTlsCrypto — лёгкий (lightweight) бэкенд без JCA: не зависит от
+        // провайдера "BC" платформы (на Android он урезан; v0.5.1 не чинит
+        // все устройства). Работает на всех Android начиная с API 14.
+        val crypto: TlsCrypto = defaultCrypto()
         return object : DefaultTlsClient(crypto) {
             override fun getProtocolVersions(): Array<ProtocolVersion> =
                 arrayOf(ProtocolVersion.TLSv13, ProtocolVersion.TLSv12)
@@ -603,16 +778,23 @@ class RrpClient(
     }
 
     companion object {
-        const val DEFAULT_AGENT = "ReverseRay-Android/0.1.0"
+        const val DEFAULT_AGENT = "ReverseRay-Android/0.7.0"
+        const val TRANSPORT_TCP = "tcp"
+        const val TRANSPORT_WS = "ws"
+
+        /** Lightweight-крипто без JCA: не зависит от провайдера "BC" платформы. */
+        fun defaultCrypto(): TlsCrypto = BcTlsCrypto(SecureRandom())
 
         @Volatile private var bcEnsured = false
 
         /**
          * Android содержит урезанный провайдер "BC" (или не содержит вовсе):
-         * BC-TLS ищет SHA-512 через Security и падает
+         * JcaTlsCrypto резолвит дайджесты через Security и падает
          * ("no such algorithm: SHA-512 for provider BC").
-         * Решение: удалить системный "BC" и зарегистрировать ПОЛНЫЙ
-         * BouncyCastleProvider из пакета приложения. Идемпотентно.
+         * Регистрируем ПОЛНЫЙ BouncyCastleProvider из пакета приложения
+         * (идемпотентно) — нужен для JCA-хелперов (MessageDigest/Mac) на
+         * старых устройствах. Сам TLS-crypto с v0.7 использует BcTlsCrypto
+         * (lightweight) и от JCA-провайдера не зависит вовсе.
          */
         fun ensureFullBouncyCastle() {
             if (bcEnsured) return
@@ -634,7 +816,9 @@ class RrpClient(
 
         const val CONNECT_TIMEOUT_MS = 10_000
         const val TLS_HANDSHAKE_TIMEOUT_MS = 15_000
+        const val WS_HANDSHAKE_TIMEOUT_MS = 15_000
         const val HANDSHAKE_TIMEOUT_MS = 20_000L
+        const val UDP_RECV_BUFFER = 64 * 1024
         const val OPEN_TIMEOUT_MS = 30_000L
         const val WINDOW_ACQUIRE_TIMEOUT_MS = 30_000L
         const val NONCE_SIZE = 8

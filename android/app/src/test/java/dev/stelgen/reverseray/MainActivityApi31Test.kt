@@ -54,7 +54,7 @@ class MainActivityApi31Test {
                 val edit = UiFind.editTexts(UiFind.contentView(activity))[0]
                 edit.setText("not-an-rrp-uri")
                 val start = UiFind.buttons(UiFind.contentView(activity))
-                    .first { it.text == activity.getString(R.string.btn_start) }
+                    .first { it.text == activity.getString(R.string.btn_start_short) }
                 start.performClick() // должен показать тост, не крашиться
                 assertFalse(activity.isFinishing)
             }

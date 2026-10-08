@@ -18,6 +18,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -25,9 +26,12 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.shape.MaterialShapeDrawable
+import com.google.android.material.shape.ShapeAppearanceModel
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.journeyapps.barcodescanner.BarcodeEncoder
@@ -35,12 +39,14 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.service.TunnelService
+import dev.stelgen.reverseray.ui.TrafficGraphView
 import dev.stelgen.reverseray.update.UpdateChecker
 import java.io.File
 
 /**
- * Dashboard: Material 3 (карточка статуса, outlined-поле конфига, кнопки),
- * импорт конфига строкой/QR, экспорт QR, авто-обновление с GitHub Releases.
+ * Dashboard: Material 3. Сверху — большая круглая кнопка «Старт» (главное
+ * действие, v0.7), под ней «Стоп», далее статус-карточка с реалтайм-графиком
+ * трафика, конфиг (строка/QR/файл), обновление, журнал.
  * Вся разметка собирается кодом — один источник правды.
  */
 class MainActivity : AppCompatActivity() {
@@ -49,9 +55,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusIcon: TextView
     private lateinit var statusSpinner: android.widget.ProgressBar
     private lateinit var configView: TextInputEditText
+    private lateinit var trafficGraph: TrafficGraphView
+    private lateinit var trafficLabel: TextView
 
     /** zxing-embedded требует API 19+ (overrideLibrary в манифесте). */
     private val qrSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
+
+    /** SAF (файлы конфига) доступен с API 19. */
+    private val fileIoSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
 
     private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
         val content = result.contents ?: return@registerForActivityResult
@@ -68,11 +79,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val exportFileLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+            if (uri != null) writeConfigToFile(uri)
+        }
+
+    private val importFileLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) readConfigFromFile(uri)
+        }
+
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent ?: return
-            intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusView.text = it }
-            applyStatusVisual(intent.getStringExtra(TunnelService.EXTRA_STATE) ?: TunnelService.STATE_INFO)
+            when (intent.action) {
+                TunnelService.ACTION_STATS -> {
+                    val rx = intent.getLongExtra(TunnelService.EXTRA_RX_RATE, 0L)
+                    val tx = intent.getLongExtra(TunnelService.EXTRA_TX_RATE, 0L)
+                    trafficGraph.addSample(rx.toFloat(), tx.toFloat())
+                    trafficLabel.text = getString(
+                        R.string.traffic_rates,
+                        fmtRate(rx), fmtRate(tx),
+                    )
+                }
+                else -> {
+                    intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusView.text = it }
+                    val state = intent.getStringExtra(TunnelService.EXTRA_STATE) ?: TunnelService.STATE_INFO
+                    applyStatusVisual(state)
+                    if (state == TunnelService.STATE_STOPPED || state == TunnelService.STATE_ERROR) {
+                        trafficGraph.reset()
+                        trafficLabel.text = getString(R.string.traffic_idle)
+                    }
+                }
+            }
         }
     }
 
@@ -86,7 +125,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        val filter = IntentFilter(TunnelService.ACTION_STATUS)
+        val filter = IntentFilter().apply {
+            addAction(TunnelService.ACTION_STATUS)
+            addAction(TunnelService.ACTION_STATS)
+        }
         if (Build.VERSION.SDK_INT >= 34) {
             ContextCompat.registerReceiver(
                 this, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED,
@@ -110,17 +152,58 @@ class MainActivity : AppCompatActivity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setPadding(dp(16), dp(12), dp(16), dp(16))
         }
 
-        val title = TextView(this).apply {
+        // Шапка: иконка приложения вместо старого баннера
+        root.addView(ImageView(this).apply {
+            setImageResource(R.mipmap.ic_launcher)
+            layoutParams = LinearLayout.LayoutParams(dp(84), dp(84)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setMargins(0, dp(8), 0, dp(4))
+            }
+            contentDescription = getString(R.string.app_name)
+        })
+        root.addView(TextView(this).apply {
             setText(R.string.app_name)
             textSize = 24f
             setTypeface(typeface, Typeface.BOLD)
-        }
-        root.addView(title)
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
 
-        // Карточка статуса
+        // ГЛАВНАЯ кнопка: большая круглая «Старт» — самое верхнее действие
+        val startButton = MaterialButton(this).apply {
+            setText(R.string.btn_start_short)
+            textSize = 22f
+            setTypeface(typeface, Typeface.BOLD)
+            shapeAppearanceModel = ShapeAppearanceModel.builder()
+                .setAllCornerSizes(dp(110).toFloat()) // круг при 220dp
+                .build()
+            layoutParams = LinearLayout.LayoutParams(dp(220), dp(220)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setMargins(0, dp(16), 0, dp(8))
+            }
+            setOnClickListener { startTunnel() }
+        }
+        root.addView(startButton)
+
+        // Стоп — под Стартом, широкая outlined
+        root.addView(
+            MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                setText(R.string.btn_stop)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { setMargins(0, dp(4), 0, dp(4)) }
+                setOnClickListener {
+                    startService(
+                        Intent(this@MainActivity, TunnelService::class.java)
+                            .setAction(TunnelService.ACTION_STOP)
+                    )
+                }
+            }
+        )
+
+        // Карточка статуса + график трафика
         val card = MaterialCardView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -154,6 +237,19 @@ class MainActivity : AppCompatActivity() {
         baseStatusColor = currentTextColor()
         statusRow.addView(statusView)
         cardInner.addView(statusRow)
+
+        trafficGraph = TrafficGraphView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(96),
+            ).apply { setMargins(0, dp(8), 0, dp(2)) }
+        }
+        cardInner.addView(trafficGraph)
+        trafficLabel = TextView(this@MainActivity).apply {
+            setText(R.string.traffic_idle)
+            textSize = 12f
+            setPadding(0, dp(2), 0, 0)
+        }
+        cardInner.addView(trafficLabel)
         card.addView(cardInner)
         root.addView(card)
 
@@ -207,23 +303,29 @@ class MainActivity : AppCompatActivity() {
                 },
             )
         }
-        row(
-            MaterialButton(this).apply {
-                setText(R.string.btn_start)
-                setOnClickListener { startTunnel() }
-            },
-        )
-        row(
-            MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                setText(R.string.btn_stop)
-                setOnClickListener {
-                    startService(
-                        Intent(this@MainActivity, TunnelService::class.java)
-                            .setAction(TunnelService.ACTION_STOP)
-                    )
-                }
-            },
-        )
+
+        // Файл-импорт/экспорт конфига (SAF, API 19+; на 14–18 кнопки скрыты)
+        if (fileIoSupported) {
+            row(
+                MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    setText(R.string.export_config)
+                    setOnClickListener {
+                        exportFileLauncher.launch("reverseray-config.txt")
+                    }
+                },
+                MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    setText(R.string.import_config)
+                    setOnClickListener {
+                        try {
+                            importFileLauncher.launch(arrayOf("text/*", "application/octet-stream"))
+                        } catch (e: ActivityNotFoundException) {
+                            Toast.makeText(this@MainActivity, R.string.file_error_no_picker, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+            )
+        }
+
         row(
             MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                 setText(R.string.update_check)
@@ -273,6 +375,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun currentTextColor(): Int = statusView.currentTextColor
+
+    // ---------- формат скорости ----------
+
+    /** «12,3 КБ/с» / «1,2 МБ/с» — компактный формат для графика. */
+    private fun fmtRate(bytesPerSec: Long): String {
+        val b = bytesPerSec.coerceAtLeast(0)
+        return when {
+            b >= 1 shl 20 -> getString(R.string.rate_mb, b / (1024f * 1024f))
+            b >= 1 shl 10 -> getString(R.string.rate_kb, b / 1024f)
+            else -> getString(R.string.rate_b, b)
+        }
+    }
+
+    // ---------- файлы конфига (SAF, API 19+) ----------
+
+    private fun writeConfigToFile(uri: Uri) {
+        try {
+            val raw = configView.text.toString().trim()
+            RrpUri.parse(raw) // не экспортируем мусор
+            contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(raw.toByteArray(Charsets.UTF_8))
+                out.flush()
+            }
+            Toast.makeText(this, R.string.config_saved, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.file_error, e.message ?: ""), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun readConfigFromFile(uri: Uri) {
+        try {
+            val text = contentResolver.openInputStream(uri)?.use { input ->
+                input.readBytes().toString(Charsets.UTF_8).trim()
+            } ?: ""
+            val cfg = RrpUri.parse(text)
+            configView.setText(cfg.serialize())
+            prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
+            Toast.makeText(this, R.string.config_imported, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+        }
+    }
 
     // ---------- QR ----------
 
@@ -447,4 +591,3 @@ class MainActivity : AppCompatActivity() {
 
     private fun prefs() = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE)
 }
-

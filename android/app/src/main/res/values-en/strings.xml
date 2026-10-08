@@ -34,4 +34,16 @@
     <string name="update_error">Update failed: %1$s</string>
     <string name="update_check">Check for updates</string>
     <string name="logs_share">Share</string>
+    <string name="btn_start_short">Start</string>
+    <string name="traffic_idle">Traffic: no data</string>
+    <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
+    <string name="rate_b">%1$d B/s</string>
+    <string name="rate_kb">%1$.1f KB/s</string>
+    <string name="rate_mb">%1$.2f MB/s</string>
+    <string name="export_config">Export to file</string>
+    <string name="import_config">Import from file</string>
+    <string name="config_saved">Config saved to file</string>
+    <string name="config_imported">Config imported from file</string>
+    <string name="file_error">File error: %1$s</string>
+    <string name="file_error_no_picker">No file picker available</string>
 </resources>

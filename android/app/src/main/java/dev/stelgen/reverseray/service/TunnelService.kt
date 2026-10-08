@@ -50,6 +50,9 @@ class TunnelService : Service() {
     private val runners = mutableListOf<Runner>()
     private val rnd = Random()
     private val lastNetKick = AtomicLong(0)
+    @Volatile private var statsThread: Thread? = null
+    private var lastTx = 0L
+    private var lastRx = 0L
 
     @Volatile private var config: RrpUriConfig? = null
     @Volatile private var stopping = true
@@ -115,7 +118,42 @@ class TunnelService : Service() {
             Thread({ runLoop(r) }, "rrp-conn-$port").start()
         }
         registerNetworkWatching()
+        startStatsLoop()
         updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, cfg.host))
+    }
+
+    /** Реалтайм-статистика трафика: раз в 500 мс шлёт ACTION_STATS (байт/с). */
+    private fun startStatsLoop() {
+        if (statsThread?.isAlive == true) return
+        lastTx = 0
+        lastRx = 0
+        val t = Thread({
+            while (!stopping) {
+                try {
+                    Thread.sleep(STATS_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                var tx = 0L
+                var rx = 0L
+                synchronized(runners) {
+                    runners.forEach { r -> r.client?.bytesSnapshot()?.let { (a, b) -> tx += a; rx += b } }
+                }
+                val dtx = tx - lastTx
+                val drx = rx - lastRx
+                lastTx = tx
+                lastRx = rx
+                sendBroadcast(
+                    Intent(ACTION_STATS)
+                        .setPackage(packageName)
+                        .putExtra(EXTRA_TX_RATE, dtx * 1000L / STATS_INTERVAL_MS)
+                        .putExtra(EXTRA_RX_RATE, drx * 1000L / STATS_INTERVAL_MS)
+                        .putExtra(EXTRA_TX_TOTAL, tx)
+                        .putExtra(EXTRA_RX_TOTAL, rx)
+                )
+            }
+        }, "rrp-stats").apply { isDaemon = true; start() }
+        statsThread = t
     }
 
     private fun runLoop(r: Runner) {
@@ -129,6 +167,7 @@ class TunnelService : Service() {
                 pin = cfg.pin,
                 allowLan = allowLan(),
                 listener = clientListener,
+                transport = cfg.transport,
             )
             r.client = client
             try {
@@ -187,6 +226,8 @@ class TunnelService : Service() {
             it.kick = true
             try { it.client?.close() } catch (_: Exception) {}
         }
+        statsThread?.interrupt()
+        statsThread = null
         unregisterNetworkWatching()
         releaseWakeLock()
         updateStatus(STATE_STOPPED, getString(R.string.status_stopped))
@@ -358,7 +399,13 @@ class TunnelService : Service() {
         const val ACTION_START = "dev.stelgen.reverseray.action.START"
         const val ACTION_STOP = "dev.stelgen.reverseray.action.STOP"
         const val ACTION_STATUS = "dev.stelgen.reverseray.action.STATUS"
+        const val ACTION_STATS = "dev.stelgen.reverseray.action.STATS"
         const val EXTRA_STATUS = "status"
+        const val EXTRA_TX_RATE = "tx_rate"
+        const val EXTRA_RX_RATE = "rx_rate"
+        const val EXTRA_TX_TOTAL = "tx_total"
+        const val EXTRA_RX_TOTAL = "rx_total"
+        private const val STATS_INTERVAL_MS = 500L
 
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIF_ID = 1

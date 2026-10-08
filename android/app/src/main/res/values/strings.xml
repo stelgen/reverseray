@@ -34,4 +34,16 @@
     <string name="update_error">Ошибка обновления: %1$s</string>
     <string name="update_check">Проверить обновления</string>
     <string name="logs_share">Поделиться</string>
+    <string name="btn_start_short">Старт</string>
+    <string name="traffic_idle">Трафик: нет данных</string>
+    <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
+    <string name="rate_b">%1$d Б/с</string>
+    <string name="rate_kb">%1$.1f КБ/с</string>
+    <string name="rate_mb">%1$.2f МБ/с</string>
+    <string name="export_config">Экспорт в файл</string>
+    <string name="import_config">Импорт из файла</string>
+    <string name="config_saved">Конфиг сохранён в файл</string>
+    <string name="config_imported">Конфиг загружен из файла</string>
+    <string name="file_error">Ошибка файла: %1$s</string>
+    <string name="file_error_no_picker">Файловый менеджер недоступен</string>
 </resources>
