@@ -46,4 +46,7 @@
     <string name="config_imported">Config imported from file</string>
     <string name="file_error">File error: %1$s</string>
     <string name="file_error_no_picker">No file picker available</string>
+    <string name="netinfo_loading">Detecting network…</string>
+    <string name="netinfo_failed">Network: unknown</string>
+    <string name="netinfo_ip">IP %1$s</string>
 </resources>

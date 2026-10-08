@@ -12,8 +12,14 @@ android {
         applicationId = "dev.stelgen.reverseray"
         minSdk = 14
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.7.1"
+        // v0.7.2: versionName задаётся релиз-пайплайном (-PversionName=<тег без v>)
+        // или дефолтом для локальной разработки; versionCode ВЫВОДИТСЯ из семвера
+        // (major*1M + minor*1K + patch) — растёт с КАЖДЫМ релизом автоматически,
+        // даже если APK-код не менялся (требование: цифра бежит в каждом релизе).
+        val releaseVersion: String = (project.findProperty("versionName") as String?) ?: "0.7.2"
+        val (maj, min, pat) = releaseVersion.removePrefix("v").split('.').map { it.toIntOrNull() ?: 0 }
+        versionCode = maj * 1_000_000 + min * 1_000 + pat
+        versionName = releaseVersion
         // Legacy multidex обязателен для API < 21 при включённом core desugaring
         multiDexEnabled = true
 

@@ -46,4 +46,7 @@
     <string name="config_imported">Конфиг загружен из файла</string>
     <string name="file_error">Ошибка файла: %1$s</string>
     <string name="file_error_no_picker">Файловый менеджер недоступен</string>
+    <string name="netinfo_loading">Определяем сеть…</string>
+    <string name="netinfo_failed">Сеть: не определено</string>
+    <string name="netinfo_ip">IP %1$s</string>
 </resources>

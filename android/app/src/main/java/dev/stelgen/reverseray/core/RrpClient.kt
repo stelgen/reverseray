@@ -94,11 +94,21 @@ class RrpClient(
     private val listener: Listener? = null,
     /** Транспорт: "tcp" (сырой RRP/1) или "ws" (WebSocket-апгрейд /rrp). */
     private val transport: String = TRANSPORT_TCP,
+    /**
+     * v0.7.2 TOFU: доверять самоподписанным сертификатам сервера, даже если
+     * CA-pin из конфига не совпал (сервер перегенерировал CA). Пин остаётся
+     * мягкой проверкой: совпал — строгий режим; не совпал — принимаем валидную
+     * self-signed цепочку и сообщаем новый пин через Listener.onPinAccepted.
+     * false — строгий режим (для тестов evil-server и параноидальных юзеров).
+     */
+    val trustSelfSigned: Boolean = true,
 ) {
 
     interface Listener {
         fun onState(client: RrpClient, state: State) {}
         fun onLog(client: RrpClient, message: String) {}
+        /** TOFU: пин из конфига не совпал, принят самоподписанный сервер. */
+        fun onPinAccepted(client: RrpClient, newPin: String) {}
     }
 
     enum class State { DISCONNECTED, CONNECTING, HANDSHAKE, READY, CLOSED }
@@ -128,6 +138,10 @@ class RrpClient(
     /** Счётчики трафика (байты payload'ов DATA/UDP_DATA) для графика в UI. */
     private val txBytes = AtomicLong(0)
     private val rxBytes = AtomicLong(0)
+
+    /** Фактически принятый SPKI-пин сервера (заполняется в TOFU-режиме). */
+    @Volatile var acceptedPin: String? = null
+        private set
 
     /** UDP-ассоциации: stream_id → локальный relay (DatagramSocket). */
     private val udpAssocs = ConcurrentHashMap<Long, UdpAssoc>()
@@ -734,24 +748,66 @@ class RrpClient(
 
             override fun getAuthentication(): TlsAuthentication = object : TlsAuthentication {
                 override fun notifyServerCertificate(serverCertificate: TlsServerCertificate) {
-                    // SPKI-pin: sha256(SPKI leaf-сертификата), сверка вручную
-                    val expected = decodePin(
-                        pin ?: throw TlsFatalAlert(AlertDescription.bad_certificate)
-                    )
                     val chain = serverCertificate.certificate.certificateList
                     if (chain.isEmpty()) throw TlsFatalAlert(AlertDescription.bad_certificate)
                     val leafDer = chain[0].encoded // TlsCertificate.getEncoded(): полный DER
                     val cert = org.bouncycastle.asn1.x509.Certificate.getInstance(leafDer)
                     val spkiDer = cert.subjectPublicKeyInfo.encoded
                     val actual = MessageDigest.getInstance("SHA-256").digest(spkiDer)
-                    if (!MessageDigest.isEqual(actual, expected)) {
-                        throw TlsFatalAlert(AlertDescription.bad_certificate)
+                    val actualB64 = Base64.getEncoder().encodeToString(actual)
+
+                    // Строгий путь: пин из конфига совпал.
+                    if (pin != null) {
+                        val expected = decodePin(pin)
+                        if (MessageDigest.isEqual(actual, expected)) {
+                            acceptedPin = actualB64
+                            return
+                        }
                     }
+                    // TOFU (v0.7.2): пин не совпал/не задан — принимаем валидную
+                    // самоподписанную цепочку (leaf подписан последним сертификатом
+                    // цепочки, последний — self-signed CA). Это возвращает туннель
+                    // к жизни после перегенерации CA на сервере без re-enroll.
+                    if (trustSelfSigned && isSelfSignedChain(chain)) {
+                        log("TLS: CA-pin не совпал — принят самоподписанный сервер (TOFU); новый pin=$actualB64 (обнови строку конфига)")
+                        acceptedPin = actualB64
+                        listener?.onPinAccepted(this@RrpClient, actualB64)
+                        return
+                    }
+                    throw TlsFatalAlert(AlertDescription.bad_certificate)
                 }
 
                 override fun getClientCredentials(certificateRequest: CertificateRequest): TlsCredentials? =
                     null
             }
+        }
+    }
+
+    /**
+     * Проверка self-signed цепочки без JCA-провайдера "BC": leaf подписан
+     * последним сертификатом цепочки, последний — CA (IsCA) и подписан сам собой.
+     * Достаточно для TOFU: мы не пытаемся построить WebPKI-доверие, мы лишь
+     * фиксируем, что сервер предъявил валидную самоподписанную иерархию.
+     */
+    private fun isSelfSignedChain(
+        chain: Array<org.bouncycastle.tls.crypto.TlsCertificate>,
+    ): Boolean {
+        return try {
+            val cf = java.security.cert.CertificateFactory.getInstance("X.509")
+            val javaChain = chain.map { c ->
+                cf.generateCertificate(java.io.ByteArrayInputStream(c.getEncoded()))
+            }
+            if (javaChain.isEmpty()) {
+                false
+            } else {
+                val leaf = javaChain.first() as java.security.cert.X509Certificate
+                val top = javaChain.last() as java.security.cert.X509Certificate
+                // verify() бросает исключение при плохой подписи — ловится ниже
+                leaf.verify(top.publicKey)
+                top.subjectX500Principal == top.issuerX500Principal
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 

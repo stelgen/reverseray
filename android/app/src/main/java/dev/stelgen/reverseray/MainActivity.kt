@@ -37,7 +37,11 @@ import com.google.android.material.textfield.TextInputLayout
 import com.journeyapps.barcodescanner.BarcodeEncoder
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import android.os.Handler
+import android.os.Looper
 import dev.stelgen.reverseray.core.RrpUri
+import dev.stelgen.reverseray.net.NetInfo
+import dev.stelgen.reverseray.net.NetInfoFetcher
 import dev.stelgen.reverseray.service.TunnelService
 import dev.stelgen.reverseray.ui.TrafficGraphView
 import dev.stelgen.reverseray.update.UpdateChecker
@@ -57,6 +61,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var configView: TextInputEditText
     private lateinit var trafficGraph: TrafficGraphView
     private lateinit var trafficLabel: TextView
+    private lateinit var netFlag: TextView
+    private lateinit var netInfoView: TextView
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val netInfoRunnable = object : Runnable {
+        override fun run() {
+            refreshNetInfoAsync()
+            uiHandler.postDelayed(this, NETINFO_REFRESH_MS)
+        }
+    }
 
     /** zxing-embedded требует API 19+ (overrideLibrary в манифесте). */
     private val qrSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
@@ -125,6 +138,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        uiHandler.post(netInfoRunnable)
         val filter = IntentFilter().apply {
             addAction(TunnelService.ACTION_STATUS)
             addAction(TunnelService.ACTION_STATS)
@@ -142,6 +156,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        uiHandler.removeCallbacks(netInfoRunnable)
         try { unregisterReceiver(statusReceiver) } catch (_: Exception) {}
     }
 
@@ -250,6 +265,25 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(2), 0, 0)
         }
         cardInner.addView(trafficLabel)
+
+        // v0.7.2: сеть телефона — флаг страны (в размер текста) + IP/страна/оператор
+        val netRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        netFlag = TextView(this@MainActivity).apply {
+            textSize = 13f
+            setPadding(0, 0, dp(6), 0)
+            visibility = android.view.View.GONE
+        }
+        netRow.addView(netFlag)
+        netInfoView = TextView(this@MainActivity).apply {
+            setText(R.string.netinfo_loading)
+            textSize = 12f
+        }
+        netRow.addView(netInfoView)
+        cardInner.addView(netRow)
         card.addView(cardInner)
         root.addView(card)
 
@@ -375,6 +409,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun currentTextColor(): Int = statusView.currentTextColor
+
+    // ---------- сеть телефона (IP/страна/оператор) ----------
+
+    private fun refreshNetInfoAsync() {
+        Thread {
+            val info: NetInfo? = try {
+                NetInfoFetcher.fetch()
+            } catch (_: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (info == null) {
+                    netFlag.visibility = android.view.View.GONE
+                    netInfoView.setText(R.string.netinfo_failed)
+                    return@runOnUiThread
+                }
+                val flag = info.flagEmoji() ?: NetInfoFetcher.emojiOf(info.countryCode)
+                if (flag.isNullOrEmpty()) {
+                    netFlag.visibility = android.view.View.GONE
+                } else {
+                    netFlag.text = flag
+                    netFlag.visibility = android.view.View.VISIBLE
+                }
+                netInfoView.text = buildString {
+                    append(getString(R.string.netinfo_ip, info.ip))
+                    info.country?.let { c ->
+                        append(" · ").append(c)
+                        info.countryCode?.let { cc -> append(" (").append(cc).append(")") }
+                    }
+                    info.isp?.let { append(" · ").append(it) }
+                }
+            }
+        }.apply { isDaemon = true }.start()
+    }
 
     // ---------- формат скорости ----------
 
@@ -590,4 +658,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun prefs() = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE)
+
+    private companion object {
+        const val NETINFO_REFRESH_MS = 60_000L
+    }
 }

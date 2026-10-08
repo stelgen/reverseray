@@ -48,15 +48,24 @@ class UpdateCheckerParseTest {
         val tag = "v0.5.0"
         assertTrue(SemVer.compare(tag, "0.4.1") > 0)
         // и URL ассета по имени
-        val json = jsonResponse(tag, false, listOf("app-release.apk", "SHA256SUMS"))
-        val assets = org.json.JSONObject(json).optJSONArray("assets")!!
-        var url: String? = null
-        for (i in 0 until assets.length()) {
-            if (assets.getJSONObject(i).optString("name") == "app-release.apk") {
-                url = assets.getJSONObject(i).optString("browser_download_url")
-            }
-        }
-        assertEquals("https://github.com/x/app-release.apk", url)
+        // v0.7.2: реальная функция выбора APK-ассета (фикс: апдейтер искал
+        // "app-release.apk", а релизы публикуют "reverseray-<ver>.apk")
+        val assets = org.json.JSONObject(
+            jsonResponse(tag, false, listOf("reverseray-0.7.1.apk", "SHA256SUMS")),
+        ).optJSONArray("assets")!!
+        assertEquals("https://github.com/x/reverseray-0.7.1.apk", UpdateChecker.pickApkAsset(assets))
+
+        // любое другое имя *.apk — тоже берётся (fallback)
+        val assets2 = org.json.JSONObject(
+            jsonResponse(tag, false, listOf("SHA256SUMS", "some-other.apk")),
+        ).optJSONArray("assets")!!
+        assertEquals("https://github.com/x/some-other.apk", UpdateChecker.pickApkAsset(assets2))
+
+        // без *.apk — null
+        val assets3 = org.json.JSONObject(
+            jsonResponse(tag, false, listOf("SHA256SUMS")),
+        ).optJSONArray("assets")!!
+        assertEquals(null, UpdateChecker.pickApkAsset(assets3))
     }
 
     @Test

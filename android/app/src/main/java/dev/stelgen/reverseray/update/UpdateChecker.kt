@@ -32,11 +32,15 @@ data class UpdateInfo(
  * Проверка и загрузка обновления с GitHub Releases:
  *  - GET https://api.github.com/repos/{repo}/releases/latest
  *  - если tag новее текущей версии — возвращает UpdateInfo
- *  - downloadApk() качает app-release.apk в кэш для установки.
+ *  - downloadApk() качает APK-ассет в кэш для установки.
+ *
+ * v0.7.2 ФИКС: апдейтер искал ассет с именем "app-release.apk", а релизы
+ * публикуют "reverseray-<версия>.apk" (переименование из v0.4.1) — из-за
+ * этого апдейтер никогда не находил APK. Теперь берём ЛЮБОЙ *.apk-ассет
+ * (предпочитая тот, что содержит "reverseray").
  */
 class UpdateChecker(
     private val repo: String = "stelgen/reverseray",
-    private val apkAssetName: String = "app-release.apk",
 ) {
 
     /** Сравнивает последний релиз с текущей версией. null — апдейта нет/ошибка сети. */
@@ -50,15 +54,7 @@ class UpdateChecker(
             val tag = json.optString("tag_name", "").removePrefix("v")
             if (tag.isEmpty() || SemVer.compare(tag, currentVersion) <= 0) return null
             val assets = json.optJSONArray("assets") ?: return null
-            var apkUrl: String? = null
-            for (i in 0 until assets.length()) {
-                val a = assets.getJSONObject(i)
-                if (a.optString("name") == apkAssetName) {
-                    apkUrl = a.optString("browser_download_url")
-                    break
-                }
-            }
-            if (apkUrl.isNullOrEmpty()) return null
+            val apkUrl = pickApkAsset(assets) ?: return null
             UpdateInfo(tag, apkUrl, json.optString("body", ""))
         } catch (_: Exception) {
             null
@@ -75,6 +71,23 @@ class UpdateChecker(
             }
         }
         return dest
+    }
+
+    companion object {
+        /** URL первого *.apk-ассета (предпочтение "reverseray*"). null — апк нет. */
+        fun pickApkAsset(assets: org.json.JSONArray): String? {
+            var fallback: String? = null
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                val name = a.optString("name", "")
+                if (!name.endsWith(".apk", ignoreCase = true)) continue
+                val url = a.optString("browser_download_url", "")
+                if (url.isEmpty()) continue
+                if (name.contains("reverseray", ignoreCase = true)) return url
+                if (fallback == null) fallback = url
+            }
+            return fallback
+        }
     }
 
     private fun open(url: String): HttpURLConnection {

@@ -292,14 +292,69 @@ class EvilServerTest {
         }
     }
 
-    /** Вынесено, чтобы бехавиор-лямбды вызывали корректное рукопожатие. */
-    private fun serverHandshake(conn: Socket, inp: DataInputStream, out: Sender) {
-        val s = readFrame(inp) ?: return
-        check(s.first == RrpFrame.TYPE_HELLO.toByte()) { "expected HELLO" }
-        out(RrpFrame.TYPE_HELLO_OK.toByte(), 0,
-            """{"session_id":"s1","server_ver":"0.2.1","tunnel_window":524288}""".toByteArray())
-        readFrame(inp) // AUTH
-        out(RrpFrame.TYPE_READY.toByte(), 0,
-            """{"tunnel_id":"t1","role":"active","max_streams":64,"tunnel_window":524288}""".toByteArray())
+}
+
+/** Верхний уровень: доступен и EvilServerTest, и TofuTest. */
+fun serverHandshake(conn: Socket, inp: DataInputStream, out: Sender) {
+    val s = readFrame(inp) ?: return
+    check(s.first == RrpFrame.TYPE_HELLO.toByte()) { "expected HELLO" }
+    out(RrpFrame.TYPE_HELLO_OK.toByte(), 0,
+        """{"session_id":"s1","server_ver":"0.2.1","tunnel_window":524288}""".toByteArray())
+    readFrame(inp) // AUTH
+    out(RrpFrame.TYPE_READY.toByte(), 0,
+        """{"tunnel_id":"t1","role":"active","max_streams":64,"tunnel_window":524288}""".toByteArray())
+}
+
+/**
+ * v0.7.2 TOFU-регрессия: сервер перегенерировал самоподписанный CA → пин из
+ * конфига не совпадает. По умолчанию клиент ПРИНИМАЕТ валидную self-signed
+ * цепочку (туннель оживает без re-enroll); строгий режим
+ * (trustSelfSigned=false) по-прежнему отвечает bad_certificate.
+ */
+class TofuTest {
+
+    private fun wrongPin(): String =
+        Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
+
+    @Test
+    fun `wrong pin with trustSelfSigned reaches READY`() {
+        val server = EvilServer { conn, inp, out -> serverHandshake(conn, inp, out) }
+        try {
+            val c = RrpClient(
+                host = "127.0.0.1", port = server.port, token = server.token,
+                pin = wrongPin(), allowLan = false, listener = null,
+                transport = RrpClient.TRANSPORT_TCP,
+                trustSelfSigned = true,
+            )
+            c.connect()
+            assertEquals(RrpClient.State.READY, c.state)
+            assertTrue(c.acceptedPin != null && c.acceptedPin != wrongPin())
+            c.close()
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `strict mode still rejects wrong pin`() {
+        val server = EvilServer { conn, inp, out -> serverHandshake(conn, inp, out) }
+        try {
+            val c = RrpClient(
+                host = "127.0.0.1", port = server.port, token = server.token,
+                pin = wrongPin(), allowLan = false, listener = null,
+                transport = RrpClient.TRANSPORT_TCP,
+                trustSelfSigned = false,
+            )
+            try {
+                c.connect()
+                throw AssertionError("strict mode must reject wrong pin")
+            } catch (e: java.io.IOException) {
+                assertTrue(e.message!!.contains("TLS"))
+            } finally {
+                c.close()
+            }
+        } finally {
+            server.stop()
+        }
     }
 }
