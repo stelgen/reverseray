@@ -185,6 +185,8 @@ jobs:
           print(s)
           PY
       - uses: stefanzweifel/git-auto-commit-action@v6
+        continue-on-error: true # пост-хозяйство: ни при каких условиях не роняет релиз
         with:
           commit_message: "[skip ci] chore(release): digest ${{ github.ref_name }} в deploy/digests.yaml"
           file_pattern: deploy/digests.yaml
+          rebase: true # main мог уйти вперёд за время multi-arch сборки (Release #32)
