@@ -62,6 +62,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # digest собранного multi-arch образа — уезжает в deploy/digests.yaml (v0.8.3)
+      image_digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
       # QEMU нужен для сборки arm64/armv7-образов на amd64-раннере
@@ -73,6 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v7
+        id: push
         with:
           context: ./server
           push: true
@@ -135,6 +139,34 @@ jobs:
           pattern: apk
       - name: Checksums
         run: cd dist && ls -la && sha256sum * > SHA256SUMS
+      # v0.8.3: digest образа в deploy/digests.yaml (хвост 3 версий) —
+      # источник для прод-пиннов и отката (шапка файла обещала это давно).
+      - name: Update deploy/digests.yaml
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+          p = pathlib.Path("deploy/digests.yaml")
+          s = p.read_text()
+          entry = f"  - tag: {GITHUB_REF_NAME}\n    image: ghcr.io/{GITHUB_REPOSITORY}@{DIGEST}\n"
+          # сносим комментарий-плейсхолдер после первого заполнения и дубликаты тега
+          s = s.replace("  # - tag: v0.1.0\n", "").replace("  #   image: ghcr.io/stelgen/reverseray@sha256:PLACEHOLDER  # заполнится первым CI-пушем\n", "")
+          lines = s.splitlines(keepends=True)
+          out, skip = [], False
+          for ln in lines:
+              if ln.startswith("  - tag:"):
+                  skip = ln.strip() == entry.strip()
+              if skip and (ln.startswith("  - tag:") or ln.startswith("    image:")):
+                  continue
+              skip = skip and not ln.startswith("  - tag:")
+              out.append(ln)
+          s = "".join(out).rstrip() + "\n" + entry
+          p.write_text(s)
+          print(s)
+          PY
+      - uses: stefanzweifel/git-auto-commit-action@v6
+        with:
+          commit_message: "[skip ci] chore(release): digest ${{ github.ref_name }} в deploy/digests.yaml"
+          file_pattern: deploy/digests.yaml
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*

@@ -9,7 +9,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-125%20Go%20%2B%20166%20JVM-2E7D32">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-131%20Go%20%2B%20176%20JVM-2E7D32">
   <img alt="Security" src="https://img.shields.io/badge/WAN--hardening-antiscan%20%2B%20tarpit-8B0000">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
 </p>
@@ -104,7 +104,7 @@ flowchart TB
 | Деплой | Автопилот `rr.sh`: установка/обновление/сброс одной командой | [`deploy/rr.sh`](deploy/rr.sh) |
 | CI-роботы | Тесты, приватность, модули, скриншот, секреты | `.github/workflows/` |
 
-## Возможности (v0.8.2)
+## Возможности (v0.8.3)
 
 | Возможность | Суть |
 |---|---|
@@ -118,7 +118,8 @@ flowchart TB
 | **Честные вкладки** | «О приложении» (версии, модули, RAM, диск, трафик, константы защиты), «О устройстве» (CPU/RAM/SDK/Java + что читаем), «О сети» (DNS, реальный резолвер, DoT/DoH/DNSSEC/ECS/SNI + источники данных) |
 | **Обновления** | Модули — без переустановки APK (прогресс % и скорость в консоли); APK — по кнопке или раз в 24 ч; скачивание сверяется с SHA256SUMS релиза до установки (анти-подмена) |
 | **UX-канон (v0.8.2)** | Все вкладки скроллятся (включая ландшафт и крупные шрифты), лог обновлений — в том же консольном окне и на языке приложения, никаких пустых полей и пояснений-«скобок» в настройках |
-| **Docker** | Distroless, read-only rootfs, `cap_drop: ALL`; healthcheck обязателен; restart-governor: падение — не чаще раза в 30 с, бесконечный crash-loop отдаёт контейнер Docker с ошибкой |
+| **Многоязычность (v0.8.3)** | Выбор языка в настройках (Как в системе / Русский / English); ВСЁ динамично: поля, статусы, уведомления и логи серверных событий; фолбэк — английский (дефолт-ресурсы = EN, RU — values-ru; core — типизированный каталог Msgs с en-фолбэком); паритет переводов и ноль хардкода проверяют CI-гейты перед деплоем |
+| **Docker** | Distroless БЕЗ шелла (v0.8.3: governor — код в самом бинаре, busybox удалён), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy); restart-governor: падение — не чаще раза в 30 с, бесконечный crash-loop отдаёт контейнер Docker с ошибкой |
 | **Веб-морда `/ui`** | Сессии, трафик, egress IP, протоколы, hardening-счётчики, версии модулей и камуфляжа — только чтение |
 
 ## Быстрый старт — одна команда (автопилот)
@@ -135,7 +136,7 @@ sudo bash rr.sh
 | Флаг | Действие |
 |---|---|
 | *(нет)* | установка/обновление до последнего релиза |
-| `--tag v0.8.2` | конкретная версия |
+| `--tag v0.8.3` | конкретная версия |
 | `--reset` | обнулить состояние (токены/CA) и пере-enroll |
 | `--no-ui` | закрыть веб-морду в localhost |
 
@@ -193,8 +194,8 @@ admin API — только localhost/unix; контейнер distroless + gover
 
 | Робот | Что делает |
 |---|---|
-| `go` | gofmt/vet/test-race/coverage — 125 тестов |
-| `android` | сборка + 161 JVM-тест (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл) |
+| `go` | gofmt/vet/test-race/coverage — 131 тест |
+| `android` | сборка + 176 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл, i18n-гейты) |
 | `modules` | канон-чек манифеста (включая секцию camouflage) + парсеры обеих сторон согласны |
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |
@@ -257,7 +258,7 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 | Traffic limit is king | exhausted → exactly zero bytes; auto-reconnect can wait for the reset date |
 | Honest UI | unified console across tabs (scrollable, in-bar live button); About panels show EVERYTHING the app learned |
 | SSD/RAM discipline | counters live in RAM, persisted once per minute |
-| Docker | distroless, cap_drop ALL, healthcheck, restart-governor (30 s min delay, gives up after 20 failures) |
+| Docker | distroless БЕЗ шелла (governor in-binary), cap_drop ALL, healthcheck (CI waits for healthy on the real entrypoint), restart-governor (30 s min delay, gives up after 20 failures) |
 
 ### Compatibility
 

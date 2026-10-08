@@ -64,7 +64,8 @@ sudo iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
 
 - счётчики трафика — в RAM, запись на диск раз в минуту;
 - Docker: restart-governor (мин. пауза 30 с; 20 падений подряд → контейнер
-  умирает с ошибкой), healthcheck обязателен, pids_limit, read-only rootfs;
+  умирает с ошибкой; v0.8.3 — governor в самом бинаре: distroless без busybox
+  и шеллов вообще), healthcheck обязателен, pids_limit, read-only rootfs;
 - APK: без wakeup-молотилки, бэкграунд-проб (только спидтест 5 с после
   коннекта и DNS-проба при открытии «О сети»).
 
