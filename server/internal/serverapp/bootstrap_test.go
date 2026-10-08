@@ -80,3 +80,33 @@ func TestBootstrapKeepsExistingTokens(t *testing.T) {
 		t.Fatal("bootstrap must not add phone-1 when tokens.json exists")
 	}
 }
+
+// v0.7.1 регрессия crash-loop "permission denied": state-каталог не
+// записывается — сервер ОБЯЗАН стартовать с устройством в памяти,
+// печатать готовую rrp:// строку и самовосстанавливать запись позже.
+func TestBootstrapUnwritableStateStillBoots(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root игнорирует права — тест бессмыслен под root")
+	}
+	dir := t.TempDir()
+	// read-only каталог: создание tokens.json упадёт с EACCES
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	app, err := New(minimalCfg(t, dir, filepath.Join(dir, "tokens.json")), newDiscardLogger())
+	if err != nil {
+		t.Fatalf("New must not fail on unwritable state: %v", err)
+	}
+	devices := app.Devices()
+	found := false
+	for _, d := range devices {
+		if d == "phone-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("device phone-1 must be registered in memory, got %v", devices)
+	}
+}

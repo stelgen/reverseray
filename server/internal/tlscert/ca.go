@@ -35,6 +35,11 @@ type Bundle struct {
 	Leaf    tls.Certificate // Ed25519, served by default
 	LeafAlt tls.Certificate // ECDSA P-256, compat profile
 	CAPin   string          // base64url(SHA256(SPKI(CA)))
+
+	// Ephemeral=true: state-каталог не записывается (права/RO-фс), PKI живёт
+	// только в памяти. Сервер РАБОТАЕТ, но pin меняется при каждом рестарте
+	// (клиентам нужен повторный enroll). Это деградация, не падение.
+	Ephemeral bool
 }
 
 // SPKIPin returns the base64url SHA256 of the certificate's SPKI DER.
@@ -44,29 +49,32 @@ func SPKIPin(cert *x509.Certificate) string {
 }
 
 // LoadOrCreate loads PKI from stateDir or generates it (CA persists,
-// leaves reissued when <30d of life left).
+// leaves reissued when <30d of life left). Ошибки ЗАПИСИ не фатальны:
+// ключи/сертификаты остаются в памяти (Bundle.Ephemeral=true) — сервер
+// стартует всегда; фатальны только ошибки чтения битых существующих файлов.
 func LoadOrCreate(stateDir string, hosts []string) (*Bundle, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
 	}
-	caCert, caKey, err := loadOrCreateCA(stateDir)
+	caCert, caKey, caEph, err := loadOrCreateCA(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("ca: %w", err)
 	}
-	leaf, err := loadOrCreateLeaf(stateDir, caCert, caKey, hosts, "leaf", ed25519Key)
+	leaf, leafEph, err := loadOrCreateLeaf(stateDir, caCert, caKey, hosts, "leaf", ed25519Key)
 	if err != nil {
 		return nil, fmt.Errorf("leaf ed25519: %w", err)
 	}
-	leafAlt, err := loadOrCreateLeaf(stateDir, caCert, caKey, hosts, "leaf-ecdsa", ecdsaKey)
+	leafAlt, altEph, err := loadOrCreateLeaf(stateDir, caCert, caKey, hosts, "leaf-ecdsa", ecdsaKey)
 	if err != nil {
 		return nil, fmt.Errorf("leaf ecdsa: %w", err)
 	}
 	return &Bundle{
-		CA:      caCert,
-		CAKey:   caKey,
-		Leaf:    *leaf,
-		LeafAlt: *leafAlt,
-		CAPin:   SPKIPin(caCert),
+		CA:        caCert,
+		CAKey:     caKey,
+		Leaf:      *leaf,
+		LeafAlt:   *leafAlt,
+		CAPin:     SPKIPin(caCert),
+		Ephemeral: caEph || leafEph || altEph,
 	}, nil
 }
 
@@ -77,28 +85,29 @@ const (
 	ecdsaKey
 )
 
-func loadOrCreateCA(dir string) (*x509.Certificate, ed25519.PrivateKey, error) {
+// loadOrCreateCA: третий результат — «не удалось сохранить на диск» (ephemeral).
+func loadOrCreateCA(dir string) (*x509.Certificate, ed25519.PrivateKey, bool, error) {
 	certPEM, certErr := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	keyPEM, keyErr := os.ReadFile(filepath.Join(dir, "ca.key"))
 	if certErr == nil && keyErr == nil {
 		cert, err := parseCertPEM(certPEM)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		key, err := parseKeyPEM(keyPEM)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		edKey, ok := key.(ed25519.PrivateKey)
 		if !ok {
-			return nil, nil, errors.New("ca key is not ed25519")
+			return nil, nil, false, errors.New("ca key is not ed25519")
 		}
-		return cert, edKey, nil
+		return cert, edKey, false, nil
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	tpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -111,27 +120,29 @@ func loadOrCreateCA(dir string) (*x509.Certificate, ed25519.PrivateKey, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, pub, priv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
+	ephemeral := false
 	if err := writePEM(dir, "ca.pem", "CERTIFICATE", der); err != nil {
-		return nil, nil, err
+		ephemeral = true // нет прав на запись — CA живёт в памяти
 	}
 	kb, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if err := writePEM(dir, "ca.key", "PRIVATE KEY", kb); err != nil {
-		return nil, nil, err
+		ephemeral = true
 	}
-	return cert, priv, nil
+	return cert, priv, ephemeral, nil
 }
 
 func loadOrCreateLeaf(dir string, ca *x509.Certificate, caKey ed25519.PrivateKey,
-	hosts []string, name string, kind keyKind) (*tls.Certificate, error) {
+	hosts []string, name string, kind keyKind) (*tls.Certificate, bool, error) {
+	// второй результат — ephemeral (запись на диск не удалась)
 
 	certPath := filepath.Join(dir, name+".pem")
 	keyPath := filepath.Join(dir, name+".key")
@@ -142,7 +153,7 @@ func loadOrCreateLeaf(dir string, ca *x509.Certificate, caKey ed25519.PrivateKey
 		if err == nil {
 			key, kerr := parseKeyPEM(keyPEM)
 			if kerr == nil && time.Until(cert.NotAfter) > 30*24*time.Hour && cert.CheckSignatureFrom(ca) == nil {
-				return &tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key, Leaf: cert}, nil
+				return &tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key, Leaf: cert}, false, nil
 			}
 		}
 		// Fall through: reissue (rotation without CA change — clients keep working).
@@ -159,7 +170,7 @@ func loadOrCreateLeaf(dir string, ca *x509.Certificate, caKey ed25519.PrivateKey
 		pub, priv, err = &k.PublicKey, k, e
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
@@ -178,23 +189,24 @@ func loadOrCreateLeaf(dir string, ca *x509.Certificate, caKey ed25519.PrivateKey
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, pub, caKey)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	ephemeral := false
 	if err := writePEM(dir, name+".pem", "CERTIFICATE", der); err != nil {
-		return nil, err
+		ephemeral = true
 	}
 	kb, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := writePEM(dir, name+".key", "PRIVATE KEY", kb); err != nil {
-		return nil, err
+		ephemeral = true
 	}
-	return &tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: priv, Leaf: cert}, nil
+	return &tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: priv, Leaf: cert}, ephemeral, nil
 }
 
 func writePEM(dir, name, typ string, der []byte) error {

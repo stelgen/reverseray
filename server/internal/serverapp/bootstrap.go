@@ -66,33 +66,37 @@ func trimSpace(s string) string {
 // ensureDefaultDevice: если tokens.json отсутствует — сервер сам создаёт
 // первое устройство "phone-1" со сгенерированным токеном. Деплой сводится
 // к `docker compose up -d`: никакие файлы вручную создавать не нужно.
-func ensureDefaultDevice(cfg *config.Config, log *slog.Logger) {
-	if _, err := os.Stat(cfg.TokensFile); err == nil {
-		return // файл есть — ничего не трогаем
+//
+// Возврат: token (raw, для подсказки в логе), persisted, err (только фатальное).
+// Ошибка ЗАПИСИ (права/RO-фс) НЕ фатальна: устройство регистрируется в памяти
+// (Store.UpsertDevice), токен печатается в лог — сервер работает сразу;
+// файл допишется автоматически, когда права починят (reloadLoop retry).
+func ensureDefaultDevice(cfg *config.Config, log *slog.Logger) (token string, persisted bool, err error) {
+	if _, statErr := os.Stat(cfg.TokensFile); statErr == nil {
+		return "", true, nil // файл есть — ничего не трогаем
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		log.Warn("bootstrap: cannot generate token", "err", err)
-		return
+		return "", false, fmt.Errorf("generate token: %w", err)
 	}
-	token := base64.RawURLEncoding.EncodeToString(raw)
+	token = base64.RawURLEncoding.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(token))
 	hashB64 := base64.RawURLEncoding.EncodeToString(sum[:])
 
 	doc := struct {
 		Devices map[string]string `json:"devices"`
 	}{Devices: map[string]string{"phone-1": hashB64}}
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		log.Warn("bootstrap: marshal", "err", err)
-		return
+	out, jerr := json.MarshalIndent(doc, "", "  ")
+	if jerr != nil {
+		return "", false, fmt.Errorf("marshal tokens: %w", jerr)
 	}
-	if err := os.WriteFile(cfg.TokensFile, append(out, '\n'), 0o600); err != nil {
-		log.Warn("bootstrap: write tokens", "err", err)
-		return
+	if werr := os.WriteFile(cfg.TokensFile, append(out, '\n'), 0o600); werr != nil {
+		log.Warn("bootstrap: state not writable — device registered IN MEMORY (token changes on restart); fix: compose user 0:0 or chown state dir",
+			"err", werr.Error())
+		return token, false, nil
 	}
 	log.Info("bootstrap: created default device", "device", "phone-1")
-	log.Info("bootstrap: created default device", "device", "phone-1")
+	return token, true, nil
 }
 
 // logConnectInfo: асинхронно (не блокируя старт) определяет публичный IP и

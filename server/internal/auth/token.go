@@ -105,6 +105,17 @@ func HashToken(token string) []byte {
 	return h[:]
 }
 
+// UpsertDevice регистрирует/обновляет хэш устройства в памяти (bootstrap
+// без возможности записи на диск; файл подхватится Reload при починке прав).
+func (s *Store) UpsertDevice(name string, hash []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens == nil {
+		s.tokens = make(map[string][]byte)
+	}
+	s.tokens[name] = append([]byte(nil), hash...)
+}
+
 // Devices lists known device names.
 func (s *Store) Devices() []string {
 	s.mu.RLock()

@@ -1,7 +1,7 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.0}
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.1}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"
@@ -18,10 +18,14 @@ services:
     volumes:
       - ./state:/var/lib/reverseray
       # - ./config.json:/etc/reverseray/config.json:ro
-    # user закомментирован сознательно: контейнер пишет в volume под root,
-    # права на host-каталоге не важны (sudo chown не требуется).
-    # Для hardening: раскомментируй и выполни chown 65532:65532 state на хосте.
-    # user: "65532:65532"
+    # v0.7.1 ФИКС "permission denied": Dockerfile-пользователь 65532 (nonroot)
+    # не мог писать в root-owned bind-mount ./state (Portainer/хост) →
+    # crash-loop "bootstrap: write tokens: permission denied".
+    # Теперь контейнер работает под root БЕЗ capabilities (cap_drop: ALL):
+    # запись в state работает на любом host-каталоге, chown не нужен.
+    # Hardening-вариант (когда-нибудь): user: "65532:65532" +
+    # sudo chown -R 65532:65532 state
+    user: "0:0"
     read_only: true
     tmpfs:
       - /tmp

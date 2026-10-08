@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,11 @@ type App struct {
 
 	inbMu    sync.Mutex
 	inbounds []*inbound.Inbound
+
+	// bootstrapToken не пуст, если tokens.json недоступен для записи:
+	// устройство phone-1 живёт в памяти; reloadLoop допишет файл при
+	// первой возможности (самовосстановление после починки прав).
+	bootstrapToken string
 }
 
 // New assembles the app.
@@ -85,33 +91,51 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	}
 	store := auth.New()
 	store.SetHandshakeLimit(cfg.Limits.HandshakesPerMin)
+	var bootstrapToken string // задан, если устройство живёт только в памяти
 	if err := store.LoadFile(cfg.TokensFile); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("tokens: %w", err)
 		}
 		// Первый запуск: сервер сам создаёт дефолтное устройство phone-1.
-		ensureDefaultDevice(cfg, log)
-		if err := store.LoadFile(cfg.TokensFile); err != nil {
-			return nil, fmt.Errorf("tokens after bootstrap: %w", err)
+		// Ошибка записи НЕ фатальна (v0.7.1: фикс crash-loop "permission
+		// denied"): токен регистрируется в памяти и печатается в лог.
+		tok, _, berr := ensureDefaultDevice(cfg, log)
+		if berr != nil {
+			return nil, fmt.Errorf("tokens after bootstrap: %w", berr)
+		}
+		if lerr := store.LoadFile(cfg.TokensFile); lerr != nil {
+			if tok == "" {
+				return nil, fmt.Errorf("tokens after bootstrap: %w", lerr)
+			}
+			// Деградация: работаем с токеном в памяти до починки прав.
+			store.UpsertDevice("phone-1", auth.HashToken(tok))
+			bootstrapToken = tok
 		}
 	}
 	bundle, err := tlscert.LoadOrCreate(cfg.StateDir, cfg.Listen.TLSHosts)
 	if err != nil {
 		return nil, fmt.Errorf("pki: %w", err)
 	}
+	if bundle.Ephemeral {
+		log.Warn("PKI is EPHEMERAL: state dir not writable — CA pin changes on every restart (clients need re-enroll); fix: compose user 0:0 or chown state dir to 65532")
+	}
 	log.Info("PKI ready", "ca_pin", bundle.CAPin)
 	return &App{
-		cfg:    cfg,
-		log:    log,
-		store:  store,
-		hub:    hub.New(),
-		bundle: bundle,
-		met:    &Metrics{},
+		cfg:            cfg,
+		log:            log,
+		store:          store,
+		hub:            hub.New(),
+		bundle:         bundle,
+		met:            &Metrics{},
+		bootstrapToken: bootstrapToken,
 	}, nil
 }
 
 // CAPin exposes the CA SPKI pin for `enroll`.
 func (a *App) CAPin() string { return a.bundle.CAPin }
+
+// Devices lists known device names (для тестов bootstrap).
+func (a *App) Devices() []string { return a.store.Devices() }
 
 // Run starts all listeners and blocks until ctx or a signal stops it.
 func (a *App) Run(ctx context.Context) error {
@@ -215,6 +239,12 @@ func (a *App) reloadLoop(ctx context.Context) {
 				a.log.Warn("SIGHUP reload failed", "err", err)
 			}
 		case <-ticker.C:
+			// Самовосстановление: если bootstrap жил в памяти (нет прав на
+			// запись) — дописываем tokens.json тем же токеном, как только
+			// каталог стал записываемым.
+			if a.bootstrapToken != "" && a.tryPersistBootstrapToken() {
+				a.log.Info("bootstrap: tokens.json persisted (state dir writable now)")
+			}
 			if fi, err := os.Stat(tokensPath); err == nil {
 				mod := fi.ModTime()
 				if !mod.Equal(lastMod) {
@@ -236,6 +266,31 @@ func (a *App) reloadLoop(ctx context.Context) {
 // tokensPath возвращает путь к tokens.json (stateDir из конфигурации).
 func (a *App) tokensPath() string {
 	return a.cfg.TokensFile
+}
+
+// tryPersistBootstrapToken дописывает in-memory устройство в tokens.json.
+// true — удалось (и стор перечитан).
+func (a *App) tryPersistBootstrapToken() bool {
+	if _, err := os.Stat(a.cfg.TokensFile); err == nil {
+		return false // файл уже есть (написан кем-то другим) — не трогаем
+	}
+	hash := auth.HashToken(a.bootstrapToken)
+	hashB64 := base64.RawURLEncoding.EncodeToString(hash[:])
+	doc := struct {
+		Devices map[string]string `json:"devices"`
+	}{Devices: map[string]string{"phone-1": hashB64}}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return false
+	}
+	if err := os.WriteFile(a.cfg.TokensFile, append(out, '\n'), 0o600); err != nil {
+		return false
+	}
+	if err := a.Reload(); err != nil {
+		return false
+	}
+	a.bootstrapToken = ""
+	return true
 }
 
 // Reload re-reads tokens (SIGHUP path) without dropping tunnels.

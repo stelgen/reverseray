@@ -106,3 +106,26 @@ func TestLeafServesTLS(t *testing.T) {
 		t.Fatal("leaf lifetime must be ~90d")
 	}
 }
+
+// v0.7.1: state не записывается → PKI эфемерная, но LoadOrCreate НЕ падает.
+func TestLoadOrCreateEphemeralOnReadOnlyDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root игнорирует права — тест бессмыслен под root")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	b, err := LoadOrCreate(dir, []string{"localhost"})
+	if err != nil {
+		t.Fatalf("LoadOrCreate must not fail on read-only dir: %v", err)
+	}
+	if !b.Ephemeral {
+		t.Fatal("bundle must be marked Ephemeral when persist fails")
+	}
+	if b.CAPin == "" || b.Leaf.PrivateKey == nil {
+		t.Fatal("ephemeral bundle must contain usable CA+leaf")
+	}
+}
