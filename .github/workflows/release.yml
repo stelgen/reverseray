@@ -105,7 +105,7 @@ jobs:
           RR_KEY_PASSWORD: ${{ secrets.RR_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease --no-daemon
+          ./gradlew :app:assembleRelease --no-daemon "-PversionName=${GITHUB_REF_NAME#v}"
           # имя артефакта: reverseray-<версия>.apk (не «app-release»)
           mv app/build/outputs/apk/release/app-release.apk              app/build/outputs/apk/release/reverseray-${GITHUB_REF_NAME#v}.apk
       - uses: actions/upload-artifact@v4

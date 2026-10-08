@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# ReverseRay rr.sh — автопилот деплоя (v0.7.2+)
+#
+# Запусти из ЛЮБОГО каталога — рядом появится подпапка reverseray/ со всем
+# нужным (compose, state, .env). Скрипт сам решает: свежая установка,
+# обновление версии или (по флагу) обнуление состояния — и в конце печатает
+# готовую строку подключения для приложения.
+#
+# Использование:
+#   sudo bash rr.sh                     # деплой/обновление до последнего релиза
+#   sudo bash rr.sh --tag v0.7.2        # конкретная версия
+#   sudo bash rr.sh --reset             # обнулить состояние (токены/CA) и пере-enroll
+#   curl -fsSL <raw>/deploy/rr.sh -o rr.sh && sudo bash rr.sh
+#
+set -euo pipefail
+
+IMAGE_REPO="ghcr.io/stelgen/reverseray"
+DEFAULT_TAG="v0.7.2"
+DEST="${REVERSERAY_DIR:-reverseray}"
+DO_RESET=0
+TAG=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --reset) DO_RESET=1; shift ;;
+    --tag) TAG="${2:?нужна версия после --tag}"; shift 2 ;;
+    *) echo "unknown flag: $1 (доступны --reset, --tag vX.Y.Z)"; exit 2 ;;
+  esac
+done
+
+log()  { printf '==> %s\n' "$*"; }
+warn() { printf '!!  %s\n' "$*"; }
+die()  { printf 'XX  %s\n' "$*"; exit 1; }
+
+# --- docker: с sudo или без ---
+DC="docker compose"
+docker_ok() { docker compose version >/dev/null 2>&1; }
+if ! docker_ok; then
+  if command -v sudo >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; then
+    DC="sudo docker compose"
+  else
+    die "docker compose не найден (или нет прав; попробуй sudo bash rr.sh)"
+  fi
+fi
+SUDO=""
+case "$DC" in "sudo "*) SUDO="sudo " ;; esac
+run() { $DC "$@"; }
+
+# --- версия: --tag > env > последний релиз GitHub > DEFAULT_TAG ---
+if [ -z "$TAG" ]; then
+  TAG="${RR_IMAGE_TAG:-}"
+fi
+if [ -z "$TAG" ]; then
+  TAG=$(curl -fsSL --max-time 10 "https://api.github.com/repos/stelgen/reverseray/releases/latest" \
+        | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 2>/dev/null || true)
+fi
+[ -n "$TAG" ] || TAG="$DEFAULT_TAG"
+log "Версия: $TAG"
+
+# --- целевой каталог (относительный) ---
+mkdir -p "$DEST/state"
+cd "$DEST"
+STATE="$PWD/state"
+MARKER="$STATE/.enrolled"
+
+# --- reset: обнулить состояние (токены/CA), чтобы всё пересоздалось ---
+if [ "$DO_RESET" = "1" ]; then
+  log "Обнуляю состояние (--reset): контейнер остановлен, state очищен"
+  run down --remove-orphans >/dev/null 2>&1 || true
+  $SUDO rm -rf "${STATE:?}/"* "$MARKER" 2>/dev/null || true
+fi
+
+# --- compose.yaml: есть/обновить/скачать ---
+if [ -f compose.yaml ]; then
+  log "compose.yaml найден — режим обновления"
+else
+  log "compose.yaml отсутствует — свежая установка"
+fi
+RAW="https://raw.githubusercontent.com/stelgen/reverseray/${TAG}/compose.yaml"
+curl -fsSL --max-time 20 "$RAW" -o compose.yaml.new || die "не удалось скачать compose.yaml ($RAW)"
+mv compose.yaml.new compose.yaml
+
+printf 'RR_IMAGE_TAG=%s\nRR_SOCKS_PORT=1080\nRR_TUNNEL_PORT=4433\nRR_METRICS_PORT=9090\n' "$TAG" > .env
+
+# --- pull + up ---
+log "Тяну образ ${IMAGE_REPO}:${TAG}…"
+run pull >/dev/null 2>&1 || warn "pull не прошёл (offline?) — попробую запустить то, что есть локально"
+run up -d || die "docker compose up -d не удался (см. вывод выше)"
+
+# --- здоровье ---
+log "Жду healthcheck…"
+ok=""
+for i in $(seq 1 30); do
+  st=$(run ps --format '{{.Health}}' reverseray 2>/dev/null | head -1)
+  if [ "$st" = "healthy" ]; then ok=1; break; fi
+  sleep 2
+done
+if [ -z "$ok" ]; then
+  warn "Контейнер не healthy за 60 с — последние логи:"
+  run logs --tail 20 reverseray || true
+  die "Если проблема в состоянии — запусти: sudo bash rr.sh --reset"
+fi
+log "Контейнер healthy"
+
+# --- enroll (идемпотентно: только если ещё не делали) ---
+if [ ! -f "$MARKER" ]; then
+  log "Регистрирую устройство phone-1 (enroll)…"
+  run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > /tmp/rr-enroll.out 2>&1 || true
+  touch "$MARKER" 2>/dev/null || $SUDO touch "$MARKER"
+else
+  log "Устройство уже зарегистрировано (state/.enrolled) — токен не меняю"
+fi
+
+# --- строка подключения ---
+LINE=""
+if [ -f /tmp/rr-enroll.out ]; then
+  LINE=$(grep -o '^rrp://[^[:space:]]*' /tmp/rr-enroll.out | head -1 || true)
+fi
+if [ -z "$LINE" ]; then
+  # повторный enroll печатает строку, даже если маркер стоит (без записи токена в state не выйдет —
+  # тогда просим enroll вручную)
+  warn "Строка не найдена в выводе enroll — попробуй вручную:"
+  warn "  $DC exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1"
+  exit 0
+fi
+
+echo
+echo "=============================================================="
+echo " ГОТОВО. Строка подключения (вставь в приложение / QR):"
+echo
+echo " $LINE"
+echo
+echo " Проверка прокси:  curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me"
+echo " Обновление позже: sudo bash rr.sh            (версия возьмётся с GitHub)"
+echo " Обнулить state:   sudo bash rr.sh --reset"
+echo "=============================================================="
