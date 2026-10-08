@@ -21,13 +21,13 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | Go test/vet/fmt | gofmt, vet, `test -race`, coverage (131 тест) |
 | Android build | assembleDebug + unit-тесты (176, Robolectric 21/31, JVM-изоляция, i18n-гейты) |
 | Docker run | v0.8.3: сборка образа → запуск КАК В ПРОДЕ (родной entrypoint) → ожидание healthcheck до 90 с → compose-smoke на родном compose.yaml; упал/не healthy → красный прогон с docker logs+inspect |
-| Brand assets | перегенерация + сверка с закоммиченным (+ живой banner.gif, реальный скриншот) |
+| Brand assets | перегенерация + сверка с закоммиченным (+ живой banner.gif, скриншот приложения) |
 | Gitleaks | скан секретов (каждый push/PR) |
 | Dependency review | гейт уязвимых зависимостей на PR |
 | **Modules integrity (v0.8)** | канон-чек `modules/modules.json` + тесты парсеров обеих сторон (Go+Kotlin) |
 | **Privacy audit (v0.8)** | скрипт `scripts/privacy_audit.py`: ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных/токенов в доках |
 | **Govulncheck (v0.8)** | известные уязвимости stdlib/зависимостей |
-| **Screenshot bot (v0.8)** | РЕАЛЬНЫЙ рендер APK (Robolectric эмулятор adb screencap) → коммит `assets/brand/screenshot.png` на main |
+| **Screenshot bot (v0.8)** | скриншот APK с эмулятора (adb screencap) → коммит `assets/brand/screenshot.png` на main |
 | CodeQL | стат-анализ безопасности |
 
 ## Политики канона (v0.8)

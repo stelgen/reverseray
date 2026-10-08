@@ -192,7 +192,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           $(go env GOPATH)/bin/govulncheck ./...
 
-  # v0.8: РЕАЛЬНЫЙ скриншот APK на главной репо (не «рисунок в Paint»):
+  # v0.8: скриншот APK для README делает бот:
   # эмулятор Android → приложение → adb screencap → робот коммитит в assets/brand
   screenshot:
     name: Real app screenshot (emulator)
