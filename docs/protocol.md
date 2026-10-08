@@ -1,4 +1,4 @@
-# RRP/1 — ReverseRay Protocol v1
+# RRP/1 — ReverseRay Protocol v1 (v0.8: + mtproto2, модули)
 
 Транспорт: TCP + **TLS 1.3** (MinVersion), ALPN `reverseray/1`.
 Клиент (телефон) всегда инициирует соединение — серверу не нужны входящие порты из мобильных сетей.
@@ -27,6 +27,8 @@
 | UDP_ASSOC | 0x21 | S→C | пустой; `stream_id` = id ассоциации; телефон отвечает OPEN_OK(err) |
 | UDP_DATA | 0x22 | оба | `[u8 atyp][addr][u16 port][data]`; S→C — назначение, C→S — фактический источник |
 | PROBE | 0x23 | оба | C→S: JSON `{"target":"host:port","timeout_ms":N}`; S→C: `{"ok":bool,"err":"","proto":"…"}` |
+| KEY_REQ | 0x24 | S→C | JSON `{p: b64url(256Б), g: 3, g_a: b64url(256Б)}` — только для proto=mtproto2 |
+| KEY_RESP | 0x25 | C→S | JSON `{g_b: b64url(256Б)}` — после него DATA/UDP_DATA в MTProto-конверте |
 | ERROR | 0x7F | оба | `[u16be code][utf8 msg]` |
 
 Лимиты payload (hardening): DATA ≤ 65535; **все остальные ≤ 4096**. Нарушение → ERROR + закрытие сессии.
@@ -91,6 +93,66 @@
 
 Телефон отказывается диалить (если не включён «разрешить LAN»):
 `0.0.0.0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.168/16, 198.18/15, 224/4, 240/4, ::1, fc00::/7, fe80::/10, ff00::/8`, имена `localhost`.
+
+## mtproto2 — MTProto 2.0-конверт payload'ов (v0.8, модуль protocol.mtproto2)
+
+Вход — приватный хендшейк ReverseRay (TLS 1.3 + SPKI-pin + HMAC). После READY
+при согласованном `proto=mtproto2` стороны перегенерируют ключи DH-обменом,
+и payload'ы **DATA/UDP_DATA** ходят в MTProto-конверте. Управляющие кадры
+(OPEN/CLOSE/WINDOW/PING/PONG/STATS/PROBE/KEY_*) не шифруются.
+
+### Обмен ключами (после READY)
+
+| Тип | Код | Направление | Payload |
+|---|---|---|---|
+| KEY_REQ | 0x24 | S→C | JSON `{p: b64url(256Б), g: 3, g_a: b64url(256Б)}` |
+| KEY_RESP | 0x25 | C→S | JSON `{g_b: b64url(256Б)}` |
+
+- `p` — официальный dh_prime Telegram (2048-битный safe prime; p и (p−1)/2
+  простые, канон «known good» из Security Guidelines). Клиент сверяет p
+  **байт-в-байт** (anti-logjam) и `g == 3` (p mod 3 = 2).
+- Валидация публичных долей (обе стороны): `1 < peer < p−1` и коридор
+  `[2^1984, p − 2^1984]` (рекомендация guidelines; 2048−64 = 1984).
+- `auth_key` = 256 Б big-endian `g_ab`; `auth_key_id` = SHA1(auth_key)[0:8].
+- salt = SHA256("mtproto2-salt:" ‖ rrp_session_id ‖ g_a ‖ g_b)[0:8];
+  session_id конверта = SHA256("mtproto2:" ‖ rrp_session_id)[0:8].
+
+### Конверт сообщения (payload кадра DATA/UDP_DATA)
+
+```
+[auth_key_id 8][msg_key 16][AES-256-IGE(inner)]
+inner = [salt 8][session_id 8][msg_id 8][seq_no 4][len 4][data][pad]
+```
+
+- `msg_key = SHA256(auth_key[88+x : 120+x] ‖ inner)[8:24]` (канон 2.0);
+  AES key/IV — каноническая таблица 2.0 (sha256_a/sha256_b);
+  `x = 0` клиент→сервер, `x = 8` сервер→клиент.
+- `msg_id` — чётный клиент→сервер, нечётный сервер→клиент; `seq_no` — 2·счётчик.
+- `pad` — 16..31 случайных байт; при расшифровке проверяется канон
+  12..1024 и воспроизведение msg_key (целостность); чужой auth_key_id и
+  расхождение salt/session_id → сессия закрывается.
+- DATA крупнее ~65.4 КБ режется сервером на чанки (поток DATA это позволяет);
+  UDP_DATA крупнее лимита — дропается (семантика UDP).
+- Кросс-языковой KAT: Go шифрует — Kotlin расшифровывает и наоборот
+  (`server/internal/mtproto/katgen_test.go` ↔ `MtProtoKATTest.kt`).
+
+## Модули (v0.8)
+
+- Манифест `modules/modules.json` (schema 1) — ОБЩИЙ источник правды APK ↔
+  сервер: реестр протоколов (`id`, `name`, `default`, `enabled`) + политика
+  (`probe_default_target`, `dns_probe_names`).
+- Правила одинаковые на обеих сторонах: `schema == 1`; id `[a-z0-9]{1,16}`;
+  `rrp1` обязателен (фундамент); мусорный манифест НИКОГДА не применяется
+  (фоллбек на предыдущий/встроенный); даунгрейд запрещён; скачивание
+  только при изменении версии/хеша.
+- Сервер: env `RR_MODULES_URL` / `RR_MODULES_AUTO` / `RR_MODULES_CHECK_HOURS`
+  (по умолчанию 24 ч), сохранение в `state/modules.json`, применение
+  реестра на горячую (`rrp.SetRegistry`; `rrp1` всегда присутствует).
+- APK: вкладка «Обновление» → «Обновить модули», авто-применение при старте
+  из filesDir/modules.json; реестр виден в переключателе протоколов.
+- Согласование не менялось: клиент присылает `proto`/`protocols` в HELLO,
+  сервер подтверждает в HELLO_OK/READY; протокол, которого нет у одной из
+  сторон, просто не выбирается (авто-фоллбек).
 
 ## Логирование
 
