@@ -159,44 +159,61 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v6
+      - name: Install Pillow (for screenshot check)
+        run: pip install pillow
       - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon
-      - name: Screenshot on real emulator
+      - name: Screenshot on real emulator (ANR-proof, with retries)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
           script: |
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            # холодный эмулятор: отключаем анимации и ждём настоящий фокус приложения
+            # холодный эмулятор: отключаем анимации
             adb shell settings put global window_animation_scale 0.0
             adb shell settings put global transition_animation_scale 0.0
             adb shell settings put global animator_duration_scale 0.0
-            adb shell am start -W -n dev.stelgen.reverseray/.MainActivity
             ok=0
-            for i in $(seq 1 30); do
-              if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then ok=1; break; fi
-              sleep 2
+            for attempt in 1 2 3 4 5; do
+              echo "shot attempt $attempt"
+              adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
+              focused=0
+              for i in $(seq 1 45); do
+                if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
+                sleep 2
+              done
+              sleep 3
+              adb exec-out screencap -p > shot-raw.png
+              if python3 -c "
+from PIL import Image
+img = Image.open('shot-raw.png').convert('RGB')
+colors = len(set(img.resize((64, 64)).getdata()))
+print('colors64:', colors)
+exit(0 if colors > 16 else 1)
+" 2>/dev/null; then
+                ok=1
+                break
+              fi
+              # кадр однотонный (ANR-диалог системы): пробуем закрыть диалог и перезапустить приложение
+              adb shell input keyevent KEYCODE_BACK || true
+              adb shell am force-stop com.android.systemui || true
+              adb shell am start -n dev.stelgen.reverseray/.MainActivity || true
+              sleep 5
             done
-            if [ "$ok" != "1" ]; then echo "app not focused"; adb logcat -d | tail -60; exit 1; fi
-            sleep 3
-            adb exec-out screencap -p > shot-raw.png
+            if [ "$ok" != "1" ]; then echo "no good frame in 5 attempts"; adb logcat -d | tail -60; exit 1; fi
             adb shell pidof dev.stelgen.reverseray | grep -q . || (adb logcat -d | tail -50; exit 1)
-      - name: Normalize to 720x1440, sanity-check, commit
+      - name: Normalize to 720x1440 and commit
         run: |
-          pip install pillow
           python3 - <<'PY'
           from PIL import Image
           img = Image.open("shot-raw.png").convert("RGB")
-          small = img.resize((64, 64))
-          colors = len(set(small.getdata()))
-          assert colors > 16, f"screenshot looks uniform/ANR ({colors} colors) — повтори"
           img = img.resize((720, 1440), Image.LANCZOS)
           img.save("assets/brand/screenshot.png", optimize=True)
-          print("screenshot normalized:", img.size, "colors64:", colors)
+          print("screenshot normalized:", img.size)
           PY
           if git diff --quiet assets/brand/screenshot.png; then
             echo "screenshot unchanged"

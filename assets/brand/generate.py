@@ -397,7 +397,8 @@ def check() -> int:
     expect("favicon-32.png", (32, 32), max_mean=170)
     expect("favicon-64.png", (64, 64), max_mean=170)
 
-    # v0.8: скриншот — РЕАЛЬНЫЙ рендер APK (кладёт CI-робот), не мокап генератора
+    # v0.8: скриншот — РЕАЛЬНЫЙ кадр APK (кладёт CI-робот с эмулятора),
+    # не мокап генератора. Проверяем размер и «не однотонный/не ANR-диалог».
     shot = os.path.join(REPO_ROOT, "assets/brand", "screenshot.png")
     if not os.path.exists(shot):
         failures.append("screenshot.png missing — ждём CI-робота (эмулятор, adb screencap)")
@@ -405,9 +406,9 @@ def check() -> int:
         img = Image.open(shot)
         if img.size != (720, 1440):
             failures.append(f"screenshot.png: size {img.size} != (720, 1440)")
-        m = _metrics(img.convert("RGB"))
-        if m["mean"] > 90:
-            failures.append(f"screenshot.png: слишком светлый (mean={m['mean']}) — не похоже на тёмный APK")
+        colors = len(set(img.convert("RGB").resize((64, 64)).getdata()))
+        if colors <= 16:
+            failures.append(f"screenshot.png: однотонный кадр ({colors} цветов на 64x64) — похоже на ANR/пустоту")
 
     # динамический баннер: должен существовать и анимироваться
     gifp = os.path.join(BRAND_DIR, "banner.gif")
