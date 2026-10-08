@@ -223,6 +223,12 @@ class MainActivity : AppCompatActivity() {
                 }
             },
         )
+        row(
+            MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                setText(R.string.update_check)
+                setOnClickListener { checkForUpdateAsync(showIfUpToDate = true) }
+            },
+        )
         root.addView(Button(this).apply {
             setText(R.string.logs_title)
             setOnClickListener { showLogs() }
@@ -333,6 +339,16 @@ class MainActivity : AppCompatActivity() {
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("ReverseRay log", logText))
                 Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.logs_share) { _, _ ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, logText)
+                    putExtra(Intent.EXTRA_SUBJECT, "ReverseRay log")
+                }
+                try {
+                    startActivity(Intent.createChooser(send, getString(R.string.logs_share)))
+                } catch (_: Exception) {}
             }
             .show()
     }

@@ -112,13 +112,107 @@ def logo_png(size: int = 512) -> Image.Image:
     return img
 
 
+def app_mock(w: int = 720, h: int = 1440) -> Image.Image:
+    """Мокап интерфейса приложения (для документации)."""
+    img = Image.new("RGB", (w, h), (10, 12, 18))
+    d = ImageDraw.Draw(img)
+    r = int(w * 0.06)
+    d.rounded_rectangle([0, 0, w, h], radius=r, fill=(10, 12, 18))
+
+    # заголовок
+    f = _font(int(w * 0.075))
+    d.text((w * 0.08, h * 0.05), "ReverseRay", font=f, fill=(255, 255, 255))
+
+    # карточка статуса: зелёная галочка + текст
+    card = [w * 0.06, h * 0.14, w * 0.94, h * 0.235]
+    d.rounded_rectangle(card, radius=18, fill=(22, 27, 34))
+    d.ellipse([card[0] + 24, card[1] + (card[3] - card[1]) / 2 - 16,
+               card[0] + 24 + 32, card[1] + (card[3] - card[1]) / 2 + 16],
+              outline=(46, 125, 50), width=5)
+    d.text((card[0] + 24 + 44, card[1] + (card[3] - card[1]) / 2 - 26), "✓", font=_font(28), fill=(76, 175, 80))
+    fs = _font(int(w * 0.042))
+    d.text((card[0] + 24 + 44, card[1] + (card[3] - card[1]) / 2 - 12),
+           "Ready: port 4433", font=fs, fill=(230, 237, 243))
+
+    # поле конфигурации
+    fconf = [w * 0.06, h * 0.27, w * 0.94, h * 0.42]
+    d.rounded_rectangle(fconf, radius=18, fill=(22, 27, 34), outline=(48, 54, 61), width=2)
+    d.text((fconf[0] + 24, fconf[1] + 20), "rrp://…", font=fs, fill=(139, 148, 158))
+    d.line([fconf[0] + 24, fconf[1] + 74, fconf[0] + 24 + int(w * 0.35), fconf[1] + 74],
+           fill=ACCENT, width=3)
+
+    # кнопки: filled start, outlined scan/show, text log
+    y0 = h * 0.46
+    bh = int(h * 0.055)
+    d.rounded_rectangle([w * 0.06, y0, w * 0.94, y0 + bh], radius=14, fill=(53, 182, 255))
+    fw = _font(int(w * 0.045))
+    d.text((w * 0.42, y0 + bh / 2 - 20), "Start tunnel", font=fw, fill=(6, 16, 34))
+
+    y1 = y0 + bh + 20
+    d.rounded_rectangle([w * 0.06, y1, w * 0.47, y1 + bh], radius=14, outline=(48, 54, 61), width=2)
+    d.text((w * 0.11, y1 + bh / 2 - 20), "Scan QR", font=fw, fill=(230, 237, 243))
+    d.rounded_rectangle([w * 0.53, y1, w * 0.94, y1 + bh], radius=14, outline=(48, 54, 61), width=2)
+    d.text((w * 0.60, y1 + bh / 2 - 20), "Show QR", font=fw, fill=(230, 237, 243))
+
+    y2 = y1 + bh + 20
+    d.rounded_rectangle([w * 0.06, y2, w * 0.94, y2 + bh], radius=14, fill=(22, 27, 34))
+    d.text((w * 0.40, y2 + bh / 2 - 20), "Stop", font=fw, fill=(248, 81, 73))
+
+    y3 = y2 + bh + 26
+    d.rounded_rectangle([w * 0.06, y3, w * 0.47, y3 + bh], radius=14, outline=(48, 54, 61), width=2)
+    d.text((w * 0.13, y3 + bh / 2 - 20), "Check updates", font=fw, fill=(230, 237, 243))
+    d.rounded_rectangle([w * 0.53, y3, w * 0.94, y3 + bh], radius=14, outline=(48, 54, 61), width=2)
+    d.text((w * 0.63, y3 + bh / 2 - 20), "Log", font=fw, fill=(230, 237, 243))
+
+    # футер-строка
+    d.text((w * 0.08, h * 0.93), "Android egress  ·  TLS 1.3  ·  no logs", font=_font(int(w * 0.032)),
+           fill=(139, 148, 158))
+    return img
+
+
+def banner(w: int = 1600, h: int = 640) -> Image.Image:
+    """Широкий баннер: чёрный фон, глиф-сфера, wordmark, луч, слоган."""
+    img = Image.new("RGB", (w, h), BG)
+    d = ImageDraw.Draw(img)
+    # сфера-глиф слева
+    r = int(h * 0.32)
+    gcx, gcy = int(w * 0.16), int(h * 0.5)
+    d.ellipse([gcx - r, gcy - r, gcx + r, gcy + r], outline=TEXT, width=max(4, h // 100))
+    d.ellipse([gcx - int(r * 0.42), gcy - int(r * 0.52), gcx - int(r * 0.05), gcy - int(r * 0.15)], fill=TEXT)
+    d.line([gcx + int(r * 0.75), gcy + int(r * 0.55), gcx + int(r * 1.8), gcy + int(r * 1.5)],
+           fill=ACCENT, width=max(6, h // 64))
+    # wordmark
+    tx = int(w * 0.34)
+    cy = h // 2 - 30
+    f_title = _font(int(h * 0.19))
+    d.text((tx, cy - int(h * 0.13)), "ReverseRay", font=f_title, fill=TEXT)
+    # акцентная линия
+    lw = int(w * 0.36)
+    overlay = Image.new("RGBA", (lw, 5), (0, 0, 0, 0))
+    od = overlay.load()
+    for i in range(lw):
+        t = i / (lw - 1)
+        a = int(255 * (1 - t) ** 1.2)
+        for y in range(5):
+            od[i, y] = (ACCENT[0], ACCENT[1], ACCENT[2], a)
+    img.paste(Image.new("RGB", (lw, 5), ACCENT), (tx, cy + int(h * 0.115)), overlay)
+    # слоган
+    f_tag = _font(int(h * 0.062))
+    d.text((tx, cy + int(h * 0.17)), "PHONE AS EGRESS   ·   TLS 1.3   ·   SELF-HOSTED", font=f_tag, fill=MUTED)
+    return img
+
+
 def write_all() -> list[str]:
     """Write committed assets. Returns list of written paths."""
     written: list[str] = []
 
-    og = og_image()
+    og = banner()
     p = os.path.join(BRAND_DIR, "og-image.png")
     og.save(p); written.append(p)
+
+    mock = app_mock()
+    p = os.path.join(BRAND_DIR, "screenshot.png")
+    mock.save(p); written.append(p)
 
     logo = logo_png(512)
     p = os.path.join(BRAND_DIR, "logo-512.png")
@@ -134,6 +228,7 @@ def write_all() -> list[str]:
     landing = os.path.join(REPO_ROOT, "landing")
     if os.path.isdir(landing):
         og.save(os.path.join(landing, "og-image.png")); written.append(os.path.join(landing, "og-image.png"))
+        mock.save(os.path.join(landing, "screenshot.png")); written.append(os.path.join(landing, "screenshot.png"))
         logo_png(32).save(os.path.join(landing, "favicon-32.png")); written.append(os.path.join(landing, "favicon-32.png"))
 
     return written
@@ -166,10 +261,11 @@ def check() -> int:
         if want_size == (1280, 640) and m["bright_ratio"] < 0.005:
             failures.append(f"{name}: wordmark/text pixels not found (bright={m['bright_ratio']})")
 
-    expect("og-image.png", (1280, 640))
+    expect("og-image.png", (1600, 640))
     expect("logo-512.png", (512, 512))
     expect("favicon-32.png", (32, 32), max_mean=70)  # favicon = крупная сфера, mean выше
     expect("favicon-64.png", (64, 64), max_mean=70)
+    expect("screenshot.png", (720, 1440), max_mean=60)
 
     if failures:
         for f in failures:

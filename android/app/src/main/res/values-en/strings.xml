@@ -32,4 +32,6 @@
     <string name="update_downloading">Downloading update…</string>
     <string name="update_latest">You are on the latest version</string>
     <string name="update_error">Update failed: %1$s</string>
+    <string name="update_check">Check for updates</string>
+    <string name="logs_share">Share</string>
 </resources>

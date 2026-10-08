@@ -32,4 +32,6 @@
     <string name="update_downloading">Скачивание обновления…</string>
     <string name="update_latest">У вас последняя версия</string>
     <string name="update_error">Ошибка обновления: %1$s</string>
+    <string name="update_check">Проверить обновления</string>
+    <string name="logs_share">Поделиться</string>
 </resources>

@@ -87,7 +87,7 @@ class CommittedAssetsTest(unittest.TestCase):
     """Committed files must exist and match generator dimensions."""
 
     def test_committed_assets_exist_and_match(self):
-        for name, size in [("og-image.png", (1280, 640)),
+        for name, size in [("og-image.png", (1600, 640)),
                            ("logo-512.png", (512, 512)),
                            ("favicon-32.png", (32, 32)),
                            ("favicon-64.png", (64, 64))]:

@@ -62,8 +62,11 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("tokens: %w", err)
 		}
-		log.Warn("tokens file missing; tunnel auth will reject everyone until SIGHUP with valid tokens.json",
-			"path", cfg.TokensFile)
+		// Первый запуск: сервер сам создаёт дефолтное устройство phone-1.
+		ensureDefaultDevice(cfg, log)
+		if err := store.LoadFile(cfg.TokensFile); err != nil {
+			return nil, fmt.Errorf("tokens after bootstrap: %w", err)
+		}
 	}
 	bundle, err := tlscert.LoadOrCreate(cfg.StateDir, cfg.Listen.TLSHosts)
 	if err != nil {
@@ -88,6 +91,7 @@ func (a *App) Run(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go a.reloadLoop(ctx)
+	go a.logConnectInfo(ctx)
 
 	errCh := make(chan error, 4)
 
