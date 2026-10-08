@@ -126,7 +126,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.bouncycastle.bcpkix) // генерация self-signed сертификата в evil-server тестах
-    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core-ktx:1.7.0")
 }
 
