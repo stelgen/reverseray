@@ -15,7 +15,7 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v0.7.4"
+DEFAULT_TAG="v0.8.0"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
 UI_LAN=1 # 1 = открывать веб-морду (/ui) в локальной сети; --no-ui закрывает в localhost
@@ -82,7 +82,7 @@ RAW="https://raw.githubusercontent.com/stelgen/reverseray/${TAG}/compose.yaml"
 curl -fsSL --max-time 20 "$RAW" -o compose.yaml.new || die "не удалось скачать compose.yaml ($RAW)"
 mv compose.yaml.new compose.yaml
 
-printf 'RR_IMAGE_TAG=%s\nRR_SOCKS_PORT=1080\nRR_TUNNEL_PORT=4433\nRR_METRICS_PORT=9090\nRR_METRICS_BIND=%s\nRR_PROTOCOL=%s\n' \
+printf 'RR_IMAGE_TAG=%s\nRR_SOCKS_PORT=1080\nRR_TUNNEL_PORT=4433\nRR_METRICS_PORT=9090\nRR_METRICS_BIND=%s\nRR_PROTOCOL=%s\nRR_HARDENING=true\nRR_MODULES_AUTO=true\nRR_MODULES_CHECK_HOURS=24\nRR_RESTART_DELAY=30\nRR_RESTART_MAX=20\n' \
   "$TAG" \
   "$([ "$UI_LAN" = "1" ] && echo 0.0.0.0 || echo 127.0.0.1)" \
   "${RR_PROTOCOL:-rrp1}" > .env
@@ -157,6 +157,12 @@ else
   echo "   http://127.0.0.1:${RR_METRICS_PORT:-9090}/ui (только localhost)"
 fi
 echo " Протокол по умолчанию: RR_PROTOCOL=${RR_PROTOCOL:-rrp1} (мусор → автоматически стабильный rrp1)"
+echo " WAN-hardening: включён (анти-скан/tarpit на туннельном порту; RR_HARDENING)"
+echo " Модули: авто-чек манифеста раз в сутки (RR_MODULES_AUTO; качается только при изменении)"
+echo " Healthcheck: включён; упавший процесс рестартит governor не чаще 1 раза/30 с"
+echo " ОБНОВАМ (опционально, уровень ХОСТА — ICMP-пинги отвечает ядро, не приложение):"
+echo "   sudo iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 30/min -j ACCEPT"
+echo "   sudo iptables -A INPUT -p icmp --icmp-type echo-request -j DROP"
 echo " Обновление позже: sudo bash rr.sh            (версия возьмётся с GitHub)"
 echo " Обнулить state:   sudo bash rr.sh --reset"
 echo "=============================================================="

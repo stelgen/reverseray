@@ -1,7 +1,7 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.4}
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.8.0}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"
@@ -18,6 +18,17 @@ services:
       RR_LISTEN_MIXED: ":1080"
       RR_LISTEN_ADMIN_TCP: ":9090"
       RR_LOG_LEVEL: "info"
+      # v0.8: WAN-hardening туннельного порта (анти-скан/tarpit). Отключить:
+      # RR_HARDENING: "false"
+      RR_HARDENING: "true"
+      # v0.8: модули — общий манифест APK↔сервер; чек раз в сутки,
+      # скачивание только при изменении версии/хеша.
+      RR_MODULES_AUTO: "true"
+      RR_MODULES_CHECK_HOURS: "24"
+      # v0.8: governor перезапусков — падения раз в ≥30 с; 20 подряд →
+      # контейнер падает с ошибкой (без бесконечного цикла).
+      RR_RESTART_DELAY: "30"
+      RR_RESTART_MAX: "20"
       # Inbound-прокси по умолчанию БЕЗ авторизации (HTTP+SOCKS5).
       # Захотел пароль — раскомментируй (и обнови Xray-аутбаунд: socks+user/pass):
       # RR_AUTH_USERNAME: myuser
@@ -51,6 +62,7 @@ services:
         max-size: "10m"
         max-file: "3"
     restart: unless-stopped
+    # v0.8: healthcheck обязателен (канон) — Docker видит реальное здоровье.
     healthcheck:
       test: ["CMD", "/reverseray", "healthcheck", "-url", "http://127.0.0.1:9090/healthz"]
       interval: 30s
