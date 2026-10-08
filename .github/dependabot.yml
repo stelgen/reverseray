@@ -4,18 +4,43 @@ updates:
     directory: "/server"
     schedule:
       interval: "weekly"
+
   - package-ecosystem: "gradle"
     directory: "/android"
     schedule:
       interval: "weekly"
+    # Политика (v0.7):
+    # - minSdk 14: AndroidX новее 1.6.x требует minSdk 19 — бампить нельзя;
+    # - BC-артефакты обновляются ТОЛЬКО согласованным сетом (groups);
+    # - мажорные AGP/Gradle — отдельным скоординированным апгрейдом, не ботом.
+    groups:
+      bouncycastle:
+        patterns:
+          - "org.bouncycastle:*"
+    ignore:
+      - dependency-name: "androidx.appcompat:appcompat"
+        versions: [">=1.7"]
+      - dependency-name: "com.android.application"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "gradle-wrapper"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.jetbrains.kotlin.android"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: "docker"
     directory: "/server"
     schedule:
       interval: "monthly"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
   - package-ecosystem: "pip"
     directory: "/assets/brand"
     schedule:
