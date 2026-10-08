@@ -27,7 +27,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | **Modules integrity (v0.8)** | канон-чек `modules/modules.json` + тесты парсеров обеих сторон (Go+Kotlin) |
 | **Privacy audit (v0.8)** | скрипт `scripts/privacy_audit.py`: ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных/токенов в доках |
 | **Govulncheck (v0.8)** | известные уязвимости stdlib/зависимостей |
-| **Screenshot bot (v0.8)** | скриншот APK с эмулятора (adb screencap) → коммит `assets/brand/screenshot.png` на main |
+| **Screenshot bot (v0.8.3)** | ОТДЕЛЬНЫЙ воркфлоу `screenshot.yml` (workflow_dispatch + еженедельно + после зелёного CI на main): скриншот APK с эмулятора (boot-wait, скрытые ANR-диалоги, 8 попыток) → коммит `assets/brand/screenshot.png`; от релиза и CI-гейтов десинхронизирован |
 | CodeQL | стат-анализ безопасности |
 
 ## Политики канона (v0.8)

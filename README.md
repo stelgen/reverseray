@@ -198,7 +198,7 @@ admin API — только localhost/unix; контейнер distroless + gover
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |
 | `gitleaks` | секреты |
-| `screenshot` | скриншот приложения с эмулятора → `assets/brand/screenshot.png` |
+| `screenshot` | отдельный воркфлоу (постфактум, после CI): скриншот с эмулятора → `assets/brand/screenshot.png` |
 | `assets` | детерминизм брендинга, живой banner.gif |
 | `docker` | сборка образа + healthcheck |
 | `codeql` | стат-анализ безопасности |

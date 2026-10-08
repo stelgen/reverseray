@@ -139,36 +139,52 @@ jobs:
           pattern: apk
       - name: Checksums
         run: cd dist && ls -la && sha256sum * > SHA256SUMS
+      # ПАБЛИШ ПЕРВЫМ: никакое пост-хозяйство не должно блокировать выкладку релиза
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          body_path: CHANGELOG.md
+          generate_release_notes: false
       # v0.8.3: digest образа в deploy/digests.yaml (хвост 3 версий) —
-      # источник для прод-пиннов и отката (шапка файла обещала это давно).
-      - name: Update deploy/digests.yaml
+      # ПОСТФАКТУМ и не блокирует релиз (continue-on-error). Переменные
+      # окружения пробрасываются через env (в python-heredoc bash-переменные
+      # не видны — тот баг уронил Release #31).
+      - name: Update deploy/digests.yaml (post-factum)
+        continue-on-error: true
+        env:
+          RR_TAG: ${{ github.ref_name }}
+          RR_REPO: ${{ github.repository }}
+          RR_DIGEST: ${{ needs.docker.outputs.image_digest }}
         run: |
           python3 - <<'PY'
-          import pathlib, re
+          import os, pathlib
+          tag = os.environ["RR_TAG"]
+          repo = os.environ["RR_REPO"]
+          digest = os.environ["RR_DIGEST"]
+          assert tag and digest, "RR_TAG/RR_DIGEST не заданы"
           p = pathlib.Path("deploy/digests.yaml")
-          s = p.read_text()
-          entry = f"  - tag: {GITHUB_REF_NAME}\n    image: ghcr.io/{GITHUB_REPOSITORY}@{DIGEST}\n"
-          # сносим комментарий-плейсхолдер после первого заполнения и дубликаты тега
-          s = s.replace("  # - tag: v0.1.0\n", "").replace("  #   image: ghcr.io/stelgen/reverseray@sha256:PLACEHOLDER  # заполнится первым CI-пушем\n", "")
-          lines = s.splitlines(keepends=True)
+          s = p.read_text(encoding="utf-8")
+          entry = f"  - tag: {tag}\n    image: ghcr.io/{repo}@{digest}\n"
+          # дубликаты этого тега сносим, плейсхолдер-комментарий чистим
+          s = s.replace("  # - tag: v0.1.0\n", "").replace(
+              "  #   image: ghcr.io/stelgen/reverseray@sha256:PLACEHOLDER  # заполнится первым CI-пушем\n", "")
           out, skip = [], False
-          for ln in lines:
-              if ln.startswith("  - tag:"):
-                  skip = ln.strip() == entry.strip()
-              if skip and (ln.startswith("  - tag:") or ln.startswith("    image:")):
+          for ln in s.splitlines(keepends=True):
+              st = ln.strip()
+              if st.startswith("- tag:"):
+                  skip = (st == f"- tag: {tag}")  # идемпотентно: дубликат тега сносится
+                  if skip:
+                      continue
+              elif skip and st.startswith("image:"):
                   continue
-              skip = skip and not ln.startswith("  - tag:")
+              else:
+                  skip = False
               out.append(ln)
           s = "".join(out).rstrip() + "\n" + entry
-          p.write_text(s)
+          p.write_text(s, encoding="utf-8")
           print(s)
           PY
       - uses: stefanzweifel/git-auto-commit-action@v6
         with:
           commit_message: "[skip ci] chore(release): digest ${{ github.ref_name }} в deploy/digests.yaml"
           file_pattern: deploy/digests.yaml
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
-          body_path: CHANGELOG.md
-          generate_release_notes: false

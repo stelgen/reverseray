@@ -83,29 +83,39 @@ jobs:
           echo "container healthy"
           docker rm -f rr-smoke
       # Полный путь деплоя rr.sh: родной compose.yaml (state-volume, user 0:0,
-      # cap_drop ALL, healthcheck) на локально собранном образе.
+      # cap_drop ALL, healthcheck). --wait сам ждёт healthy; при отказе —
+      # диагностика в step-summary + артефакт (логи джоб без токена нечитаемы).
       - name: Compose smoke (native compose.yaml + healthcheck)
         run: |
           set -euo pipefail
+          docker compose version
           docker tag reverseray:ci ghcr.io/stelgen/reverseray:ci-smoke
-          RR_IMAGE_TAG=ci-smoke docker compose up -d
-          ok=""
-          for i in $(seq 1 45); do
-            st=$(docker inspect --format '{{.State.Health.Status}}' reverseray 2>/dev/null || echo unknown)
-            if [ "$st" = "healthy" ]; then ok=1; break; fi
-            cstate=$(docker inspect --format '{{.State.Status}}' reverseray 2>/dev/null || echo unknown)
-            if [ "$cstate" = "exited" ]; then echo "compose service exited before healthy"; break; fi
-            sleep 2
-          done
-          if [ "$ok" != "1" ]; then
-            echo "::error::compose-стек не стал healthy за 90 с"
-            docker compose ps || true
-            docker logs --tail 100 reverseray || true
+          if ! RR_IMAGE_TAG=ci-smoke docker compose up -d --wait --wait-timeout 180; then
+            {
+              echo "## Compose smoke FAILED"
+              echo '```'
+              docker images | head -8 || true
+              docker compose ps -a || true
+              docker compose logs --tail 200 reverseray || true
+              docker inspect reverseray --format '{{json .State.Health}}' || true
+              docker inspect reverseray --format '{{json .State}}' || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p diag
+            { docker compose ps -a; echo; docker compose logs reverseray; echo; docker inspect reverseray; } > diag/compose-smoke.txt 2>&1 || true
             exit 1
           fi
-          curl -fsS --max-time 5 http://127.0.0.1:9090/healthz || { echo "::error::healthz недоступен"; docker logs --tail 50 reverseray; exit 1; }
+          curl -fsS --max-time 5 http://127.0.0.1:9090/healthz || { echo "::error::healthz недоступен"; docker compose logs --tail 50 reverseray; exit 1; }
+          echo "compose smoke healthy"
           docker compose down -v
           rm -rf state
+      - name: Upload compose smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: compose-smoke-diagnostics
+          path: diag/
+          if-no-files-found: ignore
 
   android:
     name: Android build (debug + unit)
@@ -191,82 +201,6 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           $(go env GOPATH)/bin/govulncheck ./...
-
-  # v0.8: скриншот APK для README делает бот:
-  # эмулятор Android → приложение → adb screencap → робот коммитит в assets/brand
-  screenshot:
-    name: Real app screenshot (emulator)
-    runs-on: ubuntu-latest
-    continue-on-error: true  # best-effort: капризный эмулятор не должен валить CI
-    permissions:
-      contents: write
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v6
-      - name: Install Pillow (for screenshot check)
-        run: pip install pillow
-      - name: Build debug APK
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon
-      - name: Screenshot on real emulator (ANR-proof, with retries)
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          arch: x86_64
-          script: |
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            # холодный эмулятор: отключаем анимации
-            adb shell settings put global window_animation_scale 0.0
-            adb shell settings put global transition_animation_scale 0.0
-            adb shell settings put global animator_duration_scale 0.0
-            ok=0
-            for attempt in 1 2 3 4 5; do
-              echo "shot attempt $attempt"
-              adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
-              focused=0
-              for i in $(seq 1 45); do
-                if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
-                sleep 2
-              done
-              sleep 3
-              adb exec-out screencap -p > shot-raw.png
-              if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
-                ok=1
-                break
-              fi
-              # кадр однотонный (ANR-диалог системы): пробуем закрыть диалог и перезапустить приложение
-              adb shell input keyevent KEYCODE_BACK || true
-              adb shell am force-stop com.android.systemui || true
-              adb shell am start -n dev.stelgen.reverseray/.MainActivity || true
-              sleep 5
-            done
-            if [ "$ok" != "1" ]; then echo "no good frame in 5 attempts"; adb logcat -d | tail -60; exit 1; fi
-            adb shell pidof dev.stelgen.reverseray | grep -q . || (adb logcat -d | tail -50; exit 1)
-      - name: Normalize to 720x1440 and commit
-        run: |
-          python3 - <<'PY'
-          from PIL import Image
-          img = Image.open("shot-raw.png").convert("RGB")
-          img = img.resize((720, 1440), Image.LANCZOS)
-          img.save("assets/brand/screenshot.png", optimize=True)
-          print("screenshot normalized:", img.size)
-          PY
-          if git diff --quiet assets/brand/screenshot.png; then
-            echo "screenshot unchanged"
-          else
-            git config user.name "reverseray-screenshot-bot"
-            git config user.email "bot@reverseray.local"
-            git add assets/brand/screenshot.png
-            git commit -m "[skip ci] docs: real APK screenshot (captured on emulator by CI)"
-            git push
-          fi
 
   # Секреты не пушим: docs/WORKFLOW.md обещает gitleaks в CI — вот он (v0.7)
   gitleaks:

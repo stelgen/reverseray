@@ -1,0 +1,140 @@
+name: Screenshot
+# v0.8.3: скриншот приложения для README — ОТДЕЛЬНЫЙ воркфлоу.
+#
+# Принципы:
+#  - НЕ участвует в CI-гейтах и релизе (полностью десинхронизирован от
+#    Release: эмулятор капризный — не должен блокировать выкладку);
+#  - постфактум: запускается после зелёного CI на main, по расписанию
+#    и вручную (workflow_dispatch);
+#  - коммитит assets/brand/screenshot.png (README уже встраивает этот
+#    файл — картинка на главной обновляется сама; если блок в README
+#    удалён, бот вернёт его);
+#  - упал — упал один этот воркфлоу: CI/Release остаются зелёными.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "30 2 * * 1" # еженедельно, ночной UTC — свежий кадр без всяких пушей
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshot
+  cancel-in-progress: true
+
+jobs:
+  shot:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule' ||
+          github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+      - name: Install Pillow (sanity-check кадра)
+        run: pip install pillow
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon
+      - name: Screenshot on emulator (boot-wait, hidden ANR dialogs, 8 attempts)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          script: |
+            set -e
+            # Ждём ПОЛНУЮ загрузку системы (не просто наличие adb)
+            adb shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done'
+            sleep 5
+            # КЛЮЧЕВОЙ ФИКС ANR-кадров: системные ANR/crash-диалоги скрыты —
+            # screencap больше не ловит «кладбище» вместо приложения
+            adb shell settings put global hide_error_dialogs 1
+            adb shell settings put global window_animation_scale 0.0
+            adb shell settings put global transition_animation_scale 0.0
+            adb shell settings put global animator_duration_scale 0.0
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            ok=0
+            for attempt in 1 2 3 4 5 6 7 8; do
+              echo "shot attempt $attempt"
+              adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
+              focused=0
+              for i in $(seq 1 60); do
+                if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
+                # приложение могло умереть/не подняться — поднимаем снова
+                adb shell am start -n dev.stelgen.reverseray/.MainActivity >/dev/null 2>&1 || true
+                sleep 2
+              done
+              if [ "$focused" != "1" ]; then
+                echo "app never focused on attempt $attempt"
+                adb logcat -d | tail -60
+                continue
+              fi
+              sleep 4 # даём отрисоваться графику/консоли
+              adb exec-out screencap -p > shot-raw.png
+              if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
+                ok=1
+                break
+              fi
+              # кадр однотонный — закрываем возможный оверлей и пробуем снова
+              adb shell input keyevent KEYCODE_BACK || true
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then
+              echo "no good frame in 8 attempts"
+              adb logcat -d | tail -200 > shot-fail-logcat.txt || true
+              exit 1
+            fi
+      - name: Upload raw shot + logcat (diagnostics, always)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: screenshot-diagnostics
+          path: |
+            android/shot-raw.png
+            android/shot-fail-logcat.txt
+          if-no-files-found: ignore
+      - name: Normalize 720x1440 + ensure README embeds the shot
+        run: |
+          python3 - <<'PY'
+          from PIL import Image
+          img = Image.open("android/shot-raw.png").convert("RGB")
+          img = img.resize((720, 1440), Image.LANCZOS)
+          img.save("assets/brand/screenshot.png", optimize=True)
+          print("screenshot normalized:", img.size)
+          # README «подвахивает» кадр сам: он уже ссылается на этот файл.
+          # Гарантия: если блок скриншота удалён — возвращаем его.
+          import pathlib
+          p = pathlib.Path("README.md")
+          s = p.read_text(encoding="utf-8")
+          if "assets/brand/screenshot.png" not in s:
+              block = ('\n<p align="center">\n'
+                       '  <img src="assets/brand/screenshot.png" alt="Интерфейс приложения" width="280"/>\n'
+                       '</p>\n')
+              s = s.replace("## Быстрый старт", block + "\n## Быстрый старт", 1) \
+                   if "## Быстрый старт" in s else s + block
+              p.write_text(s, encoding="utf-8")
+              print("README: блок скриншота восстановлен")
+          else:
+              print("README: скриншот уже встроен")
+          PY
+      - uses: stefanzweifel/git-auto-commit-action@v6
+        with:
+          commit_message: "[skip ci] docs: свежий скриншот приложения (бот-эмулятор, отдельный воркфлоу)"
+          file_pattern: "assets/brand/screenshot.png README.md"
