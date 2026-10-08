@@ -48,6 +48,10 @@ type Ready struct {
 	TunnelWindow uint32   `json:"tunnel_window"`
 	Proto        string   `json:"proto"`
 	Protocols    []string `json:"protocols"`
+	// Features — возможности сервера поверх протокола (v0.8.2, additive).
+	// Сейчас: "apimask" (камуфляж «API Mask»: клиент может слать NOISE).
+	// Старые клиенты поле игнорируют (JSON additive) — полная совместимость.
+	Features []string `json:"features,omitempty"`
 }
 
 // TokenHash derives the server-side stored value and the HMAC key for a token.

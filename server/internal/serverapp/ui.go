@@ -42,6 +42,18 @@ type StatusReport struct {
 	ModulesVersion   string `json:"modules_version,omitempty"`
 	ModulesSource    string `json:"modules_source,omitempty"`
 	ProtoSessions    int64  `json:"proto_sessions_non_default"` // уже int64
+	// v0.8.2: модуль камуфляжа «API Mask» (честно наружу: id/имя/версия/статус)
+	Camouflage    *CamouflageInfo `json:"camouflage,omitempty"`
+	ApimaskFrames uint64          `json:"apimask_frames_total"`
+	ApimaskBytes  uint64          `json:"apimask_bytes_total"`
+}
+
+// CamouflageInfo — открытая сводка модуля камуфляжа для /status и /ui.
+type CamouflageInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Ver     string `json:"ver,omitempty"`
+	Enabled bool   `json:"enabled"`
 }
 
 // egressIP caches the outbound IPv4 of the server (targets are never logged).
@@ -100,6 +112,12 @@ func (a *App) statusJSON() []byte {
 			s.ModulesSource = ms.Source
 		}
 	}
+	// v0.8.2: камуфляж «API Mask» — та же открытость, что и в APK
+	if camo := rrp.CamouflageConfig(); camo.ID != "" {
+		s.Camouflage = &CamouflageInfo{ID: camo.ID, Name: camo.Name, Ver: camo.Ver, Enabled: camo.Enabled}
+	}
+	s.ApimaskFrames = a.met.ApimaskFrames.Load()
+	s.ApimaskBytes = a.met.ApimaskBytes.Load()
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return []byte(`{"ok":false}`)
@@ -164,8 +182,9 @@ async function tick(){
   const hard=s.hardening_profile?('<div class="card"><div class="k">Hardening (WAN)</div><div class="v ok">'+s.hardening_profile+'</div>'+
    '<div class="k" style="margin-top:6px">Сканы отбито / лимит-дропов</div><div class="v">'+s.hardening_scans_total+' / '+s.hardening_limited_total+'</div></div>'):'';
   const mods=s.modules_version?('<div class="card"><div class="k">Модули (общий манифест APK↔сервер)</div><div class="v ok">'+s.modules_version+'</div><div class="k" style="margin-top:6px">Источник</div><div class="v">'+(s.modules_source||'builtin')+'</div></div>'):'';
+  const camo=(s.camouflage&&s.camouflage.enabled)?('<div class="card"><div class="k">Маскировка (API Mask)</div><div class="v ok">'+(s.camouflage.ver?('v'+s.camouflage.ver):'вкл')+'</div><div class="k" style="margin-top:6px">Кадров NOISE / байт</div><div class="v">'+s.apimask_frames_total+' / '+fmt(s.apimask_bytes_total)+'</div></div>'):'';
   document.getElementById('cards').innerHTML=c.map(([k,v,cls])=>
-   '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('')+hard+mods;
+   '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('')+hard+mods+camo;
   const rows=(s.sessions||[]).map(x=>
    '<tr><td>'+(x.device||'?')+'</td><td><code>'+String(x.session||'').slice(0,10)+'…</code></td>'+
    '<td>'+protoLabel(x.proto||'rrp1',s)+'</td><td>'+(x.rtt_ms!=null?x.rtt_ms+' мс':'—')+'</td>'+

@@ -94,6 +94,8 @@ class RrpClient(
     private val listener: Listener? = null,
     /** Имя устройства (поле device в HELLO; сервер требует непустое ≤64). */
     private val deviceName: String = "phone-1",
+    /** v0.8.2: политика шума камуфляжа «API Mask» (null — модуль выключен). */
+    private val noisePolicy: Apimask.NoisePolicy? = null,
     /** Желаемый протокол (&proto= из ссылки; мусор сводится к дефолту). */
     private val protoId: String = RrpProtocols.DEFAULT,
     /** v0.7.4: цель валидационного PROBE после READY ("host:port").
@@ -188,6 +190,19 @@ class RrpClient(
     /** Реестр протоколов, присланный сервером (для UI-переключателя). */
     @Volatile var serverProtocols: List<String> = emptyList()
         private set
+
+    /** v0.8.2: возможности сервера из READY (например "apimask"). */
+    @Volatile var serverFeatures: List<String> = emptyList()
+        private set
+
+    /** Сервер подтвердил камуфляж «API Mask» (клиент может слать NOISE). */
+    val apimaskSupported: Boolean
+        get() = serverFeatures.contains(Apimask.FEATURE)
+
+    /** Счётчики шума камуфляжа (байты payload'ов NOISE; для честной статистики). */
+    private val noiseTx = AtomicLong(0)
+    private val noiseRx = AtomicLong(0)
+    @Volatile private var noiseBudgetLogged = false
 
     @Volatile private var probeResp: RrpFrame.ProbeResp? = null
 
@@ -339,11 +354,18 @@ class RrpClient(
             negotiatedProto = RrpProtocols.normalize(rd.proto)
             RrpProtocols.rememberServerProtocols(rd.protocols)
             serverProtocols = rd.protocols
+            serverFeatures = rd.features
 
             setState(State.READY)
             lastPongMs.set(System.currentTimeMillis())
             scheduleNextPing()
             log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} proto=${rd.proto} (${RrpProtocols.labelWithVer(rd.proto)}) protocols=${rd.protocols.joinToString(",") { RrpProtocols.labelWithVer(it) }} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
+            // v0.8.2: камуфляж «API Mask» — только если сервер подтвердил
+            // возможность (features) и модуль включён манифестом
+            if (apimaskSupported && noisePolicy != null) {
+                log("API Mask: сервер подтвердил apimask — фоновый шум включён")
+                scheduleNoise()
+            }
 
             // v0.7.4: валидация «реального трафика» — PROBE до реального хоста.
             // Используется при смене протокола: коммит только после успеха.
@@ -436,6 +458,14 @@ class RrpClient(
             is RrpFrame.ProbeReq -> log("PROBE от сервера не ожидается")
             is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8: DH-апгрейд mtproto2
             is RrpFrame.KeyResp -> log("KEY_RESP от сервера не ожидается")
+            is RrpFrame.Noise -> {
+                // v0.8.2: ответ сервера на наш шум — байты считаются в общий
+                // трафик (честно: это реальные байты мобильной сети),
+                // но НЕ в «пакеты» пользовательских данных
+                val n = frame.json.toByteArray(Charsets.UTF_8).size
+                rxBytes.addAndGet(n.toLong())
+                noiseRx.addAndGet(n.toLong())
+            }
             is RrpFrame.ErrorFrame -> {
                 log("сервер ERROR ${frame.code}: ${frame.message} (raw payload ${frame.rawHex()})")
                 for (id in pendingOpens.keys) {
@@ -889,11 +919,62 @@ class RrpClient(
                     wire = RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.encryptDown(frame.bytes))
                 }
             }
+            is RrpFrame.Noise -> {
+                // v0.8.2: шум камуфляжа — считается в общий трафик телефона
+                // (честно), но НЕ в строку «пакеты» пользовательских данных
+                val n = frame.json.toByteArray(Charsets.UTF_8).size
+                txBytes.addAndGet(n.toLong())
+                noiseTx.addAndGet(n.toLong())
+            }
             else -> {}
         }
         synchronized(sendLock) {
             out.write(wire.encode())
             out.flush()
+        }
+    }
+
+    // ------------------------------------------------------------------ NOISE (v0.8.2)
+
+    /**
+     * Расписание шума камуфляжа: раз в [min;max] сек (джиттер манифеста)
+     * слать API-подобный NOISE-кадр; суточный бюджет из манифеста; каждая
+     * посылка честно логируется строкой вызывающей стороны (язык приложения).
+     */
+    private fun scheduleNoise() {
+        val policy = noisePolicy ?: return
+        if (!running.get() || !apimaskSupported) return
+        try {
+            pingExecutor.schedule({
+                if (!running.get()) return@schedule
+                val body = try {
+                    policy.engine.nextRequest()
+                } catch (e: Exception) {
+                    log("noise: генерация не удалась: ${e.message}")
+                    null
+                }
+                if (body == null) {
+                    if (!noiseBudgetLogged) {
+                        noiseBudgetLogged = true
+                        log(policy.logLine(0, policy.engine.usedToday(), policy.engine.cfg.maxBytesPerDay))
+                    }
+                    // бюджет исчерпан: тихо ждём (проверка раз в час; завтра — шум возобновится)
+                    try {
+                        pingExecutor.schedule({ scheduleNoise() }, 3_600_000L, TimeUnit.MILLISECONDS)
+                    } catch (_: RejectedExecutionException) {}
+                    return@schedule
+                }
+                try {
+                    sendFrame(RrpFrame.Noise(body))
+                    val bytes = body.toByteArray(Charsets.UTF_8).size
+                    policy.engine.onSent(bytes)
+                    log(policy.logLine(bytes, policy.engine.usedToday(), policy.engine.cfg.maxBytesPerDay))
+                } catch (e: IOException) {
+                    log("noise не отправлен: ${e.message}")
+                }
+                scheduleNoise()
+            }, policy.engine.nextDelayMs(), TimeUnit.MILLISECONDS)
+        } catch (_: RejectedExecutionException) {
         }
     }
 
@@ -937,6 +1018,9 @@ class RrpClient(
 
     /** [tx, rx] суммарные байты payload'ов с момента connect (для графика UI). */
     fun bytesSnapshot(): Pair<Long, Long> = txBytes.get() to rxBytes.get()
+
+    /** [tx, rx] байты шума камуфляжа с момента connect (v0.8.2, честная статистика). */
+    fun noiseSnapshot(): Pair<Long, Long> = noiseTx.get() to noiseRx.get()
 
     // ------------------------------------------------------------------ misc
 
@@ -1117,7 +1201,7 @@ class RrpClient(
     }
 
     companion object {
-        const val DEFAULT_AGENT = "ReverseRay-Android/0.8.1"
+        const val DEFAULT_AGENT = "ReverseRay-Android/0.8.2"
 
         /** Последний увиденный срок действия серта сервера (для «О приложении», epoch мс). */
         @Volatile var lastServerCertNotAfterMs: Long = 0

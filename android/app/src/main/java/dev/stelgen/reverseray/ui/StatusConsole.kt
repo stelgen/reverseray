@@ -69,7 +69,8 @@ class StatusConsole @JvmOverloads constructor(
         ellipsize = android.text.TextUtils.TruncateAt.END
     }
     private val liveBtn = TextView(context).apply {
-        text = "↧ live"
+        // v0.8.2: подпись кнопки — на языке приложения (не хардкод)
+        text = context.getString(dev.stelgen.reverseray.R.string.console_live)
         textSize = 11f
         setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
         setPadding(dp(8), dp(2), dp(8), dp(2))
@@ -114,7 +115,7 @@ class StatusConsole @JvmOverloads constructor(
             if (ev.action == MotionEvent.ACTION_UP && !atBottom()) {
                 follow = false
                 liveBtn.setTextColor(0xFFF9A825.toInt())
-                liveBtn.text = "↧ к live"
+                liveBtn.text = context.getString(dev.stelgen.reverseray.R.string.console_to_live)
             }
             v.performClick()
             false
@@ -132,7 +133,7 @@ class StatusConsole @JvmOverloads constructor(
     fun followLive() {
         follow = true
         liveBtn.setTextColor(0xFF8BD17C.toInt())
-        liveBtn.text = "↧ live"
+        liveBtn.text = context.getString(dev.stelgen.reverseray.R.string.console_live)
         scrollToBottom()
     }
 

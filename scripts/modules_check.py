@@ -56,6 +56,31 @@ def main() -> int:
             fail(f"enabled не bool у {pid}")
     if not has_rrp1:
         fail("реестр без rrp1 — запрещено (фундамент)")
+    # v0.8.2: секция camouflage — модуль камуфляжа «API Mask» (опциональна;
+    # если есть — обязаны быть валидный id и разумные параметры)
+    camo = m.get("camouflage")
+    if camo is not None:
+        if not isinstance(camo, dict):
+            fail("camouflage не объект")
+        cid = str(camo.get("id", ""))
+        if not ALLOWED_ID.match(cid):
+            fail(f"мусорный id модуля camouflage: {cid!r}")
+        cver = str(camo.get("ver", "") or "").strip()
+        if cver and not PROTO_VER_RE.match(cver):
+            fail(f"мусорная ver у camouflage: {cver!r}")
+        cenabled = camo.get("enabled")
+        if cenabled is not None and not isinstance(cenabled, bool):
+            fail("camouflage.enabled не bool")
+        lo = camo.get("min_interval_sec", 0)
+        hi = camo.get("max_interval_sec", 0)
+        budget = camo.get("max_bytes_per_day", 0)
+        for name, val, lim in (("min_interval_sec", lo, 3600), ("max_interval_sec", hi, 21600)):
+            if not isinstance(val, int) or val < 0 or val > lim:
+                fail(f"camouflage.{name} вне диапазона: {val!r}")
+        if not isinstance(budget, int) or budget < 0 or budget > 1024 * 1024:
+            fail(f"camouflage.max_bytes_per_day вне диапазона: {budget!r}")
+        if lo and hi and lo > hi:
+            fail("camouflage: min_interval_sec > max_interval_sec")
     policy = m.get("policy", {})
     if policy:
         probe = policy.get("probe_default_target")
@@ -69,6 +94,14 @@ def main() -> int:
     print(f"OK modules: {path} — schema 1, версия {version}, протоколы: {', '.join(sorted(seen))}")
     vers = {str(p.get("id")): str(p.get("ver", "") or "") for p in protocols}
     print(f"OK modules: версии протоколов (v0.8.1): " + ", ".join(f"{k}={v or '—'}" for k, v in sorted(vers.items())))
+    if camo is not None:
+        state = "вкл" if camo.get("enabled", True) else "выкл"
+        print(
+            f"OK modules: камуфляж {camo.get('name', camo.get('id'))}"
+            f" (v{camo.get('ver') or '—'}) {state}, "
+            f"интервал {camo.get('min_interval_sec', 0)}–{camo.get('max_interval_sec', 0)} с, "
+            f"бюджет {camo.get('max_bytes_per_day', 0)} Б/сутки"
+        )
     return 0
 
 

@@ -54,6 +54,13 @@ const (
 	// После обмена payload'ы DATA/UDP_DATA уходят в MTProto 2.0-конверте.
 	TypeKeyReq  = 0x24
 	TypeKeyResp = 0x25
+
+	// Кадр камуфляжа «API Mask» (v0.8.2, module id apimask, bidirectional):
+	// payload — JSON-объект, похожий на обмен бизнес-API (см. internal/apimasq).
+	// Клиент шлёт NOISE только если сервер в READY заявил features:["apimask"];
+	// сервер отвечает NOISE ТОЛЬКО на полученный NOISE — старые версии обеих
+	// сторон кадр никогда не видят (нулевая поломка совместимости).
+	TypeNoise = 0x26
 )
 
 const (

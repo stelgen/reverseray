@@ -186,6 +186,9 @@ sealed class RrpFrame(val type: Int) {
         val proto: String = "rrp1",
         /** Реестр протоколов сервера. */
         val protocols: List<String> = emptyList(),
+        /** v0.8.2: возможности сервера поверх протокола (additive; старые
+         *  серверы поле не присылают — клиент тогда молчит по NOISE). */
+        val features: List<String> = emptyList(),
     ) : RrpFrame(TYPE_READY) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "tunnel_id" to MiniJson.q(tunnelId),
@@ -204,6 +207,7 @@ sealed class RrpFrame(val type: Int) {
                     tunnelWindow = m["tunnel_window"]?.toLongOrNull() ?: 0L,
                     proto = m["proto"] ?: "rrp1",
                     protocols = HelloOk.splitCsv(m["protocols"]),
+                    features = HelloOk.splitCsv(m["features"]),
                 )
             }
         }
@@ -406,6 +410,66 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
+    /**
+     * 0x26 (v0.8.2, модуль камуфляжа «API Mask», bidirectional): payload —
+     * JSON-объект, похожий на обмен бизнес-API. Клиент шлёт NOISE только если
+     * сервер в READY заявил features=["apimask"]; сервер отвечает только на
+     * полученный NOISE — старые версии обеих сторон кадр не видят никогда.
+     */
+    class Noise(val json: String) : RrpFrame(TYPE_NOISE) {
+        override fun buildPayload(): ByteArray = json.toByteArray(Charsets.UTF_8)
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): Noise {
+                val s = String(p, Charsets.UTF_8).trim()
+                if (s.isEmpty() || s[0] != '{' || s[s.length - 1] != '}') {
+                    throw RrpFrameException("NOISE: ожидался JSON-объект")
+                }
+                // ВАЖНО: тела NOISE содержат ВЛОЖЕННЫЕ объекты/массивы —
+                // MiniJson.parseFlat умеет только плоские, поэтому здесь
+                // лёгкая проверка сбалансированности (pure Kotlin, без org.json):
+                // битый кадр = мусор шума, а не повод рвать туннель... но канал
+                // декодирования кадров строгий: мусор отсекается здесь.
+                if (!balancedJson(s)) {
+                    throw RrpFrameException("NOISE: некорректный JSON")
+                }
+                return Noise(s)
+            }
+
+            /** Сбалансированы ли {}, [] вне строк (кавычки/escape учитываются). */
+            internal fun balancedJson(s: String): Boolean {
+                var braces = 0
+                var brackets = 0
+                var inString = false
+                var escaped = false
+                for (c in s) {
+                    if (inString) {
+                        when {
+                            escaped -> escaped = false
+                            c == '\\' -> escaped = true
+                            c == '"' -> inString = false
+                        }
+                        continue
+                    }
+                    when (c) {
+                        '"' -> inString = true
+                        '{' -> braces++
+                        '}' -> {
+                            braces--
+                            if (braces < 0) return false
+                        }
+                        '[' -> brackets++
+                        ']' -> {
+                            brackets--
+                            if (brackets < 0) return false
+                        }
+                    }
+                }
+                return !inString && braces == 0 && brackets == 0
+            }
+        }
+    }
+
     /** 0x24 S→C (mtproto2): JSON {p,g,g_a} — параметры DH (base64url 256-байтовые доли). */
     class KeyReq(
         val p: String,
@@ -492,6 +556,8 @@ sealed class RrpFrame(val type: Int) {
         // v0.8: обмен ключами протокола mtproto2 (после READY, внутри приватного хендшейка)
         const val TYPE_KEY_REQ = 0x24
         const val TYPE_KEY_RESP = 0x25
+        // v0.8.2: кадр камуфляжа «API Mask» (модуль apimask, см. core/Apimask.kt)
+        const val TYPE_NOISE = 0x26
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
@@ -541,6 +607,7 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_PROBE -> ProbeResp.fromPayload(payload)
                 TYPE_KEY_REQ -> KeyReq.fromPayload(payload)
                 TYPE_KEY_RESP -> KeyResp.fromPayload(payload)
+                TYPE_NOISE -> Noise.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)
                 else -> throw RrpFrameException("неизвестный тип кадра 0x${Integer.toHexString(type)}")

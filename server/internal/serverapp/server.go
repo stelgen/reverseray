@@ -54,6 +54,10 @@ type Metrics struct {
 	HardeningDropped atomic.Uint64 // из них tarpit/тихо закрыто
 	HardeningLimited atomic.Uint64 // отклонено лимитами параллельности
 	ProtoSessions    atomic.Int64  // сессий с протоколом != rrp1 (например mtproto2)
+
+	// v0.8.2: камуфляж «API Mask» — наблюдаемость шума (честно, без IP).
+	ApimaskFrames atomic.Uint64 // обработано пар запрос/ответ NOISE
+	ApimaskBytes  atomic.Uint64 // суммарный объём payload'ов NOISE (байты)
 }
 
 // addInbound регистрирует inbound для метрик UDP (вызывается в Run).
@@ -204,7 +208,8 @@ func (a *App) Run(ctx context.Context) error {
 		// манифест, скачанный/сохранённый ранее, применяется сразу
 		if m := a.modSync.Cached(); m != nil {
 			rrp.SetRegistry(m.ProtocolRegistry(), m.Version)
-			a.log.Info("modules: cached manifest applied", "version", m.Version, "protocols", m.EnabledProtocolIDs())
+			rrp.SetCamouflage(m.CamouflageConfig())
+			a.log.Info("modules: cached manifest applied", "version", m.Version, "protocols", m.EnabledProtocolIDs(), "camouflage", rrp.CamouflageLabel())
 		}
 	}
 
@@ -516,6 +521,11 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.PingInterval = a.cfg.PingInterval()
 	scfg.Protocol = proto
 	scfg.ProbeDialer = a.probeDialer()
+	// v0.8.2: учёт камуфляжа «API Mask» — метрики без IP/содержимого
+	scfg.NoiseHook = func(req, resp int) {
+		a.met.ApimaskFrames.Add(1)
+		a.met.ApimaskBytes.Add(uint64(req + resp)) // #nosec G115: req/resp ≤ MaxControlPayload
+	}
 
 	_ = tc.SetDeadline(time.Time{})
 	if err := writeJSONTyped(framed, rrp.TypeReady, &rrp.Ready{
@@ -525,6 +535,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
 		Proto:        proto,
 		Protocols:    rrp.SupportedIDs(),
+		Features:     rrp.CamouflageFeature(),
 	}); err != nil {
 		_ = framed.Close()
 		return
@@ -559,7 +570,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	a.met.TunnelsUp.Add(1)
 	a.met.Reconnects.Add(1)
 	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport,
-		"proto", proto, "proto_label", rrp.Label(proto), "proto_ver", rrp.Ver(proto))
+		"proto", proto, "proto_label", rrp.Label(proto), "proto_ver", rrp.Ver(proto), "camo_label", rrp.CamouflageLabel())
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)
@@ -697,6 +708,9 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 		fmt.Fprintf(w, "# HELP reverseray_hardening_dropped_total non-TLS probes tarpitted/closed silently\n# TYPE reverseray_hardening_dropped_total counter\nreverseray_hardening_dropped_total %d\n", m.HardeningDropped.Load())
 		fmt.Fprintf(w, "# HELP reverseray_hardening_limited_total connections rejected by concurrency limits\n# TYPE reverseray_hardening_limited_total counter\nreverseray_hardening_limited_total %d\n", m.HardeningLimited.Load())
 		fmt.Fprintf(w, "# HELP reverseray_proto_sessions_non_default sessions on non-default protocol\n# TYPE reverseray_proto_sessions_non_default gauge\nreverseray_proto_sessions_non_default %d\n", m.ProtoSessions.Load())
+		// v0.8.2: камуфляж «API Mask» — наблюдаемость (пары/байты NOISE)
+		fmt.Fprintf(w, "# HELP reverseray_apimask_frames_total apimask noise request/response pairs\n# TYPE reverseray_apimask_frames_total counter\nreverseray_apimask_frames_total %d\n", m.ApimaskFrames.Load())
+		fmt.Fprintf(w, "# HELP reverseray_apimask_bytes_total apimask noise payload bytes\n# TYPE reverseray_apimask_bytes_total counter\nreverseray_apimask_bytes_total %d\n", m.ApimaskBytes.Load())
 		if a.modSync != nil {
 			fmt.Fprintf(w, "# HELP reverseray_modules_version modules manifest version\n# TYPE reverseray_modules_version gauge\nreverseray_modules_version{version=%q} 1\n", a.modSync.ActiveVersion())
 			fmt.Fprintf(w, "# HELP reverseray_modules_last_check_success last modules sync ok\n# TYPE reverseray_modules_last_check_success gauge\nreverseray_modules_last_check_success %d\n", boolToInt(a.modSync.LastCheckOK()))

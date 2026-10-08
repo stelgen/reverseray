@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Вопрос по деплою
+    url: https://github.com/stelgen/reverseray/discussions
+    about: "rr.sh / Docker / Portainer — сначала поиск по обсуждениям"
+  - name: Безопасность (приватно)
+    url: https://github.com/stelgen/reverseray/security/advisories/new
+    about: Не публикуйте уязвимости в issue — только приватное сообщение (см. SECURITY.md)

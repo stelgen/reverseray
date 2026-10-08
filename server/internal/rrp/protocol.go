@@ -59,6 +59,88 @@ var registryVersion = ""
 // DefaultProtocolID — самый стабильный протокол (имплементирован у нас всегда).
 const DefaultProtocolID = "rrp1"
 
+// Camouflage — конфиг модуля камуфляжа «API Mask» (v0.8.2, module id
+// apimask): низкообъёмный фоновый обмен JSON-подобными кадрами NOISE
+// внутри туннеля, чтобы профиль трафика APK↔сервер выглядел как API
+// бизнес-приложения (см. internal/apimasq). Модуль ОБЩИЙ: и сервер, и APK
+// читают его из одного манифеста modules.json (секция "camouflage").
+type Camouflage struct {
+	ID             string
+	Name           string
+	Ver            string
+	Enabled        bool
+	MinIntervalSec int
+	MaxIntervalSec int
+	MaxBytesPerDay int
+}
+
+// DefaultCamouflage — встроенные значения (манифест перекрывает).
+func DefaultCamouflage() Camouflage {
+	return Camouflage{
+		ID:             "apimask",
+		Name:           "API Mask",
+		Ver:            "1",
+		Enabled:        false,
+		MinIntervalSec: 300,
+		MaxIntervalSec: 900,
+		MaxBytesPerDay: 256 * 1024,
+	}
+}
+
+// activeCamouflage — активная конфигурация камуфляжа (под regMu, как реестр).
+var activeCamouflage = DefaultCamouflage()
+
+// SetCamouflage применяет секцию "camouflage" манифеста (нормализация
+// мусора к дефолтам — канон: мусор не ломает стек).
+func SetCamouflage(c Camouflage) {
+	regMu.Lock()
+	defer regMu.Unlock()
+	if c.ID == "" {
+		c = DefaultCamouflage()
+	}
+	if c.Name == "" {
+		c.Name = c.ID
+	}
+	c.Ver = SanitizeVer(c.Ver)
+	c = clampCamouflage(c)
+	activeCamouflage = c
+}
+
+func clampCamouflage(c Camouflage) Camouflage {
+	d := DefaultCamouflage()
+	if c.MinIntervalSec <= 0 || c.MinIntervalSec > 3600 {
+		c.MinIntervalSec = d.MinIntervalSec
+	}
+	if c.MaxIntervalSec < c.MinIntervalSec || c.MaxIntervalSec > 6*3600 {
+		c.MaxIntervalSec = d.MaxIntervalSec
+	}
+	if c.MinIntervalSec > c.MaxIntervalSec {
+		c.MinIntervalSec = c.MaxIntervalSec
+	}
+	if c.MaxBytesPerDay <= 0 || c.MaxBytesPerDay > 1024*1024 {
+		c.MaxBytesPerDay = d.MaxBytesPerDay
+	}
+	return c
+}
+
+// CamouflageConfig возвращает активную конфигурацию камуфляжа.
+func CamouflageConfig() Camouflage {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return activeCamouflage
+}
+
+// CamouflageFeature — значение для READY.features: nil, если камуфляж
+// выключен (старые/новые клиенты без этой строки ведут себя по-старому).
+func CamouflageFeature() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	if !activeCamouflage.Enabled {
+		return nil
+	}
+	return []string{"apimask"}
+}
+
 // RegistryVersion возвращает версию активного реестра ("" — встроенный).
 func RegistryVersion() string {
 	regMu.RLock()
@@ -168,6 +250,20 @@ func SanitizeVer(v string) string {
 		}
 	}
 	return s
+}
+
+// CamouflageLabel — метка модуля камуфляжа с версией ("API Mask (v1)")
+// для /status, /ui и логов; выключен — пусто (канон «пусто = не показываем»).
+func CamouflageLabel() string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	if !activeCamouflage.Enabled {
+		return ""
+	}
+	if activeCamouflage.Ver != "" {
+		return activeCamouflage.Name + " (v" + activeCamouflage.Ver + ")"
+	}
+	return activeCamouflage.Name
 }
 
 // Label возвращает человекочитаемое имя протокола с версией ("RRP/1",

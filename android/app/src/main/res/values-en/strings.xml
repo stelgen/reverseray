@@ -65,7 +65,7 @@
 
     <!-- Protocols -->
     <string name="proto_section">Tunnel protocol</string>
-    <string name="proto_unknown">Protocol: unknown (connect once — the server will send its list)</string>
+    <string name="proto_unknown">Protocol: unknown</string>
     <string name="proto_switch">Switch protocol</string>
     <string name="proto_switching">Switching to %1$s (validating with real traffic…)</string>
     <string name="proto_current">Protocol: %1$s</string>
@@ -94,9 +94,9 @@
     <string name="set_allow_lan">Allow LAN access</string>
     <string name="set_auto_update">Auto update check</string>
     <string name="set_limit_title">Traffic limit</string>
-    <string name="set_limit_switch">Enable limit (unlimited by default)</string>
-    <string name="set_limit_gb_hint">Limit, GB (e.g. 5)</string>
-    <string name="set_limit_period_hint">Reset day for monthly limit (1–28)</string>
+    <string name="set_limit_switch">Enable limit</string>
+    <string name="set_limit_gb_hint">Limit, GB</string>
+    <string name="set_limit_period_hint">Monthly limit reset day, 1–28</string>
     <string name="set_limit_apply">Apply limit</string>
     <string name="set_limit_reset">Reset counter</string>
     <string name="set_limit_reset_done">Traffic counter reset</string>
@@ -104,7 +104,6 @@
     <string name="set_limit_bad_value">Set a limit greater than 0 GB</string>
     <string name="set_limit_counter">Traffic counter</string>
     <string name="set_probe_title">PROBE target</string>
-    <string name="set_probe_hint">host:port — the server dials it when switching protocols (real egress check)</string>
     <string name="set_probe_apply">Save</string>
     <string name="set_probe_bad">Expected host:port</string>
 
@@ -137,7 +136,7 @@
 
     <string name="about_app_title">About the app</string>
     <string name="app_version_row">Version</string>
-    <string name="app_modules_row">Modules (manifest)</string>
+    <string name="app_modules_row">Modules</string>
     <string name="app_modules_builtin">built-in</string>
     <string name="app_ram_row">App memory</string>
     <string name="app_disk_row">Storage (APK + data)</string>
@@ -154,7 +153,6 @@
     <string name="share_apk_error">Could not package the APK for sharing</string>
 
     <string name="set_autoreconnect">Connect automatically when the app opens</string>
-    <string name="set_autoreconnect_hint">Off by default. If the limit is reached — wait for the reset date and connect only after it (checks once per minute).</string>
     <string name="set_limit_next">Next counter reset: %1$s</string>
     <string name="set_limit_period">Period</string>
     <string name="set_limit_period_day">Day</string>
@@ -166,12 +164,12 @@
     <string name="limit_dialog_msg">Traffic limit exhausted: %1$s of %2$s.\n\nWe send EXACTLY ZERO bytes — the “limit is king” rule.\n\nLimit refresh: %3$s.\nManual reset: Settings → Traffic limit.</string>
     <string name="limit_dialog_wait">Wait for reset and connect</string>
 
-    <string name="modules_section">Modules (updated without APK reinstall)</string>
+    <string name="modules_section">Modules</string>
     <string name="modules_check_now">Update modules</string>
     <string name="modules_up_to_date">Modules are up to date</string>
     <string name="modules_progress">Downloading modules: %1$d%% · %2$s</string>
     <string name="modules_applied">Modules applied: version %1$s, protocols: %2$s</string>
-    <string name="modules_failed">Modules: failed — %1$s (running on built-ins)</string>
+    <string name="modules_failed">Modules: failed — %1$s · running on built-ins</string>
 
     <string name="dev_cpu_model">CPU</string>
     <string name="dev_ram_total">Total RAM</string>
@@ -186,7 +184,6 @@
 
     <!-- v0.8.1 -->
     <string name="set_theme_title">Theme</string>
-    <string name="set_theme_hint">Auto follows the phone setting. On old Android versions without a system dark theme, auto = black.</string>
     <string name="set_theme_auto">Auto</string>
     <string name="set_theme_dark">Dark</string>
     <string name="set_theme_light">Light</string>
@@ -214,4 +211,30 @@
     <string name="net_sources_local">local: system DNS (LinkProperties)</string>
     <string name="dev_sources_row">What we read about the device</string>
     <string name="dev_sources_list">/proc/cpuinfo, Build.* (model/SDK/patch), os.version (kernel), ActivityManager.MemoryInfo (RAM)</string>
+
+    <!-- v0.8.2: update journal — fully in the app language -->
+    <string name="console_live">↧ live</string>
+    <string name="console_to_live">↧ to live</string>
+    <string name="upd_check_start">Update: checking GitHub Releases · current version %1$s</string>
+    <string name="upd_check_none">Update: no new releases (or GitHub unreachable)</string>
+    <string name="upd_check_available">Update: %1$s is available · APK: %2$s</string>
+    <string name="upd_sums_found">Update: release has SHA256SUMS — install only after verification</string>
+    <string name="upd_sums_missing">Update: no SHA256SUMS in the release — verification impossible</string>
+    <string name="upd_dl_start">Update: downloading %1$s</string>
+    <string name="upd_dl_done">Update: downloaded %1$s (%2$s)</string>
+    <string name="upd_verify_ok">Update: SHA256 matches (%1$s) — starting install</string>
+    <string name="upd_verify_fail">Update: verification failed — %1$s · install cancelled</string>
+    <string name="upd_dl_error">Update: download error — %1$s</string>
+    <string name="upd_install_no_installer">Update: no APK installer available — install not started</string>
+    <string name="upd_modules_check">Modules: checking %1$s</string>
+    <string name="upd_modules_http">Modules: server responded %1$d</string>
+    <string name="upd_modules_received">Modules: received %1$s</string>
+    <string name="upd_modules_parsed">Modules: parsed manifest version %1$s · protocols: %2$s</string>
+    <string name="upd_modules_older">Modules: remote (%1$s) is not newer than current (%2$s) — not applying</string>
+
+    <!-- v0.8.2: API Mask camouflage module -->
+    <string name="app_camo_row">API masking</string>
+    <string name="app_camo_off">off (manifest)</string>
+    <string name="apimask_beat">Masking %1$s: noise %2$d B · today %3$s of %4$s</string>
+    <string name="apimask_budget_done">Masking %1$s: daily budget used up (%2$s of %3$s) — noise paused until tomorrow</string>
 </resources>

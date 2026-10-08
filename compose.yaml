@@ -1,7 +1,7 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.8.1}
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.8.2}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"

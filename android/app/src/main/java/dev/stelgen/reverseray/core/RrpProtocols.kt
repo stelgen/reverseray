@@ -42,6 +42,10 @@ object RrpProtocols {
     @Volatile
     private var registryVers: Map<String, String> = BUNDLED_VERS
 
+    // v0.8.2: модуль камуфляжа «API Mask» из того же манифеста (секция camouflage).
+    @Volatile
+    private var camouflage: Apimask.Config = Apimask.Config.disabled()
+
     /**
      * Применяет реестр из манифеста модулей. Гарантии (зеркало SetRegistry
      * сервера): rrp1 остаётся; пустой список НЕ применяется; мусорные id
@@ -75,6 +79,30 @@ object RrpProtocols {
 
     /** Версия активного реестра ("" — встроенный). */
     fun registryVersion(): String = registryVersion
+
+    /**
+     * Применяет секцию camouflage манифеста (v0.8.2). Мусорные значения
+     * сводятся к дефолтам — канон «мусор не ломает стек».
+     */
+    fun applyCamouflage(c: Apimask.Config) {
+        val lo = if (c.minIntervalSec in 1..3600) c.minIntervalSec else 300
+        val hi = if (c.maxIntervalSec in lo..21600) c.maxIntervalSec else 900
+        val budget = if (c.maxBytesPerDay in 1..(1024 * 1024)) c.maxBytesPerDay else 256 * 1024
+        camouflage = c.copy(
+            id = Modules.normalizeId(c.id).ifEmpty { Apimask.FEATURE },
+            name = c.name.trim().ifEmpty { "API Mask" },
+            ver = Modules.sanitizeVer(c.ver),
+            minIntervalSec = lo,
+            maxIntervalSec = hi,
+            maxBytesPerDay = budget,
+        )
+    }
+
+    /** Активная конфигурация камуфляжа (выкл по умолчанию — решает манифест). */
+    fun camouflageConfig(): Apimask.Config = camouflage
+
+    /** Метка модуля с версией ("API Mask (v1)"); выключен — пусто. */
+    fun camouflageLabel(): String = Apimask.labelOf(camouflage)
 
     /** Толерантная нормализация любого значения (ссылка/сервер/пользователь). */
     fun normalize(raw: String?): String {

@@ -65,7 +65,7 @@
 
     <!-- Протоколы -->
     <string name="proto_section">Протокол туннеля</string>
-    <string name="proto_unknown">Протокол: неизвестно (подключись — сервер пришлёт список)</string>
+    <string name="proto_unknown">Протокол: неизвестно</string>
     <string name="proto_switch">Сменить протокол</string>
     <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
     <string name="proto_current">Протокол: %1$s</string>
@@ -94,9 +94,9 @@
     <string name="set_allow_lan">Разрешить доступ в локальную сеть</string>
     <string name="set_auto_update">Авто-проверка обновлений</string>
     <string name="set_limit_title">Лимит трафика</string>
-    <string name="set_limit_switch">Включить лимит (по умолчанию без ограничений)</string>
-    <string name="set_limit_gb_hint">Лимит, ГБ (например 5)</string>
-    <string name="set_limit_period_hint">День сброса для месячного лимита (1–28)</string>
+    <string name="set_limit_switch">Включить лимит</string>
+    <string name="set_limit_gb_hint">Лимит, ГБ</string>
+    <string name="set_limit_period_hint">День сброса месячного лимита, 1–28</string>
     <string name="set_limit_apply">Применить лимит</string>
     <string name="set_limit_reset">Сбросить счётчик</string>
     <string name="set_limit_reset_done">Счётчик трафика сброшен</string>
@@ -104,7 +104,6 @@
     <string name="set_limit_bad_value">Укажи лимит больше 0 ГБ</string>
     <string name="set_limit_counter">Счётчик трафика</string>
     <string name="set_probe_title">Цель PROBE-валидации</string>
-    <string name="set_probe_hint">host:port — сервер дёрнет сюда TCP при смене протокола (проверка реального egress)</string>
     <string name="set_probe_apply">Сохранить</string>
     <string name="set_probe_bad">Ожидался вид host:port</string>
 
@@ -137,7 +136,7 @@
 
     <string name="about_app_title">О приложении</string>
     <string name="app_version_row">Версия</string>
-    <string name="app_modules_row">Модули (манифест)</string>
+    <string name="app_modules_row">Модули</string>
     <string name="app_modules_builtin">встроенные</string>
     <string name="app_ram_row">Память приложения</string>
     <string name="app_disk_row">Место (APK + данные)</string>
@@ -154,7 +153,6 @@
     <string name="share_apk_error">Не удалось собрать APK для отправки</string>
 
     <string name="set_autoreconnect">Подключаться автоматически при открытии приложения</string>
-    <string name="set_autoreconnect_hint">Выкл по умолчанию. Если лимит достигнут — ждать даты сброса и подключаться только после неё (проверки раз в минуту).</string>
     <string name="set_limit_next">Следующий сброс счётчика: %1$s</string>
     <string name="set_limit_period">Период</string>
     <string name="set_limit_period_day">Сутки</string>
@@ -166,12 +164,12 @@
     <string name="limit_dialog_msg">Лимит трафика исчерпан: %1$s из %2$s.\n\nМы отправляем РОВНО НОЛЬ байт — правило «лимит — король».\n\nОбновление лимита: %3$s.\nСброс вручную: Настройки → Лимит трафика.</string>
     <string name="limit_dialog_wait">Ждать сброса и подключить</string>
 
-    <string name="modules_section">Модули (обновляются без переустановки APK)</string>
+    <string name="modules_section">Модули</string>
     <string name="modules_check_now">Обновить модули</string>
     <string name="modules_up_to_date">Модули актуальны</string>
     <string name="modules_progress">Загрузка модулей: %1$d%% · %2$s</string>
     <string name="modules_applied">Модули применены: версия %1$s, протоколы: %2$s</string>
-    <string name="modules_failed">Модули: не удалось — %1$s (работаем на встроенных)</string>
+    <string name="modules_failed">Модули: не удалось — %1$s · работаем на встроенных</string>
 
     <string name="dev_cpu_model">Процессор</string>
     <string name="dev_ram_total">Оперативная память</string>
@@ -186,7 +184,6 @@
 
     <!-- v0.8.1: тема, версии протоколов, константы защиты, честные источники -->
     <string name="set_theme_title">Тема</string>
-    <string name="set_theme_hint">Авто берёт настройку телефона. На старых Android, где системной тёмной темы нет, авто = чёрная.</string>
     <string name="set_theme_auto">Авто</string>
     <string name="set_theme_dark">Тёмная</string>
     <string name="set_theme_light">Светлая</string>
@@ -214,4 +211,30 @@
     <string name="net_sources_local">локально: системные DNS (LinkProperties)</string>
     <string name="dev_sources_row">Что читаем об устройстве</string>
     <string name="dev_sources_list">/proc/cpuinfo, Build.* (модель/SDK/патч), os.version (ядро), ActivityManager.MemoryInfo (RAM)</string>
+
+    <!-- v0.8.2: журнал обновлений — целиком на языке приложения -->
+    <string name="console_live">↧ live</string>
+    <string name="console_to_live">↧ к live</string>
+    <string name="upd_check_start">Обновление: проверяю GitHub Releases · текущая версия %1$s</string>
+    <string name="upd_check_none">Обновление: новых релизов нет (или GitHub недоступен)</string>
+    <string name="upd_check_available">Обновление: доступен %1$s · APK: %2$s</string>
+    <string name="upd_sums_found">Обновление: в релизе есть SHA256SUMS — установка только после сверки</string>
+    <string name="upd_sums_missing">Обновление: SHA256SUMS в релизе нет — сверка невозможна</string>
+    <string name="upd_dl_start">Обновление: качаю %1$s</string>
+    <string name="upd_dl_done">Обновление: скачано %1$s (%2$s)</string>
+    <string name="upd_verify_ok">Обновление: SHA256 совпал (%1$s) — запускаю установку</string>
+    <string name="upd_verify_fail">Обновление: сверка не прошла — %1$s · установка отменена</string>
+    <string name="upd_dl_error">Обновление: ошибка скачивания — %1$s</string>
+    <string name="upd_install_no_installer">Обновление: установщик APK недоступен — установка не начата</string>
+    <string name="upd_modules_check">Модули: проверяю %1$s</string>
+    <string name="upd_modules_http">Модули: сервер ответил %1$d</string>
+    <string name="upd_modules_received">Модули: получено %1$s</string>
+    <string name="upd_modules_parsed">Модули: разобран манифест версии %1$s · протоколы: %2$s</string>
+    <string name="upd_modules_older">Модули: удалённый (%1$s) не новее текущего (%2$s) — не применяю</string>
+
+    <!-- v0.8.2: модуль камуфляжа «API Mask» -->
+    <string name="app_camo_row">API-маскировка</string>
+    <string name="app_camo_off">выкл (манифест)</string>
+    <string name="apimask_beat">Маскировка %1$s: шум %2$d Б · за сутки %3$s из %4$s</string>
+    <string name="apimask_budget_done">Маскировка %1$s: суточный бюджет исчерпан (%2$s из %3$s) — шум затих до завтра</string>
 </resources>

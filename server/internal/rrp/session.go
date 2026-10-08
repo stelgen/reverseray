@@ -9,9 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/stelgen/reverseray/server/internal/apimasq"
 )
 
 // SessionConfig tunes a server-side tunnel session.
@@ -27,6 +30,9 @@ type SessionConfig struct {
 	// ProbeDialer — исходящий диал для PROBE-валидации (реальный трафик до
 	// реальных хостов перед переключением протокола). nil — PROBE отключён.
 	ProbeDialer func(ctx context.Context, target string, timeout time.Duration) error
+	// NoiseHook — учёт камуфляжа «API Mask» (v0.8.2): вызываетсь на каждый
+	// обработанный NOISE (req, resp) — метрики сервера. nil — без учёта.
+	NoiseHook func(req, resp int)
 }
 
 func DefaultSessionConfig() SessionConfig {
@@ -91,6 +97,13 @@ type Session struct {
 	pingAt time.Time
 	pingCh chan []byte
 
+	// v0.8.2: камуфляж «API Mask» — rate-limit ответов NOISE (анти-амплификация:
+	// не больше noiseRate ответов в минуту на сессию) и последний сброс окна.
+	noiseWinStart time.Time
+	noiseCount    int
+
+	noiseRnd *rand.Rand // генератор тел NOISE (не секретно — декоративные)
+
 	stats *list.List // recent Stats reports
 	lastS Stats
 
@@ -119,6 +132,7 @@ func NewSession(id, device string, conn io.ReadWriteCloser, cfg SessionConfig) *
 		cfg = DefaultSessionConfig()
 	}
 	s := &Session{
+		noiseRnd: rand.New(rand.NewSource(time.Now().UnixNano() ^ int64(len(device)))),
 		ID:       id,
 		Device:   device,
 		Proto:    cfg.Protocol,
@@ -222,6 +236,9 @@ func (s *Session) handle(f *Frame) error {
 	case TypeProbe:
 		s.handleProbe(f)
 		return nil
+	case TypeNoise:
+		s.handleNoise(f)
+		return nil
 	case TypePing:
 		s.writeAsync(&Frame{Type: TypePong, Payload: f.Payload})
 		return nil
@@ -308,6 +325,47 @@ func (s *Session) handleProbe(f *Frame) {
 	}
 	resp.OK = true
 	resp.Err = ""
+}
+
+// ---- NOISE (v0.8.2, модуль камуфляжа «API Mask») ----
+
+// noiseRate — максимум ответов NOISE в минуту на сессию (анти-амплификация).
+const noiseRate = 30
+
+// noiseAllows — решение rate-limit камуфляжа (чистая логика для тестов):
+// скользящее минутное окно, не больше noiseRate ответов за окно.
+// Вызывается под s.mu.
+func (s *Session) noiseAllows(now time.Time) bool {
+	if s.noiseWinStart.IsZero() || now.Sub(s.noiseWinStart) >= time.Minute {
+		s.noiseWinStart = now
+		s.noiseCount = 0
+	}
+	s.noiseCount++
+	return s.noiseCount <= noiseRate
+}
+
+// handleNoise отвечает на кадр камуфляжа: валидный JSON-запрос →
+// сгенерированный JSON-ответ (API-профиль). Мусор игнорируется тихо
+// (сессию НЕ рвём: шум декоративный, а рвать сессию по нему — вектор DoS).
+func (s *Session) handleNoise(f *Frame) {
+	if !apimasq.Valid(f.Payload) {
+		return
+	}
+	now := time.Now()
+	s.mu.Lock()
+	allowed := s.noiseAllows(now)
+	s.mu.Unlock()
+	if !allowed {
+		return
+	}
+	resp := apimasq.Response(s.noiseRnd, now)
+	if !apimasq.Valid(resp) {
+		return
+	}
+	s.writeAsync(&Frame{Type: TypeNoise, Payload: resp})
+	if s.cfg.NoiseHook != nil {
+		s.cfg.NoiseHook(len(f.Payload), len(resp))
+	}
 }
 
 // Protocol returns the negotiated protocol id for this session.

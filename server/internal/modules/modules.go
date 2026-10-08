@@ -44,6 +44,47 @@ type Manifest struct {
 	Updated   string          `json:"updated"`
 	Protocols []ProtocolEntry `json:"protocols"`
 	Policy    Policy          `json:"policy,omitempty"`
+	// Camouflage — секция модуля камуфляжа «API Mask» (v0.8.2, id apimask).
+	// Отсутствие секции = модуль выключен (nil). Один и тот же JSON парсит
+	// и Kotlin (dev.stelgen.reverseray.core.Modules) — менять синхронно.
+	Camouflage *CamouflageEntry `json:"camouflage,omitempty"`
+}
+
+// CamouflageEntry — запись модуля камуфляжа в манифесте (v0.8.2).
+type CamouflageEntry struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Ver            string `json:"ver,omitempty"`
+	Enabled        *bool  `json:"enabled,omitempty"`
+	MinIntervalSec int    `json:"min_interval_sec,omitempty"`
+	MaxIntervalSec int    `json:"max_interval_sec,omitempty"`
+	MaxBytesPerDay int    `json:"max_bytes_per_day,omitempty"`
+}
+
+// CamouflageConfig — нормализованный конфиг камуфляжа для rrp.SetCamouflage.
+// Мусорные значения сводятся к дефолтам (канон: мусор не ломает стек).
+func (m *Manifest) CamouflageConfig() rrp.Camouflage {
+	e := m.Camouflage
+	if e == nil {
+		c := rrp.DefaultCamouflage()
+		c.Enabled = false
+		return c
+	}
+	enabled := true
+	if e.Enabled != nil {
+		enabled = *e.Enabled
+	}
+	id := rrp.NormalizeID(e.ID)
+	name := strings.TrimSpace(e.Name)
+	return rrp.Camouflage{
+		ID:             id,
+		Name:           name,
+		Ver:            rrp.SanitizeVer(e.Ver),
+		Enabled:        enabled,
+		MinIntervalSec: e.MinIntervalSec,
+		MaxIntervalSec: e.MaxIntervalSec,
+		MaxBytesPerDay: e.MaxBytesPerDay,
+	}
 }
 
 // ProtocolEntry — запись реестра протоколов. Enabled=null → включён.
@@ -130,6 +171,14 @@ func (m *Manifest) Validate() error {
 	if m.Policy.ProbeTarget != "" {
 		if _, _, err := splitHostPort(m.Policy.ProbeTarget); err != nil {
 			return fmt.Errorf("modules: policy.probe_default_target %q: %w", m.Policy.ProbeTarget, err)
+		}
+	}
+	// camouflage (v0.8.2): секция опциональна; если есть — id обязан быть
+	// валидным токеном модуля, битый id = битый манифест (не применяется).
+	if m.Camouflage != nil {
+		id := rrp.NormalizeID(m.Camouflage.ID)
+		if id == "" {
+			return fmt.Errorf("modules: camouflage %q — мусорный id", m.Camouflage.ID)
 		}
 	}
 	return nil
@@ -335,8 +384,9 @@ func (s *Syncer) Check(ctx context.Context) {
 		s.mu.Unlock()
 		return
 	}
-	// применяем: реестр протоколов на горячую
+	// применяем: реестр протоколов + модуль камуфляжа на горячую
 	rrp.SetRegistry(m.ProtocolRegistry(), m.Version)
+	rrp.SetCamouflage(m.CamouflageConfig())
 	s.mu.Lock()
 	s.active = &m
 	s.source = "remote"

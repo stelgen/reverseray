@@ -36,11 +36,24 @@ object Modules {
         val default: Boolean,
     )
 
+    /** v0.8.2: секция camouflage манифеста — модуль камуфляжа «API Mask». */
+    data class Camouflage(
+        val id: String,
+        val name: String,
+        val ver: String,
+        val enabled: Boolean,
+        val minIntervalSec: Int,
+        val maxIntervalSec: Int,
+        val maxBytesPerDay: Int,
+    )
+
     data class Manifest(
         val version: String,
         val protocols: List<ProtocolEntry>,
         val probeTarget: String?,
         val dnsProbeNames: List<String>,
+        /** null — секции нет: модуль выключен (решение за манифестом). */
+        val camouflage: Camouflage?,
     ) {
         fun enabledProtocolIds(): List<String> = protocols.filter { it.enabled }.map { it.id }
 
@@ -140,7 +153,23 @@ object Modules {
                 }
             }
         }
-        return Manifest(version, out, probe, dnsNames)
+        // v0.8.2: секция camouflage — опциональна; битый id = битый манифест
+        var camo: Camouflage? = null
+        val camoObj = root.optJSONObject("camouflage")
+        if (camoObj != null) {
+            val camoId = normalizeId(camoObj.optString("id", ""))
+            if (camoId.isEmpty()) throw ManifestException("мусорный id модуля camouflage")
+            camo = Camouflage(
+                id = camoId,
+                name = camoObj.optString("name", camoId).trim().ifEmpty { camoId },
+                ver = sanitizeVer(camoObj.optString("ver", "")),
+                enabled = if (camoObj.has("enabled")) camoObj.optBoolean("enabled", true) else true,
+                minIntervalSec = camoObj.optInt("min_interval_sec", 0),
+                maxIntervalSec = camoObj.optInt("max_interval_sec", 0),
+                maxBytesPerDay = camoObj.optInt("max_bytes_per_day", 0),
+            )
+        }
+        return Manifest(version, out, probe, dnsNames, camo)
     }
 
     /**
@@ -151,5 +180,11 @@ object Modules {
     fun apply(m: Manifest) {
         val ids = m.enabledProtocolIds()
         RrpProtocols.applyRegistryFull(ids, m.version, m.protocolLabels(), m.protocolVers())
+        // v0.8.2: камуфляж из того же манифеста (или «выкл», если секции нет)
+        val c = m.camouflage
+        RrpProtocols.applyCamouflage(
+            if (c == null) Apimask.Config.disabled()
+            else Apimask.Config(c.id, c.name, c.ver, c.enabled, c.minIntervalSec, c.maxIntervalSec, c.maxBytesPerDay),
+        )
     }
 }

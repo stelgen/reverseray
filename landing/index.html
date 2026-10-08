@@ -16,12 +16,19 @@
 
 <header class="hero">
   <p class="badge">RRP/1 · TLS 1.3 · minSdk 14 · zero third-party SDK</p>
+  <p style="opacity:.7;font-size:13px;margin:0 0 6px">«Никакой свободы врагам свободы» — (С) Кровосток</p>
   <h1>ReverseRay — прокси, выходящий через ваше Android-устройство</h1>
   <p class="lead">
     Исходящий трафик идёт с IP вашего устройства — домашней или мобильной сети.
     Go-сервер на VPS принимает SOCKS5/HTTP и проталкивает его через RRP/1-туннель
     на Android-клиент, который сам диалит цель. NAT и серый IP больше не проблема:
     соединение инициирует телефон.
+  </p>
+  <p class="lead" style="opacity:.85">
+    Миссия — ультимативное решение для приватного бесплатного хостинга собственного
+    прокси: покупать VPN не нужно, интернет и связь уже есть у каждого. Только
+    легитимное личное использование; ничего не делаем скрытно — каждое действие
+    видно в статусах и логах.
   </p>
   <p class="cta">
     <a class="btn" href="https://github.com/stelgen/reverseray">GitHub →</a>
@@ -50,6 +57,10 @@
     <article class="card">
       <h3>🪶 Лёгкий APK</h3>
       <p>minSdk 14, universal APK, ноль сторонних SDK кроме BC и zxing (QR-enrollment). Foreground-сервис, автостарт, reconnect с backoff.</p>
+    </article>
+    <article class="card">
+      <h3>🎭 API Mask</h3>
+      <p>Модуль камуфляжа (v0.8.2): фоновый обмен внутри туннеля выглядит как API бизнес-приложения. Ноль внешних хостов, суточный бюджет, каждый обмен виден в консоли.</p>
     </article>
   </section>
 

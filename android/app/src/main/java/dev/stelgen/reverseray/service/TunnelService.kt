@@ -22,6 +22,7 @@ import android.os.PowerManager
 import android.util.Log
 import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.R
+import dev.stelgen.reverseray.core.Apimask
 import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
@@ -549,9 +550,29 @@ class TunnelService : Service() {
             deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
             transport = cfg.transport,
             agentName = "ReverseRay-Android/" + appVersion(),
+            noisePolicy = buildNoisePolicy(),
             protoId = proto,
             validateProbeTarget = if (validate) prefs().getString(KEY_PROBE_TARGET, DEFAULT_PROBE_TARGET) else null,
         )
+    }
+
+    /**
+     * v0.8.2: политика шума камуфляжа «API Mask» из ОБЩЕГО манифеста
+     * (включён манифестом + подтверждён сервером в READY). Шаблоны строк
+     * лога — на языке приложения (ресурсы), честно: сколько байт, бюджет.
+     */
+    private fun buildNoisePolicy(): Apimask.NoisePolicy? {
+        val cfg = RrpProtocols.camouflageConfig()
+        if (!cfg.enabled) return null
+        val engine = Apimask.Engine(cfg)
+        val label = RrpProtocols.camouflageLabel()
+        return Apimask.NoisePolicy(engine) { bytes, used, budget ->
+            if (bytes > 0) {
+                getString(R.string.apimask_beat, label, bytes, fmtBytes(used), fmtBytes(budget.toLong()))
+            } else {
+                getString(R.string.apimask_budget_done, label, fmtBytes(used), fmtBytes(budget.toLong()))
+            }
+        }
     }
 
     private fun appVersion(): String = try {
@@ -582,6 +603,7 @@ class TunnelService : Service() {
                 deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
                 transport = cfg.transport,
                 agentName = "ReverseRay-Android/" + appVersion(),
+                noisePolicy = buildNoisePolicy(),
                 protoId = useProto,
             )
             r.client = client

@@ -97,11 +97,13 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- вкладки ----------
     private lateinit var tabLayout: TabLayout
-    private lateinit var pageHome: LinearLayout
-    private lateinit var pageLink: LinearLayout
-    private lateinit var pageUpdate: LinearLayout
-    private lateinit var pageLog: LinearLayout
-    private lateinit var pageSettings: LinearLayout
+    // v0.8.2: каждая вкладка — ScrollView (контент листается ВСЕГДА,
+    // включая ландшафт и крупные шрифты — UX-канон скроллинга)
+    private lateinit var pageHome: View
+    private lateinit var pageLink: View
+    private lateinit var pageUpdate: View
+    private lateinit var pageLog: View
+    private lateinit var pageSettings: View
 
     // ---------- главная ----------
     private lateinit var bigButton: MaterialButton
@@ -245,6 +247,23 @@ class MainActivity : AppCompatActivity() {
         // v0.8: применить сохранённые модули до сборки UI (реестр протоколов)
         loadCachedModules()
         buildUi()
+        // v0.8.2: журнал обновлений льётся в консоль СРАЗУ (реалтайм),
+        // а не только при перерендере вкладки
+        UpdateLogger.onLine = { line ->
+            runOnUiThread {
+                updateConsole.append(
+                    StatusConsole.Line(
+                        line.text,
+                        when (line.kind) {
+                            LogKind.OK -> StatusConsole.Role.OK
+                            LogKind.WARN -> StatusConsole.Role.WARN
+                            LogKind.ERR -> StatusConsole.Role.ERR
+                            else -> StatusConsole.Role.INFO
+                        },
+                    )
+                )
+            }
+        }
         renderServiceLogs()
         refreshVersionRow()
         refreshAppPanel()
@@ -287,6 +306,11 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             )
+            // UX-канон: 5 вкладок — скроллируемые (текст не сжимается на узких
+            // экранах), индикатор по ширине текста (современный M3-вид)
+            tabMode = TabLayout.MODE_SCROLLABLE
+            tabGravity = TabLayout.GRAVITY_START
+            isTabIndicatorFullWidth = false
             addTab(newTab().setText(R.string.tab_home))
             addTab(newTab().setText(R.string.tab_link))
             addTab(newTab().setText(R.string.tab_update))
@@ -338,6 +362,22 @@ class MainActivity : AppCompatActivity() {
         setPadding(dp(16), dp(12), dp(16), dp(16))
     }
 
+    /**
+     * v0.8.2 (UX-канон): оборачивает содержимое вкладки в ScrollView —
+     * ЛЮБАЯ вкладка скроллится, когда контент не влезает (портрет/ландшафт,
+     * крупные шрифты). fillViewport — фон тянется до низа без «рваных» краёв.
+     */
+    private fun scrollWrap(content: LinearLayout): View = android.widget.ScrollView(this).apply {
+        isFillViewport = true
+        isVerticalScrollBarEnabled = true
+        addView(
+            content,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+    }
+
     private fun card(content: LinearLayout): MaterialCardView = MaterialCardView(this).apply {
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -385,7 +425,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Вкладка 1: Главная ----------
 
-    private fun buildHomePage(): LinearLayout {
+    private fun buildHomePage(): View {
         val p = page()
 
         p.addView(ImageView(this).apply {
@@ -501,6 +541,7 @@ class MainActivity : AppCompatActivity() {
         // Единое консольное окно статуса (листается, live-кнопка в баре)
         homeConsole = StatusConsole(this).apply {
             setTitle(getString(R.string.console_title_service))
+            setBodyHeight(210)
         }
         p.addView(homeConsole)
 
@@ -510,12 +551,12 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF6B7280.toInt())
         })
         p.addView(usageViews.last())
-        return p
+        return scrollWrap(p)
     }
 
     // ---------- Вкладка 2: Связь ----------
 
-    private fun buildLinkPage(): LinearLayout {
+    private fun buildLinkPage(): View {
         val p = page()
         p.addView(TextView(this).apply {
             setText(R.string.link_tab_hint)
@@ -523,13 +564,15 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(4), 0, dp(4))
         })
 
-        // Окно ссылки в стиле «О устройстве»: статус + поле + Очистить
+        // Окно ссылки в стиле «О устройстве»: статус + поле + Очистить.
+        // Статус скрыт, пока пуст (v0.8.2: никаких «пустых полей» на вкладке)
         val linkCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         linkCard.addView(sectionTitle(R.string.config_hint_title, null))
         linkStatusView = TextView(this).apply {
             textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(2), 0, dp(4))
+            visibility = View.GONE
         }
         linkCard.addView(linkStatusView)
         val layout = TextInputLayout(this).apply {
@@ -628,12 +671,12 @@ class MainActivity : AppCompatActivity() {
             )
         )
         p.addView(card(shareCard))
-        return p
+        return scrollWrap(p)
     }
 
     // ---------- Вкладка 3: Обновление ----------
 
-    private fun buildUpdatePage(): LinearLayout {
+    private fun buildUpdatePage(): View {
         val p = page()
         versionView = TextView(this).apply {
             textSize = 14f
@@ -655,19 +698,22 @@ class MainActivity : AppCompatActivity() {
         })
         p.addView(card(modulesCard))
 
-        val autoSwitch = SwitchMaterial(this).apply {
-            setText(R.string.update_auto)
-            isChecked = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
-            setOnCheckedChangeListener { _, checked ->
-                val old = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
-                if (old != checked) {
-                    prefs().edit().putBoolean(TunnelService.KEY_AUTO_UPDATE, checked).apply()
-                    TunnelService.logSettingChange(getString(R.string.set_auto_update), old.toString(), checked.toString())
-                    renderServiceLogs()
+        // Авто-проверка — в карточке (UX-канон: единый вид всех переключателей)
+        p.addView(card(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(SwitchMaterial(this@MainActivity).apply {
+                setText(R.string.update_auto)
+                isChecked = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
+                setOnCheckedChangeListener { _, checked ->
+                    val old = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
+                    if (old != checked) {
+                        prefs().edit().putBoolean(TunnelService.KEY_AUTO_UPDATE, checked).apply()
+                        TunnelService.logSettingChange(getString(R.string.set_auto_update), old.toString(), checked.toString())
+                        renderServiceLogs()
+                    }
                 }
-            }
-        }
-        p.addView(autoSwitch)
+            })
+        }))
 
         p.addView(
             row(
@@ -680,14 +726,15 @@ class MainActivity : AppCompatActivity() {
         // Журнал обновления/модулей — ТО ЖЕ консольное окно и формат, что на главной
         updateConsole = StatusConsole(this).apply {
             setTitle(getString(R.string.console_title_update))
+            setBodyHeight(240)
         }
         p.addView(updateConsole)
-        return p
+        return scrollWrap(p)
     }
 
     // ---------- Вкладка 4: Лог ----------
 
-    private fun buildLogPage(): LinearLayout {
+    private fun buildLogPage(): View {
         val p = page()
         p.addView(TextView(this).apply {
             setText(R.string.logs_title)
@@ -697,6 +744,7 @@ class MainActivity : AppCompatActivity() {
         })
         logConsole = StatusConsole(this).apply {
             setTitle(getString(R.string.console_title_service))
+            setBodyHeight(280)
         }
         p.addView(logConsole)
         p.addView(
@@ -705,12 +753,12 @@ class MainActivity : AppCompatActivity() {
                 outlined(R.string.log_share).apply { setOnClickListener { shareServiceLog() } },
             )
         )
-        return p
+        return scrollWrap(p)
     }
 
     // ---------- Вкладка 5: Настройки ----------
 
-    private fun buildSettingsPage(): LinearLayout {
+    private fun buildSettingsPage(): View {
         val p = page()
 
         // Тема (v0.8.1): авто (настройка телефона; на старых Android — чёрная) / тёмная / светлая
@@ -779,12 +827,6 @@ class MainActivity : AppCompatActivity() {
                         renderServiceLogs()
                     }
                 }
-            })
-            addView(TextView(this@MainActivity).apply {
-                setText(R.string.set_autoreconnect_hint)
-                textSize = 11f
-                setTextColor(0xFF6B7280.toInt())
-                setPadding(0, dp(2), 0, 0)
             })
         }))
 
@@ -914,11 +956,6 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
             setTypeface(typeface, Typeface.BOLD)
         })
-        probe.addView(TextView(this).apply {
-            setText(R.string.set_probe_hint)
-            textSize = 12f
-            setTextColor(0xFF6B7280.toInt())
-        })
         val probeEdit = EditText(this).apply {
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setText(prefs().getString(TunnelService.KEY_PROBE_TARGET, TunnelService.DEFAULT_PROBE_TARGET))
@@ -943,12 +980,11 @@ class MainActivity : AppCompatActivity() {
             }
         })
         p.addView(card(probe))
-        return p
+        return scrollWrap(p)
     }
 
     /**
-     * v0.8.1: карта «Тема» — авто (настройка телефона; на старых Android,
-     * где системной тёмной темы нет, авто = чёрная) / тёмная / светлая.
+     * v0.8.1: карта «Тема» — авто / тёмная / светлая (применяется сразу).
      */
     private fun buildThemeCard(): LinearLayout {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -956,12 +992,6 @@ class MainActivity : AppCompatActivity() {
             setText(R.string.set_theme_title)
             textSize = 14f
             setTypeface(typeface, Typeface.BOLD)
-        })
-        box.addView(TextView(this).apply {
-            setText(R.string.set_theme_hint)
-            textSize = 12f
-            setTextColor(0xFF6B7280.toInt())
-            setPadding(0, dp(2), 0, dp(4))
         })
         val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val bAuto = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
@@ -1150,8 +1180,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setLinkStatus(okText: String?) {
-        linkStatusView.text = okText ?: ""
-        linkStatusView.setTextColor(if (okText == null) 0xFF6B7280.toInt() else 0xFF2E7D32.toInt())
+        // v0.8.2: пустой статус НЕ занимает место — никаких «пустых полей»
+        if (okText == null) {
+            linkStatusView.visibility = View.GONE
+            return
+        }
+        linkStatusView.visibility = View.VISIBLE
+        linkStatusView.text = okText
+        linkStatusView.setTextColor(0xFF2E7D32.toInt())
     }
 
     /** Очистить поле — только с подтверждением (канон UX v0.8). */
@@ -1446,7 +1482,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshUpdateConsole() {
-        val lines = UpdateLogger.snapshot().map { StatusConsole.Line(it, StatusConsole.Role.INFO) }
+        // v0.8.2: строки журнала обновлений несут цветовую роль (как в консоли туннеля)
+        val lines = UpdateLogger.snapshot().map { l ->
+            StatusConsole.Line(
+                l.text,
+                when (l.kind) {
+                    LogKind.OK -> StatusConsole.Role.OK
+                    LogKind.WARN -> StatusConsole.Role.WARN
+                    LogKind.ERR -> StatusConsole.Role.ERR
+                    else -> StatusConsole.Role.INFO
+                },
+            )
+        }
         updateConsole.render(lines)
     }
 
@@ -1469,7 +1516,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun syncModulesAsync(force: Boolean) {
         val url = Modules.DEFAULT_URL
-        UpdateLogger.add("модули: проверяю ${url.substringAfterLast('/')}")
+        UpdateLogger.add(getString(R.string.upd_modules_check, url.substringAfterLast('/')))
         Thread {
             try {
                 val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -1480,6 +1527,7 @@ class MainActivity : AppCompatActivity() {
                 if (conn.responseCode != 200) {
                     throw Modules.ManifestException("HTTP ${conn.responseCode}")
                 }
+                UpdateLogger.add(getString(R.string.upd_modules_http, conn.responseCode))
                 val len = conn.contentLengthLong
                 var total = 0L
                 var lastPct = -10
@@ -1505,11 +1553,18 @@ class MainActivity : AppCompatActivity() {
                 }
                 conn.disconnect()
                 val body = baos.toString("UTF-8")
+                UpdateLogger.add(getString(R.string.upd_modules_received, fmtBytes(total)))
                 val m = Modules.parse(body)
+                UpdateLogger.add(
+                    getString(
+                        R.string.upd_modules_parsed, m.version,
+                        m.enabledProtocolIds().joinToString(", ") { RrpProtocols.labelWithVer(it) },
+                    ),
+                )
                 // даунгрейд запрещён (как на сервере)
                 val current = RrpProtocols.registryVersion()
                 if (current.isNotEmpty() && Modules.versionCompare(m.version, current) < 0) {
-                    UpdateLogger.add("модули: у сервера старее (${m.version} < $current) — не применяю")
+                    UpdateLogger.add(getString(R.string.upd_modules_older, m.version, current), LogKind.WARN)
                     refreshUpdateConsoleSafe()
                     return@Thread
                 }
@@ -1518,20 +1573,26 @@ class MainActivity : AppCompatActivity() {
                     .digest(body.toByteArray(Charsets.UTF_8))
                     .joinToString("") { String.format(Locale.US, "%02x", it) }
                 if (!force && m.version == current && hash == cachedHash) {
-                    UpdateLogger.add(getString(R.string.modules_up_to_date))
+                    UpdateLogger.add(getString(R.string.modules_up_to_date), LogKind.OK)
                     refreshUpdateConsoleSafe()
                     return@Thread
                 }
                 Modules.apply(m)
                 File(filesDir, "modules.json").writeText(body)
                 prefs().edit().putString(KEY_MODULES_HASH, hash).apply()
-                UpdateLogger.add(getString(R.string.modules_applied, m.version, m.enabledProtocolIds().joinToString(", ") { RrpProtocols.labelWithVer(it) }))
+                UpdateLogger.add(
+                    getString(
+                        R.string.modules_applied, m.version,
+                        m.enabledProtocolIds().joinToString(", ") { RrpProtocols.labelWithVer(it) },
+                    ),
+                    LogKind.OK,
+                )
                 runOnUiThread {
                     refreshModulesInfo()
                     refreshProtoLine()
                 }
             } catch (e: Exception) {
-                UpdateLogger.add(getString(R.string.modules_failed, e.message ?: "?"))
+                UpdateLogger.add(getString(R.string.modules_failed, e.message ?: "?"), LogKind.ERR)
             }
             refreshUpdateConsoleSafe()
         }.apply { isDaemon = true }.start()
@@ -1570,17 +1631,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkForUpdateAsync(showIfUpToDate: Boolean) {
         val current = currentVersion()
-        UpdateLogger.add("проверка обновлений: текущая версия $current")
+        UpdateLogger.add(getString(R.string.upd_check_start, current))
         refreshUpdateConsoleSafe()
         Thread {
             val info = UpdateChecker().check(current)
             if (info == null) {
-                UpdateLogger.add("обновлений нет (или GitHub недоступен)")
+                UpdateLogger.add(getString(R.string.upd_check_none))
                 if (showIfUpToDate) {
                     runOnUiThread { Toast.makeText(this, R.string.update_latest, Toast.LENGTH_SHORT).show() }
                 }
             } else {
-                UpdateLogger.add("доступно: ${info.latestTag} → ${info.apkUrl.substringAfterLast('/')}")
+                UpdateLogger.add(getString(R.string.upd_check_available, info.latestTag, info.apkUrl.substringAfterLast('/')), LogKind.OK)
+                if (info.sumsUrl.isNotEmpty()) {
+                    UpdateLogger.add(getString(R.string.upd_sums_found))
+                } else {
+                    UpdateLogger.add(getString(R.string.upd_sums_missing), LogKind.WARN)
+                }
                 runOnUiThread {
                     refreshUpdateConsole()
                     MaterialAlertDialogBuilder(this)
@@ -1598,7 +1664,7 @@ class MainActivity : AppCompatActivity() {
     private fun downloadUpdate(info: UpdateInfo) {
         val dir = File(cacheDir, "apk").apply { mkdirs() }
         val dest = File(dir, "update-${info.latestTag}.apk")
-        UpdateLogger.add("скачивание ${info.latestTag}…")
+        UpdateLogger.add(getString(R.string.upd_dl_start, info.latestTag))
         Thread {
             try {
                 val conn = java.net.URL(info.apkUrl).openConnection() as java.net.HttpURLConnection
@@ -1637,21 +1703,21 @@ class MainActivity : AppCompatActivity() {
                 val verifyErr = checker.verifyApk(dest, sums)
                 if (verifyErr != null) {
                     dest.delete()
-                    UpdateLogger.add("верификация: $verifyErr")
+                    UpdateLogger.add(getString(R.string.upd_verify_fail, verifyErr), LogKind.ERR)
                     runOnUiThread {
                         refreshUpdateConsole()
                         Toast.makeText(this, getString(R.string.update_error, "SHA256 mismatch"), Toast.LENGTH_LONG).show()
                     }
                     return@Thread
                 }
-                UpdateLogger.add("верификация: SHA256 совпал (${fmtBytes(dest.length())}) → установка")
-                UpdateLogger.add("скачано: ${dest.name} (${fmtBytes(dest.length())}) → установка")
+                UpdateLogger.add(getString(R.string.upd_dl_done, dest.name, fmtBytes(dest.length())))
+                UpdateLogger.add(getString(R.string.upd_verify_ok, fmtBytes(dest.length())), LogKind.OK)
                 runOnUiThread {
                     refreshUpdateConsole()
                     installApk(dest)
                 }
             } catch (e: Exception) {
-                UpdateLogger.add("ошибка скачивания: ${e.message}")
+                UpdateLogger.add(getString(R.string.upd_dl_error, e.message ?: "?"), LogKind.ERR)
                 runOnUiThread {
                     refreshUpdateConsole()
                     Toast.makeText(this, getString(R.string.update_error, e.message ?: ""), Toast.LENGTH_LONG).show()
@@ -1670,7 +1736,7 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
-            UpdateLogger.add("установка не начата: нет установщика APK")
+            UpdateLogger.add(getString(R.string.upd_install_no_installer), LogKind.WARN)
             Toast.makeText(this, R.string.update_error, Toast.LENGTH_SHORT).show()
         }
     }
@@ -1767,6 +1833,12 @@ class MainActivity : AppCompatActivity() {
         // v0.8.1: версия текущего протокола (или пусто, если версии нет — канон)
         val pver = RrpProtocols.ver(currentProto)
         infoRow(appInfoBox, getString(R.string.app_proto_ver_row), pver.ifEmpty { "—" })
+        // v0.8.2: модуль камуфляжа «API Mask» — версия и статус, честно
+        val camo = RrpProtocols.camouflageConfig()
+        infoRow(
+            appInfoBox, getString(R.string.app_camo_row),
+            if (camo.enabled) RrpProtocols.camouflageLabel() else getString(R.string.app_camo_off),
+        )
         // v0.8.1: срок действия серверного TLS-сертификата (если видели рукопожатие)
         val certMs = RrpClient.lastServerCertNotAfterMs
         if (certMs > 0) {

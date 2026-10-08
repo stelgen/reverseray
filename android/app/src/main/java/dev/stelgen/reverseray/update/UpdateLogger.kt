@@ -1,25 +1,31 @@
 package dev.stelgen.reverseray.update
 
-import android.content.Intent
+import dev.stelgen.reverseray.service.LogKind
 
 /**
- * Технический журнал обновлений для вкладки «Обновление» (то же окно, что
- * и лог трафика на главной, — только про обновление: ссылки, версии, ошибки).
+ * Технический журнал обновлений для вкладки «Обновление» (то же окно и
+ * формат, что и лог туннеля на главной). v0.8.2:
+ *  - строки несут цветовую роль (как в едином консольном окне);
+ *  - слушатель onLine отдаёт строку СРАЗУ в консоль (реалтайм), а не
+ *    только при следующем полном перерендере вкладки.
  */
 object UpdateLogger {
 
-    private val lines = ArrayDeque<String>()
+    class Line(val text: String, val kind: LogKind = LogKind.INFO)
 
-    /** Слушатель для UI (вызывается на добавление строки). */
-    @Volatile var onLine: ((String) -> Unit)? = null
+    private val lines = ArrayDeque<Line>()
 
-    fun add(line: String) {
+    /** Слушатель для UI (вызывается на добавление строки; UI сам решает поток). */
+    @Volatile var onLine: ((Line) -> Unit)? = null
+
+    fun add(line: String, kind: LogKind = LogKind.INFO) {
+        val l = Line(line, kind)
         synchronized(lines) {
-            lines.addFirst(line)
+            lines.addFirst(l)
             while (lines.size > 200) lines.removeLast()
         }
-        onLine?.invoke(line)
+        onLine?.invoke(l)
     }
 
-    fun snapshot(): List<String> = synchronized(lines) { lines.toList() }
+    fun snapshot(): List<Line> = synchronized(lines) { lines.toList() }
 }
