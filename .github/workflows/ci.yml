@@ -108,7 +108,9 @@ jobs:
           curl -fsS --max-time 5 http://127.0.0.1:9090/healthz || { echo "::error::healthz недоступен"; docker compose logs --tail 50 reverseray; exit 1; }
           echo "compose smoke healthy"
           docker compose down -v
-          rm -rf state
+          # state писался контейнером от root (canon user 0:0 для bind-маунта) —
+          # у раннера нет прав на rm без sudo (CI #70); sudo на раннерах парольless
+          sudo rm -rf state
       - name: Upload compose smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v6
