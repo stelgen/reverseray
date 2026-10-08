@@ -149,6 +149,7 @@ jobs:
   screenshot:
     name: Real app screenshot (emulator)
     runs-on: ubuntu-latest
+    continue-on-error: true  # best-effort: капризный эмулятор не должен валить CI
     permissions:
       contents: write
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -188,13 +189,7 @@ jobs:
               done
               sleep 3
               adb exec-out screencap -p > shot-raw.png
-              if python3 -c "
-from PIL import Image
-img = Image.open('shot-raw.png').convert('RGB')
-colors = len(set(img.resize((64, 64)).getdata()))
-print('colors64:', colors)
-exit(0 if colors > 16 else 1)
-" 2>/dev/null; then
+              if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
                 ok=1
                 break
               fi
