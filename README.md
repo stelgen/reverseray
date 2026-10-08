@@ -12,7 +12,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-102%20Go%20%2B%20119%20JVM-2E7D32">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-102%20Go%20%2B%20118%20JVM-2E7D32">
   <img alt="Security" src="https://img.shields.io/badge/WAN--hardening-antiscan%20%2B%20tarpit-8B0000">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
   <a href="https://github.com/stelgen/reverseray/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/stelgen/reverseray?style=social"></a>
@@ -29,7 +29,7 @@
 <p align="center">
   <img src="assets/brand/screenshot.png" alt="Реальный интерфейс приложения (авто-рендер CI)" width="280"/>
 </p>
-<p align="center"><sub>Скриншот — РЕАЛЬНЫЙ рендер APK: его делает CI-робот через ScreenshotTest,
+<p align="center"><sub>Скриншот — РЕАЛЬНЫЙ рендер APK: его делает CI-робот: Android-эмулятор + adb screencap,
 никаких «картинок в Paint».</sub></p>
 
 ---
@@ -230,7 +230,7 @@ assets/brand/              Брендинг + РЕАЛЬНЫЙ скриншот 
 | Робот | Что делает |
 |---|---|
 | `go` | gofmt/vet/test-race/coverage — 102 теста |
-| `android` | сборка + 119 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto) |
+| `android` | сборка + 118 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto) |
 | `modules` | канон-чек манифеста + парсеры обеих сторон согласны |
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |

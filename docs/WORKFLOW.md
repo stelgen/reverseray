@@ -19,7 +19,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | Джоба | Содержание |
 |---|---|
 | Go test/vet/fmt | gofmt, vet, `test -race`, coverage (102 теста) |
-| Android build | assembleDebug + unit-тесты (119, Robolectric 21/31, JVM-изоляция) |
+| Android build | assembleDebug + unit-тесты (118, Robolectric 21/31, JVM-изоляция) |
 | Docker smoke | сборка образа, healthcheck-бинарь |
 | Brand assets | перегенерация + сверка с закоммиченным (+ живой banner.gif, реальный скриншот) |
 | Gitleaks | скан секретов (каждый push/PR) |
@@ -27,7 +27,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | **Modules integrity (v0.8)** | канон-чек `modules/modules.json` + тесты парсеров обеих сторон (Go+Kotlin) |
 | **Privacy audit (v0.8)** | скрипт `scripts/privacy_audit.py`: ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных/токенов в доках |
 | **Govulncheck (v0.8)** | известные уязвимости stdlib/зависимостей |
-| **Screenshot bot (v0.8)** | РЕАЛЬНЫЙ рендер APK (Robolectric ScreenshotTest) → коммит `assets/brand/screenshot.png` на main |
+| **Screenshot bot (v0.8)** | РЕАЛЬНЫЙ рендер APK (Robolectric эмулятор adb screencap) → коммит `assets/brand/screenshot.png` на main |
 | CodeQL | стат-анализ безопасности |
 
 ## Политики канона (v0.8)

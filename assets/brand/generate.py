@@ -4,7 +4,7 @@
 Deterministic generation of every visual asset:
   - og-image.png      1600x640 banner (black, wordmark, emblem, tagline)
   - banner.gif        1600x400 ДИНАМИЧЕСКИЙ баннер (пульс-кольцо + бегущий трафик)
-  - screenshot.png    720x1440 — РЕАЛЬНЫЙ рендер APK (кладёт CI-робот из ScreenshotTest;
+  - screenshot.png    720x1440 — РЕАЛЬНЫЙ рендер APK (кладёт CI-робот из эмулятор, adb screencap;
                       app-mock.png — мокап-референс генератора)
   - logo-512.png / favicon-32.png / favicon-64.png / logo.svg
   - android res/: launcher icons (mdpi..xxxhdpi) + notification glyph
@@ -332,7 +332,7 @@ def write_all() -> list[str]:
     og = banner()
     save(og, "assets/brand/og-image.png")
     # v0.8: мокап — только как референс; РЕАЛЬНЫЙ скриншот кладёт CI-робот
-    # (ScreenshotTest рендерит MainActivity), генератор его НЕ перезаписывает.
+    # (эмулятор, adb screencap рендерит MainActivity), генератор его НЕ перезаписывает.
     save(app_mock(), "assets/brand/app-mock.png")
     # динамический баннер главной страницы
     gif_path = os.path.join(BRAND_DIR, "banner.gif")
