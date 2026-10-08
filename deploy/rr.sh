@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# ReverseRay rr.sh — автопилот деплоя (v0.7.2+)
+# ReverseRay rr.sh — автопилот деплоя (v0.8.3+)
 #
 # Запусти из ЛЮБОГО каталога — рядом появится подпапка reverseray/ со всем
 # нужным (compose, state, .env). Скрипт сам решает: свежая установка,
 # обновление версии или (по флагу) обнуление состояния — и в конце печатает
 # готовую строку подключения для приложения.
 #
+# v0.8.3: ПРЕДФЛАЙТ и самопроверки — скрипт не молчит и не падает невнятно:
+#   - проверка нужных файлов/команд (curl, docker compose) и прав на каталог;
+#   - целостность скачанного compose.yaml (не HTML-мусор от прокси);
+#   - проверка, что образ реально скачался (docker image inspect);
+#   - ожидание healthcheck через docker inspect + РАННИЙ выход с диагностикой
+#     (docker logs), если контейнер умер до healthy;
+#   - внятный итог: строка подключения, Xray-outbound, веб-морда, диагностика.
+#
 # Использование:
 #   sudo bash rr.sh                     # деплой/обновление до последнего релиза
-#   sudo bash rr.sh --tag v0.7.2        # конкретная версия
+#   sudo bash rr.sh --tag v0.8.3        # конкретная версия
 #   sudo bash rr.sh --reset             # обнулить состояние (токены/CA) и пере-enroll
 #   curl -fsSL <raw>/deploy/rr.sh -o rr.sh && sudo bash rr.sh
 #
@@ -33,6 +41,10 @@ done
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf '!!  %s\n' "$*"; }
 die()  { printf 'XX  %s\n' "$*"; exit 1; }
+
+# --- preflight: нужные команды (curl обязателен ещё до docker-проверок) ---
+require_cmd() { command -v "$1" >/dev/null 2>&1 || die "нет команды '$1' — установи её и повтори (см. README)"; }
+require_cmd curl
 
 # --- docker: с sudo или без ---
 DC="docker compose"
@@ -59,8 +71,9 @@ fi
 [ -n "$TAG" ] || TAG="$DEFAULT_TAG"
 log "Версия: $TAG"
 
-# --- целевой каталог (относительный) ---
-mkdir -p "$DEST/state"
+# --- целевой каталог (относительный) + права ---
+mkdir -p "$DEST/state" 2>/dev/null || die "не могу создать каталог $DEST/state (нет прав? запусти с sudo)"
+[ -w "$DEST" ] || [ -n "$SUDO" ] || die "каталог $DEST не доступен на запись — запусти с sudo"
 cd "$DEST"
 STATE="$PWD/state"
 MARKER="$STATE/.enrolled"
@@ -72,63 +85,78 @@ if [ "$DO_RESET" = "1" ]; then
   $SUDO rm -rf "${STATE:?}/"* "$MARKER" 2>/dev/null || true
 fi
 
-# --- compose.yaml: есть/обновить/скачать ---
-if [ -f compose.yaml ]; then
-  log "compose.yaml найден — режим обновления"
-else
-  log "compose.yaml отсутствует — свежая установка"
-fi
+# --- compose.yaml: скачать + ПРОВЕРИТЬ целостность ---
+log "Скачиваю compose.yaml (тег $TAG)…"
 RAW="https://raw.githubusercontent.com/stelgen/reverseray/${TAG}/compose.yaml"
 curl -fsSL --max-time 20 "$RAW" -o compose.yaml.new || die "не удалось скачать compose.yaml ($RAW)"
+# Целостность: манифест обязан содержать наш сервис, healthcheck и порт-маппинг.
+# Ловим типовую беду «прокси вернул HTML-страницу вместо файла».
+grep -q '^services:' compose.yaml.new        || die "compose.yaml.new не похож на манифест (нет services:) — прокси/сеть вернули мусор"
+grep -q 'reverseray:' compose.yaml.new       || die "compose.yaml.new не содержит сервис reverseray — мусор вместо манифеста"
+grep -q 'healthcheck:' compose.yaml.new      || die "compose.yaml.new без healthcheck — мусор вместо манифеста"
+grep -q 'ghcr.io/stelgen/reverseray' compose.yaml.new || die "compose.yaml.new без образа ghcr.io/stelgen/reverseray — мусор вместо манифеста"
 mv compose.yaml.new compose.yaml
+log "compose.yaml целостный ✔"
 
 printf 'RR_IMAGE_TAG=%s\nRR_SOCKS_PORT=1080\nRR_TUNNEL_PORT=4433\nRR_METRICS_PORT=9090\nRR_METRICS_BIND=%s\nRR_PROTOCOL=%s\nRR_HARDENING=true\nRR_MODULES_AUTO=true\nRR_MODULES_CHECK_HOURS=24\nRR_RESTART_DELAY=30\nRR_RESTART_MAX=20\n' \
   "$TAG" \
   "$([ "$UI_LAN" = "1" ] && echo 0.0.0.0 || echo 127.0.0.1)" \
   "${RR_PROTOCOL:-rrp1}" > .env
 
-# --- pull + up ---
+# --- pull + ПРОВЕРКА, что образ реально на месте ---
 log "Тяну образ ${IMAGE_REPO}:${TAG}…"
-run pull >/dev/null 2>&1 || warn "pull не прошёл (offline?) — попробую запустить то, что есть локально"
+run pull || warn "pull не прошёл (offline?) — попробую запустить то, что есть локально"
+$SUDO docker image inspect "${IMAGE_REPO}:${TAG}" >/dev/null 2>&1 \
+  || die "образ ${IMAGE_REPO}:${TAG} не найден локально после pull — проверь сеть/тег (registry ghcr.io)"
+
+# --- up ---
 run up -d || die "docker compose up -d не удался (см. вывод выше)"
 
-# --- здоровье ---
+# --- здоровье: docker inspect + РАННИЙ выход при смерти контейнера ---
 log "Жду healthcheck…"
 ok=""
-for i in $(seq 1 30); do
-  st=$(run ps --format '{{.Health}}' reverseray 2>/dev/null | head -1)
+for i in $(seq 1 45); do
+  st=$($SUDO docker inspect --format '{{.State.Health.Status}}' reverseray 2>/dev/null || echo unknown)
   if [ "$st" = "healthy" ]; then ok=1; break; fi
+  cstate=$($SUDO docker inspect --format '{{.State.Status}}' reverseray 2>/dev/null || echo unknown)
+  if [ "$cstate" = "exited" ]; then
+    warn "Контейнер УМЕР до healthy — не жду таймаут, диагностика:"
+    break
+  fi
   sleep 2
 done
 if [ -z "$ok" ]; then
-  warn "Контейнер не healthy за 60 с — последние логи:"
-  run logs --tail 20 reverseray || true
-  die "Если проблема в состоянии — запусти: sudo bash rr.sh --reset"
+  warn "Состояние контейнера:"
+  $SUDO docker ps -a --filter name=reverseray --format 'table {{.Names}}\t{{.Status}}' 2>/dev/null || true
+  warn "Последние логи:"
+  run logs --tail 60 reverseray || true
+  warn " governor FATAL в логах → состояние сломано: sudo bash rr.sh --reset"
+  warn " exec /bin/busybox в логах   → старый образ с багом v0.8.2: обнови тег (v0.8.3+)"
+  die "сервер не поднялся (не healthy)"
 fi
-log "Контейнер healthy"
+log "Контейнер healthy ✔"
 
 # --- enroll (идемпотентно: только если ещё не делали) ---
 if [ ! -f "$MARKER" ]; then
   log "Регистрирую устройство phone-1 (enroll)…"
-  run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > /tmp/rr-enroll.out 2>&1 || true
+  ENROLL_OUT="$(mktemp)"
+  run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > "$ENROLL_OUT" 2>&1 || true
   touch "$MARKER" 2>/dev/null || $SUDO touch "$MARKER"
 else
   log "Устройство уже зарегистрировано (state/.enrolled) — токен не меняю"
+  ENROLL_OUT="$(mktemp)"
+  run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > "$ENROLL_OUT" 2>&1 || true
 fi
 
 # --- строка подключения ---
-LINE=""
-if [ -f /tmp/rr-enroll.out ]; then
-  # v0.7.3: строка БЕЗ ведущих пробелов/переносов — новичок копирует как есть
-  LINE=$(grep -o '^rrp://[^[:space:]]*' /tmp/rr-enroll.out | head -1 | tr -d '[:space:]' || true)
-fi
+# v0.7.3: строка БЕЗ ведущих пробелов/переносов — новичок копирует как есть
+LINE=$(grep -o '^rrp://[^[:space:]]*' "$ENROLL_OUT" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+rm -f "${ENROLL_OUT:-/nonexistent}" 2>/dev/null || true
 # LAN-IP хоста (роутер/машина с докером), не IP докер-бриджа — для Xray-аутбаунда
 LAN_IP=$(ip -4 route get 1.0.0.0 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' | head -1)
 [ -n "$LAN_IP" ] || LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -n "$LAN_IP" ] || LAN_IP="<LAN_IP_ХОСТА>"
 if [ -z "$LINE" ]; then
-  # повторный enroll печатает строку, даже если маркер стоит (без записи токена в state не выйдет —
-  # тогда просим enroll вручную)
   warn "Строка не найдена в выводе enroll — попробуй вручную:"
   warn "  $DC exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1"
   exit 0
@@ -159,7 +187,8 @@ fi
 echo " Протокол по умолчанию: RR_PROTOCOL=${RR_PROTOCOL:-rrp1} (мусор → автоматически стабильный rrp1)"
 echo " WAN-hardening: включён (анти-скан/tarpit на туннельном порту; RR_HARDENING)"
 echo " Модули: авто-чек манифеста раз в сутки (RR_MODULES_AUTO; качается только при изменении)"
-echo " Healthcheck: включён; упавший процесс рестартит governor не чаще 1 раза/30 с"
+echo " Healthcheck: включён; governor (в самом бинаре) рестартит не чаще 1 раза/30 с,"
+echo "   20 падений подряд → контейнер умирает с ошибкой (без бесконечного цикла)"
 echo " Обнова (опционально, уровень ХОСТА — ICMP-пинги отвечает ядро, не приложение):"
 echo "   sudo iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 30/min -j ACCEPT"
 echo "   sudo iptables -A INPUT -p icmp --icmp-type echo-request -j DROP"

@@ -43,7 +43,7 @@ jobs:
           go tool cover -func=cover.out | tail -1
 
   docker:
-    name: Docker build (smoke)
+    name: Docker run + healthcheck (real entrypoint)
     runs-on: ubuntu-latest
     needs: go
     steps:
@@ -56,8 +56,56 @@ jobs:
           push: false
           load: true
           tags: "reverseray:ci"
-      - name: Smoke healthcheck binary exists
-        run: docker run --rm --entrypoint /reverseray "reverseray:ci" version
+      # v0.8.3: образ запускается КАК В ПРОДЕ — с родным ENTRYPOINT (governor).
+      # Раньше smoke подменял entrypoint на /reverseray и пропускал поломку
+      # боевого запуска («exec /bin/busybox: no such file or directory»).
+      # Бот ждёт healthcheck до 90 с; упал контейнер/не healthy → красный
+      # прогон с docker logs + inspect в выводе.
+      - name: Run container (real entrypoint) and wait for healthcheck
+        run: |
+          set -euo pipefail
+          docker run -d --name rr-smoke reverseray:ci
+          ok=""
+          for i in $(seq 1 45); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' rr-smoke 2>/dev/null || echo unknown)
+            if [ "$st" = "healthy" ]; then ok=1; break; fi
+            cstate=$(docker inspect --format '{{.State.Status}}' rr-smoke 2>/dev/null || echo unknown)
+            if [ "$cstate" = "exited" ]; then echo "container exited before healthy"; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::Контейнер не стал healthy за 90 с (или умер раньше)"
+            docker ps -a --filter name=rr-smoke || true
+            docker inspect rr-smoke || true
+            docker logs --tail 100 rr-smoke || true
+            exit 1
+          fi
+          echo "container healthy"
+          docker rm -f rr-smoke
+      # Полный путь деплоя rr.sh: родной compose.yaml (state-volume, user 0:0,
+      # cap_drop ALL, healthcheck) на локально собранном образе.
+      - name: Compose smoke (native compose.yaml + healthcheck)
+        run: |
+          set -euo pipefail
+          docker tag reverseray:ci ghcr.io/stelgen/reverseray:ci-smoke
+          RR_IMAGE_TAG=ci-smoke docker compose up -d
+          ok=""
+          for i in $(seq 1 45); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' reverseray 2>/dev/null || echo unknown)
+            if [ "$st" = "healthy" ]; then ok=1; break; fi
+            cstate=$(docker inspect --format '{{.State.Status}}' reverseray 2>/dev/null || echo unknown)
+            if [ "$cstate" = "exited" ]; then echo "compose service exited before healthy"; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::compose-стек не стал healthy за 90 с"
+            docker compose ps || true
+            docker logs --tail 100 reverseray || true
+            exit 1
+          fi
+          curl -fsS --max-time 5 http://127.0.0.1:9090/healthz || { echo "::error::healthz недоступен"; docker logs --tail 50 reverseray; exit 1; }
+          docker compose down -v
+          rm -rf state
 
   android:
     name: Android build (debug + unit)

@@ -33,6 +33,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		err = cmdRun(os.Args[2:])
+	case "governor":
+		err = cmdGovernor(os.Args[2:])
 	case "healthcheck":
 		err = cmdHealthcheck(os.Args[2:])
 	case "enroll":
@@ -58,6 +60,7 @@ func usage() {
 
 Usage:
   reverseray run [-config CONFIG.json]
+  reverseray governor [ARGS...]   # restart-supervisor (ENTRYPOINT контейнера)
   reverseray enroll [-state-dir DIR] -name DEVICE -host HOST [-port 443]
   reverseray healthcheck [-url http://127.0.0.1:9090/healthz]
   reverseray version
