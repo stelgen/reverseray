@@ -12,7 +12,7 @@ material = "1.9.0"
 # ALPN через getProtocolNames()/ProtocolName)
 bcprov = "1.80.2"
 bctls = "1.80.2"
-bcutil = "1.80.2"
+bcutil = "1.86"
 bcpkix = "1.80.2"
 
 zxingEmbedded = "4.3.0" # скан/генерация QR: либа декларирует minSdk 19 — overrideLibrary + runtime-guard в UI
