@@ -32,10 +32,14 @@ jobs:
           if [ -n "$out" ]; then echo "unformatted: $out"; exit 1; fi
       - run: go vet ./...
       - run: go build ./...
-      # Один прогон: race + coverage сразу (v0.7: было два — минус ~50% времени)
-      - name: test (race) + coverage gate
+      # Гейт race (без coverage: instrumentation замедляет тайминговые тесты
+      # на CI-раннерах — отдельный флейк ловим точечно)
+      - name: test (race)
+        run: go test -race -count=1 -timeout 10m ./...
+      # Гейт coverage (без race — быстрее и стабильнее; race уже проверен выше)
+      - name: coverage gate
         run: |
-          go test -race -count=1 -covermode=atomic -coverprofile=cover.out ./...
+          go test -count=1 -covermode=atomic -coverprofile=cover.out ./...
           go tool cover -func=cover.out | tail -1
 
   docker:
