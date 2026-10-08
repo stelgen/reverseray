@@ -36,11 +36,15 @@ func startTestServer(t *testing.T) (*App, *config.Config, string) {
 	cfg.Listen.AdminTCP = "127.0.0.1:0"
 	cfg.StateDir = dir
 	cfg.TokensFile = tokensPath
+	// v0.8.3: tarpit=0 в интеграционных тестах — режим «закрыть сразу».
+	// Инвариант «сканер получает ноль байт» сохраняется (EOF мгновенно),
+	// а холд tarpit'а покрыт юнит-тестами internal/hardening. Ускоряет
+	// serverapp-пакет с ~18 с до ~5 с без потери смысла.
+	cfg.Hardening.TarpitSec = 0
 	cfg.Log.Level = "error"
 	if os.Getenv("RR_DEBUG_LOG") != "" {
 		cfg.Log.Level = "debug"
 	}
-
 	// We need real ports; listen first, then patch config is complex —
 	// instead bind manually by choosing free ports.
 	cfg.Listen.Tunnels = freePort(t)
