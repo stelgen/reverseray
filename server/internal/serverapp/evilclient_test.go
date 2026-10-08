@@ -106,9 +106,12 @@ func TestEvilUnknownFrameTypeNoPanic(t *testing.T) {
 	conn := rawDialEvil(t, cfg.Listen.Tunnels, app.CAPin(), token)
 	defer conn.Close()
 
+	// Сервер вправе закрыть коннект после первого же неизвестного типа кадра —
+	// EPIPE/ECONNRESET на последующих записях это норма, а не фейл (флейк на CI).
+	// Суть теста — сервер выжил и не запаниковал: проверяет serverSurvives.
 	for i := 0; i < 5; i++ {
 		if err := sendRawHeader(conn, 1, 0x55, uint32(i), 0); err != nil {
-			t.Fatalf("write: %v", err)
+			break
 		}
 	}
 	time.Sleep(200 * time.Millisecond)
