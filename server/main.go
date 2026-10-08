@@ -154,6 +154,9 @@ func cmdEnroll(args []string) error {
 	}
 	fmt.Printf("Конфигурационная строка для приложения:\n\n")
 	fmt.Printf("rrp://%s@%s:%s/?pin=%s&name=%s\n\n", token, *host, *port, pin, *name)
+	fmt.Printf("Outbound для Xray (вставь в outbounds; для клиентов в ЛОКАЛЬНОЙ сети\n")
+	fmt.Printf("подставь LAN-IP хоста вместо %s):\n\n", *host)
+	fmt.Printf("{\n  \"tag\": \"reverseray-out\",\n  \"protocol\": \"socks\",\n  \"settings\": { \"servers\": [ { \"address\": \"%s\", \"port\": 1080 } ] }\n}\n\n", *host)
 	return nil
 }
 
