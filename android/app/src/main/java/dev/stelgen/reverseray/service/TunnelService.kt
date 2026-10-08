@@ -91,7 +91,7 @@ class TunnelService : Service() {
 
     private fun startTunnel() {
         if (!stopping && runners.isNotEmpty()) {
-            updateStatus(getString(R.string.status_already_running))
+            updateStatus(STATE_INFO, getString(R.string.status_already_running))
             return
         }
         val cfg = try {
@@ -101,7 +101,7 @@ class TunnelService : Service() {
             null
         }
         if (cfg == null) {
-            updateStatus(getString(R.string.status_no_config))
+            updateStatus(STATE_ERROR, getString(R.string.status_no_config))
             stopSelf()
             return
         }
@@ -115,7 +115,7 @@ class TunnelService : Service() {
             Thread({ runLoop(r) }, "rrp-conn-$port").start()
         }
         registerNetworkWatching()
-        updateStatus(getString(R.string.status_connecting, cfg.host))
+        updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, cfg.host))
     }
 
     private fun runLoop(r: Runner) {
@@ -134,7 +134,7 @@ class TunnelService : Service() {
             try {
                 client.connect()
                 attempt = 0
-                updateStatus(getString(R.string.status_connected, r.target.port))
+                updateStatus(STATE_CONNECTED, getString(R.string.status_connected, r.target.port))
                 while (!stopping && client.state == RrpClient.State.READY) {
                     try {
                         Thread.sleep(500)
@@ -143,7 +143,7 @@ class TunnelService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                updateStatus(getString(R.string.status_error, r.target.port, e.message ?: "?"))
+                updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, e.message ?: "?"))
             } finally {
                 try { client.close() } catch (_: Exception) {}
             }
@@ -151,7 +151,7 @@ class TunnelService : Service() {
             if (stopping) break
             attempt++
             val delay = RrpClient.backoffDelayMs(attempt - 1, rnd)
-            updateStatus(getString(R.string.status_retry, r.target.port, delay / 1000))
+            updateStatus(STATE_RETRY, getString(R.string.status_retry, r.target.port, delay / 1000))
             sleepWithKick(r, delay)
         }
     }
@@ -189,7 +189,7 @@ class TunnelService : Service() {
         }
         unregisterNetworkWatching()
         releaseWakeLock()
-        updateStatus(getString(R.string.status_stopped))
+        updateStatus(STATE_STOPPED, getString(R.string.status_stopped))
     }
 
     // ---------- сеть ----------
@@ -317,9 +317,15 @@ class TunnelService : Service() {
 
     // ---------- статус ----------
 
-    private fun updateStatus(text: String) {
+    private fun updateStatus(state: String, text: String) {
         lastStatus = text
         pushLog(text)
+        sendBroadcast(
+            Intent(ACTION_STATUS)
+                .setPackage(packageName)
+                .putExtra(EXTRA_STATUS, text)
+                .putExtra(EXTRA_STATE, state)
+        )
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_STATUS, text))
         try {
             (applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
@@ -339,6 +345,15 @@ class TunnelService : Service() {
         const val KEY_CONFIG = "config"
         const val KEY_AUTOSTART = "autostart"
         const val KEY_ALLOW_LAN = "allow_lan"
+
+        const val STATE_CONNECTING = "CONNECTING"
+        const val STATE_CONNECTED = "CONNECTED"
+        const val STATE_RETRY = "RETRY"
+        const val STATE_ERROR = "ERROR"
+        const val STATE_STOPPED = "STOPPED"
+        const val STATE_INFO = "INFO"
+
+        const val EXTRA_STATE = "state"
 
         const val ACTION_START = "dev.stelgen.reverseray.action.START"
         const val ACTION_STOP = "dev.stelgen.reverseray.action.STOP"

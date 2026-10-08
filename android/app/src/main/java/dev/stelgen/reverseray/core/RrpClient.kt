@@ -6,6 +6,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.security.Security
 import java.util.Base64
 import java.util.Random
 import java.util.Vector
@@ -531,8 +532,9 @@ class RrpClient(
     // ------------------------------------------------------------------ TLS (BC 1.80)
 
     private fun buildTlsClient(): DefaultTlsClient {
+        ensureFullBouncyCastle()
         val crypto: TlsCrypto = JcaTlsCryptoProvider()
-            .setProvider(BouncyCastleProvider())
+            .setProvider("BC")
             .create(SecureRandom())
         return object : DefaultTlsClient(crypto) {
             override fun getProtocolVersions(): Array<ProtocolVersion> =
@@ -602,6 +604,31 @@ class RrpClient(
 
     companion object {
         const val DEFAULT_AGENT = "ReverseRay-Android/0.1.0"
+
+        @Volatile private var bcEnsured = false
+
+        /**
+         * Android содержит урезанный провайдер "BC" (или не содержит вовсе):
+         * BC-TLS ищет SHA-512 через Security и падает
+         * ("no such algorithm: SHA-512 for provider BC").
+         * Решение: удалить системный "BC" и зарегистрировать ПОЛНЫЙ
+         * BouncyCastleProvider из пакета приложения. Идемпотентно.
+         */
+        fun ensureFullBouncyCastle() {
+            if (bcEnsured) return
+            synchronized(this) {
+                if (bcEnsured) return
+                try {
+                    Security.removeProvider("BC")
+                    Security.insertProviderAt(org.bouncycastle.jce.provider.BouncyCastleProvider(), 1)
+                    // self-check: алгоритм, на котором падал резолв
+                    MessageDigest.getInstance("SHA-512", "BC")
+                    bcEnsured = true
+                } catch (e: Exception) {
+                    // не удалось — оставляем как есть (ошибка всплывёт в buildTlsClient с внятным стектрейсом)
+                }
+            }
+        }
         const val ALPN_PROTOCOL = "reverseray/1"
         const val MODE_TOKEN_HMAC = "token-hmac"
 

@@ -46,6 +46,8 @@ import java.io.File
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusView: TextView
+    private lateinit var statusIcon: TextView
+    private lateinit var statusSpinner: android.widget.ProgressBar
     private lateinit var configView: TextInputEditText
 
     /** zxing-embedded требует API 19+ (overrideLibrary в манифесте). */
@@ -68,7 +70,9 @@ class MainActivity : AppCompatActivity() {
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            intent?.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusView.text = it }
+            intent ?: return
+            intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusView.text = it }
+            applyStatusVisual(intent.getStringExtra(TunnelService.EXTRA_STATE) ?: TunnelService.STATE_INFO)
         }
     }
 
@@ -128,8 +132,28 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
+        val statusRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(40) // фикс. высота: интерфейс не прыгает
+        }
+        statusSpinner = android.widget.ProgressBar(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply { setMargins(0, 0, dp(10), 0) }
+            isIndeterminate = true
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(0xFFF9A825.toInt())
+            visibility = android.view.View.GONE
+        }
+        statusRow.addView(statusSpinner)
+        statusIcon = TextView(this@MainActivity).apply {
+            textSize = 18f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 0, dp(10), 0)
+        }
+        statusRow.addView(statusIcon)
         statusView = TextView(this@MainActivity).apply { setText(R.string.status_idle) }
-        cardInner.addView(statusView)
+        baseStatusColor = currentTextColor()
+        statusRow.addView(statusView)
+        cardInner.addView(statusRow)
         card.addView(cardInner)
         root.addView(card)
 
@@ -210,6 +234,38 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(root)
     }
+
+    // ---------- статусная визуализация ----------
+
+    private val colorGreen = 0xFF2E7D32.toInt()
+    private val colorYellow = 0xFFF9A825.toInt()
+    private val colorRed = 0xFFC62828.toInt()
+    private val colorGray = 0xFF8A8F98.toInt()
+    private var baseStatusColor = 0xFF212121.toInt()
+
+    /** CONNECTING/RETRY — жёлтый спиннер; CONNECTED — зелёная галочка; ошибка/стоп — красный крест. */
+    private fun applyStatusVisual(state: String) {
+        val (icon: String?, color: Int, spinning: Boolean) = when (state) {
+            TunnelService.STATE_CONNECTED -> Triple("✓", colorGreen, false)
+            TunnelService.STATE_CONNECTING, TunnelService.STATE_RETRY -> Triple("", colorYellow, true)
+            TunnelService.STATE_ERROR, TunnelService.STATE_STOPPED -> Triple("✕", colorRed, false)
+            else -> Triple("●", colorGray, false)
+        }
+        statusSpinner.visibility = if (spinning) android.view.View.VISIBLE else android.view.View.GONE
+        statusIcon.visibility = if (spinning) android.view.View.GONE else android.view.View.VISIBLE
+        if (icon != null) statusIcon.text = icon
+        statusIcon.setTextColor(color)
+        statusView.setTextColor(
+            when (state) {
+                TunnelService.STATE_CONNECTED -> colorGreen
+                TunnelService.STATE_ERROR, TunnelService.STATE_STOPPED -> colorRed
+                TunnelService.STATE_CONNECTING, TunnelService.STATE_RETRY -> colorYellow
+                else -> baseStatusColor
+            }
+        )
+    }
+
+    private fun currentTextColor(): Int = statusView.currentTextColor
 
     // ---------- QR ----------
 
