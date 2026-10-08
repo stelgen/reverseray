@@ -1,7 +1,7 @@
 # ReverseRay
 
 <p align="center">
-  <img src="assets/brand/logo-512.png" alt="ReverseRay" width="140"/>
+  <img src="android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" alt="ReverseRay" width="160"/>
 </p>
 
 <p align="center">
@@ -88,6 +88,16 @@ sudo docker compose logs reverseray | grep connect   # CA-pin + публичны
 ```bash
 bash deploy/install.sh        # из корня репо; RR_IMAGE_TAG=vX.Y.Z — выбор версии
 cd reverseray && sudo docker compose up -d
+```
+
+**Обновление** (автообновления контейнера запрещены — только вручную):
+
+```bash
+# из каталога репо:
+sudo git pull && sudo docker compose pull && sudo docker compose up -d
+
+# или из любого каталога, на нужную версию:
+RR_IMAGE_TAG=v0.7.1 bash deploy/install.sh && cd reverseray && sudo docker compose up -d
 ```
 
 `enroll` сам определит внешний IP сервера, сам добавит токен в
@@ -187,6 +197,14 @@ cd reverseray
 sudo mkdir -p state && sudo chown 65532:65532 state
 docker compose up -d
 sudo docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1
+```
+
+**Update** (container auto-updates are forbidden — manual only):
+
+```bash
+sudo git pull && sudo docker compose pull && sudo docker compose up -d
+# or from any directory:
+RR_IMAGE_TAG=v0.7.1 bash deploy/install.sh && cd reverseray && sudo docker compose up -d
 ```
 
 `enroll` auto-detects the server's public IP, registers the device token and

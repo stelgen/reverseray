@@ -2,6 +2,24 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [0.7.1] — 2026-10-08
+
+### Исправлено
+- **Crash-loop «bootstrap: write tokens: permission denied» навсегда** (прод-деплой
+  на Portainer): контейнер nonroot (65532) не мог писать в root-owned
+  bind-mount `./state`.
+  - compose: контейнер работает под root **без capabilities** (`user: "0:0"`,
+    `cap_drop: ALL` остаётся) — запись в state работает на любом host-каталоге,
+    `chown` не нужен. Hardening-путь (`65532` + chown) задокументирован.
+  - Сервер больше не падает от недоступного state: токены и PKI регистрируются
+    **в памяти**, в лог печатается готовая `rrp://` строка с токеном —
+    подключение работает сразу; `tokens.json`/PKI дописываются автоматически,
+    как только каталог становится записываемым (самовосстановление).
+  - Dockerfile: `/var/lib/reverseray` в образе с владельцем 65532 (named
+    volume получает права автоматически).
+- Регресс-тесты: read-only state dir → сервер стартует (serverapp), PKI
+  помечается ephemeral (tlscert).
+
 ## [0.7.0] — 2026-10-08
 
 ### Добавлено

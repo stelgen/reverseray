@@ -22,7 +22,10 @@
 
 ## Хранение секретов на сервере
 
-- `state/` — 0700; `ca.key`, `leaf*.key` — 0600, только non-root пользователь контейнера.
+- `state/` — 0700; `ca.key`, `leaf*.key` — 0600. С v0.7.1 контейнер по умолчанию
+  работает под root **без capabilities** (`cap_drop: ALL`, no-new-privileges,
+  read-only rootfs, distroless) — иначе nonroot-пользователь не может писать в
+  root-owned bind-mount (класс ошибок «permission denied»). Hardening: `user: 65532:65532` + `chown -R 65532:65532 state`.
 - Токены — только хэши. Бэкап `state/` перед апгрейдом (см. README deploy).
 
 ## Подпись APK

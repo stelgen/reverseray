@@ -15,7 +15,7 @@
 #
 set -euo pipefail
 
-IMAGE_TAG="${RR_IMAGE_TAG:-v0.7.0}"
+IMAGE_TAG="${RR_IMAGE_TAG:-v0.7.1}"
 DEST="${REVERSERAY_DEPLOY_DIR:-reverseray}"
 REPO_RAW="https://raw.githubusercontent.com/stelgen/reverseray/${IMAGE_TAG}/compose.yaml"
 
