@@ -15,16 +15,18 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v0.7.3"
+DEFAULT_TAG="v0.7.4"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
+UI_LAN=1 # 1 = открывать веб-морду (/ui) в локальной сети; --no-ui закрывает в localhost
 TAG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset) DO_RESET=1; shift ;;
+    --no-ui) UI_LAN=0; shift ;;
     --tag) TAG="${2:?нужна версия после --tag}"; shift 2 ;;
-    *) echo "unknown flag: $1 (доступны --reset, --tag vX.Y.Z)"; exit 2 ;;
+    *) echo "unknown flag: $1 (доступны --reset, --no-ui, --tag vX.Y.Z)"; exit 2 ;;
   esac
 done
 
@@ -80,7 +82,10 @@ RAW="https://raw.githubusercontent.com/stelgen/reverseray/${TAG}/compose.yaml"
 curl -fsSL --max-time 20 "$RAW" -o compose.yaml.new || die "не удалось скачать compose.yaml ($RAW)"
 mv compose.yaml.new compose.yaml
 
-printf 'RR_IMAGE_TAG=%s\nRR_SOCKS_PORT=1080\nRR_TUNNEL_PORT=4433\nRR_METRICS_PORT=9090\n' "$TAG" > .env
+printf 'RR_IMAGE_TAG=%s\nRR_SOCKS_PORT=1080\nRR_TUNNEL_PORT=4433\nRR_METRICS_PORT=9090\nRR_METRICS_BIND=%s\nRR_PROTOCOL=%s\n' \
+  "$TAG" \
+  "$([ "$UI_LAN" = "1" ] && echo 0.0.0.0 || echo 127.0.0.1)" \
+  "${RR_PROTOCOL:-rrp1}" > .env
 
 # --- pull + up ---
 log "Тяну образ ${IMAGE_REPO}:${TAG}…"
@@ -142,6 +147,16 @@ echo "    не IP докер-бриджа; если Xray на той же маш
 echo '{ "tag": "reverseray-out", "protocol": "socks", "settings": { "servers": [ { "address": "'"${LAN_IP}"'", "port": 1080 } ] } }'
 echo
 echo " Проверка прокси:  curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me"
+echo
+echo " ВЕБ-МОРДА (панель: сессии, трафик, IP, протоколы):"
+if [ "$UI_LAN" = "1" ]; then
+  echo "   http://${LAN_IP}:${RR_METRICS_PORT:-9090}/ui   ← открой в браузере на любом"
+  echo "   устройстве этой же локальной сети (телефон/ноутбук)"
+  echo "   (закрыть наружу: sudo bash rr.sh --no-ui)"
+else
+  echo "   http://127.0.0.1:${RR_METRICS_PORT:-9090}/ui (только localhost)"
+fi
+echo " Протокол по умолчанию: RR_PROTOCOL=${RR_PROTOCOL:-rrp1} (мусор → автоматически стабильный rrp1)"
 echo " Обновление позже: sudo bash rr.sh            (версия возьмётся с GitHub)"
 echo " Обнулить state:   sudo bash rr.sh --reset"
 echo "=============================================================="

@@ -74,6 +74,8 @@ type App struct {
 	hub    *hub.Hub
 	bundle *tlscert.Bundle
 	met    *Metrics
+	// egress — кешированный внешний IP сервера для /status и веб-морды
+	egress egressIP
 
 	inbMu    sync.Mutex
 	inbounds []*inbound.Inbound
@@ -389,6 +391,8 @@ func (a *App) handleTunnel(conn net.Conn) {
 		a.rejectHandshake(ip, framed, "bad HELLO")
 		return
 	}
+	// Согласование протокола: мусор от клиента сводится к дефолту, никогда не ошибка.
+	proto := rrp.Negotiate(hello.Proto.String(), hello.Protocols, a.cfg.DefaultProtocol)
 	nonce, err := rrp.NewNonce()
 	if err != nil {
 		_ = conn.Close()
@@ -400,6 +404,8 @@ func (a *App) handleTunnel(conn net.Conn) {
 		ServerVer:    Version,
 		Nonce:        nonce,
 		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
+		Proto:        proto,
+		Protocols:    rrp.SupportedIDs(),
 	})
 	a.store.PutNonce(nonce, 60*time.Second)
 
@@ -423,6 +429,8 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.Budget = int64(a.cfg.Limits.DeviceBudget)
 	scfg.IdleTimeout = a.cfg.IdleTimeout()
 	scfg.PingInterval = a.cfg.PingInterval()
+	scfg.Protocol = proto
+	scfg.ProbeDialer = a.probeDialer()
 
 	sess := rrp.NewSession(sid, device, framed, scfg)
 	if err := a.hub.Attach(device, sess, a.cfg.Limits.MaxTunnelsPerDevice); err != nil {
@@ -437,19 +445,40 @@ func (a *App) handleTunnel(conn net.Conn) {
 		Role:         "active",
 		MaxStreams:   scfg.MaxStreams,
 		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
+		Proto:        proto,
+		Protocols:    rrp.SupportedIDs(),
 	}); err != nil {
 		_ = sess.Close()
 		return
 	}
 	a.met.TunnelsUp.Add(1)
 	a.met.Reconnects.Add(1)
-	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport)
+	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport, "proto", proto)
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)
 		a.log.Info("tunnel closed", "device", device, "session", sid)
 	}()
 	sess.Run()
+}
+
+// probeDialer возвращает диалер для PROBE-валидации (реальный egress сервера).
+// PROBE — единичный TCP-коннект; цели клиента не логируются (redact by default).
+func (a *App) probeDialer() func(ctx context.Context, target string, timeout time.Duration) error {
+	return func(ctx context.Context, target string, timeout time.Duration) error {
+		var d net.Dialer
+		if timeout > 0 && timeout < a.cfg.DialTimeout() {
+			d.Timeout = timeout
+		} else {
+			d.Timeout = a.cfg.DialTimeout()
+		}
+		c, err := d.DialContext(ctx, "tcp", target)
+		if err != nil {
+			return err
+		}
+		_ = c.Close() // достаточно факта установки TCP-соединения
+		return nil
+	}
 }
 
 func (a *App) rejectHandshake(ip string, framed io.ReadWriteCloser, why string) {
@@ -532,6 +561,7 @@ func parseAllowlist(specs []string) []*net.IPNet {
 // ---- admin ----
 
 func (a *App) mountAdmin(mux *http.ServeMux) {
+	a.mountUI(mux)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)

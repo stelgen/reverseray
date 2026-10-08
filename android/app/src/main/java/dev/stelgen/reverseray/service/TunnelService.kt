@@ -14,6 +14,7 @@ import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
@@ -22,8 +23,13 @@ import android.util.Log
 import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.RrpClient
+import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
+import java.net.NetworkInterface
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.Random
 import java.util.concurrent.atomic.AtomicLong
 
@@ -31,11 +37,22 @@ import java.util.concurrent.atomic.AtomicLong
  * Foreground-сервис: держит пул RrpClient (по одному на порт из конфига).
  *
  * - уведомления: channels на 26+, просто Notification на старых;
- * - startForeground: тип specialUse на 34+ (FOREGROUND_SERVICE_TYPE_SPECIAL_USE),
- *   на 29..33 и старше — перегрузка без типа;
  * - сеть: NetworkCallback на 21+, CONNECTIVITY_ACTION — фолбэк для <21;
  * - при появлении сети — мгновенный retry всех коннектов с cooldown 3 c;
- * - между попытками — экспоненциальный backoff 1→60 c ±30 % (RrpClient.backoffDelayMs).
+ * - экспоненциальный backoff 1→60 c ±30 % (RrpClient.backoffDelayMs);
+ *
+ * v0.7.4:
+ * - СМЕНА ПРОТОКОЛА с валидацией реального трафика (PROBE до реального хоста):
+ *   provisional-коннект с новым протоколом → PROBE → коммит (запись ссылки
+ *   и протокола) только после успеха; при неудаче — мгновенный откат UI
+ *   и остаёмся на последнем рабочем протоколе. Анти-цикл: 3 ретрая с паузой,
+ *   cooldown 60 с между сменами, ссылка не трогается до валидации.
+ * - ЛИМИТ ТРАФИКА (по умолчанию без ограничений): сумма вход+выход за период
+ *   (сутки/календарный месяц с днём сброса); превышение → туннель останавливается.
+ * - ТОЛЬКО WI-FI: не поднимать туннель в мобильной сети, стартовать при появлении Wi-Fi.
+ * - ЛОГИ НАСТРОЕК: изменённые настройки попадают в статус-лог только при
+ *   фактическом изменении значения.
+ * - Счётчики пакетов/последний размер для строки «стрелки» на главном экране.
  */
 class TunnelService : Service() {
 
@@ -60,10 +77,24 @@ class TunnelService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var legacyReceiver: BroadcastReceiver? = null
 
+    /** Идёт ли сейчас валидационная смена протокола. */
+    @Volatile private var switchingProto = false
+
     private val clientListener = object : RrpClient.Listener {
         override fun onLog(client: RrpClient, message: String) {
             Log.d(TAG, "${client.host}:${client.port}: $message")
             pushLog("${client.host}:${client.port}: $message")
+        }
+
+        override fun onState(client: RrpClient, state: RrpClient.State) {
+            if (state == RrpClient.State.READY) {
+                sendBroadcast(
+                    Intent(ACTION_STATUS).setPackage(packageName)
+                        .putExtra(EXTRA_STATUS, client.negotiatedProto)
+                        .putExtra(EXTRA_STATE, STATE_PROTO)
+                        .putExtra(EXTRA_PROTO, client.negotiatedProto)
+                )
+            }
         }
     }
 
@@ -75,13 +106,20 @@ class TunnelService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopTunnel()
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopTunnel()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_SWITCH_PROTO -> {
+                val p = RrpProtocols.normalize(intent.getStringExtra(EXTRA_PROTO))
+                startForegroundCompat(getString(R.string.notif_starting))
+                Thread({ switchProtocol(p) }, "rrp-switch").start()
+                return START_STICKY
+            }
+            else -> startTunnel()
         }
-        // ACTION_START или рестарт системой после убийства (intent == null, START_STICKY)
-        startTunnel()
         return START_STICKY
     }
 
@@ -91,6 +129,8 @@ class TunnelService : Service() {
     }
 
     // ---------- туннель ----------
+
+    private fun currentProto(): String = RrpProtocols.normalize(prefs().getString(KEY_PROTO, null) ?: RrpProtocols.DEFAULT)
 
     private fun startTunnel() {
         if (!stopping && runners.isNotEmpty()) {
@@ -112,14 +152,41 @@ class TunnelService : Service() {
         stopping = false
         startForegroundCompat(getString(R.string.notif_starting))
         acquireWakeLock()
-        for (port in cfg.ports) {
-            val r = Runner(Target(cfg.host, port))
-            synchronized(runners) { runners.add(r) }
-            Thread({ runLoop(r) }, "rrp-conn-$port").start()
+        logDevicePreamble(cfg)
+
+        // v0.7.4: «только по Wi-Fi» — в мобильной сети туннель не поднимаем;
+        // NetworkCallback дёрнет kickAll при появлении Wi-Fi.
+        if (wifiOnly() && !isOnWifi()) {
+            updateStatus(STATE_INFO, getString(R.string.status_wait_wifi))
+            registerNetworkWatching()
+            startStatsLoop()
+            return
         }
+
+        spawnRunners()
         registerNetworkWatching()
         startStatsLoop()
         updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, cfg.host))
+    }
+
+    private fun spawnRunners() {
+        val cfg = config ?: return
+        val proto = currentProto()
+        for (port in cfg.ports) {
+            val r = Runner(Target(cfg.host, port))
+            synchronized(runners) { runners.add(r) }
+            Thread({ runLoop(r, proto) }, "rrp-conn-$port").start()
+        }
+    }
+
+    /** Информация об устройстве — в журнал простым текстом (одна строка на старт). */
+    private fun logDevicePreamble(cfg: RrpUriConfig) {
+        try {
+            val info = "устройство: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} " +
+                "(API ${Build.VERSION.SDK_INT}), билд ${Build.DISPLAY}, протокол ${currentProto()}, " +
+                "хост ${cfg.host}:${cfg.ports.joinToString(",")}"
+            pushLog(info)
+        } catch (_: Exception) {}
     }
 
     /** Реалтайм-статистика трафика: раз в 500 мс шлёт ACTION_STATS (байт/с). */
@@ -128,6 +195,7 @@ class TunnelService : Service() {
         lastTx = 0
         lastRx = 0
         val t = Thread({
+            var persistTick = 0
             while (!stopping) {
                 try {
                     Thread.sleep(STATS_INTERVAL_MS)
@@ -136,13 +204,25 @@ class TunnelService : Service() {
                 }
                 var tx = 0L
                 var rx = 0L
+                var pk = longArrayOf(0, 0, 0, 0)
+                var kind = ""
                 synchronized(runners) {
-                    runners.forEach { r -> r.client?.bytesSnapshot()?.let { (a, b) -> tx += a; rx += b } }
+                    runners.forEach { r ->
+                        r.client?.bytesSnapshot()?.let { (a, b) -> tx += a; rx += b }
+                        r.client?.packetsSnapshot()?.let { p ->
+                            pk[0] += p[0]; pk[1] += p[1]; pk[2] = p[2]; pk[3] = p[3]
+                        }
+                        if (r.client?.lastPacketKind?.isNotEmpty() == true) kind = r.client!!.lastPacketKind
+                    }
                 }
                 val dtx = tx - lastTx
                 val drx = rx - lastRx
                 lastTx = tx
                 lastRx = rx
+
+                // v0.7.4: учёт лимита трафика (сумма вход+выход за период)
+                val usage = accountTraffic(drx + dtx)
+
                 sendBroadcast(
                     Intent(ACTION_STATS)
                         .setPackage(packageName)
@@ -150,13 +230,197 @@ class TunnelService : Service() {
                         .putExtra(EXTRA_RX_RATE, drx * 1000L / STATS_INTERVAL_MS)
                         .putExtra(EXTRA_TX_TOTAL, tx)
                         .putExtra(EXTRA_RX_TOTAL, rx)
+                        .putExtra(EXTRA_PKT_TX_COUNT, pk[0])
+                        .putExtra(EXTRA_PKT_RX_COUNT, pk[1])
+                        .putExtra(EXTRA_PKT_TX_SIZE, pk[2])
+                        .putExtra(EXTRA_PKT_RX_SIZE, pk[3])
+                        .putExtra(EXTRA_PKT_KIND, kind)
+                        .putExtra(EXTRA_USAGE_BYTES, usage.used)
+                        .putExtra(EXTRA_USAGE_LIMIT, usage.limit)
                 )
+                if (usage.limit > 0 && usage.used >= usage.limit) {
+                    updateStatus(STATE_ERROR, getString(R.string.status_limit_reached))
+                    stopTunnel()
+                    return@Thread
+                }
+                // персистим счётчик раз в ~5 с (чтобы лимит переживал рестарт)
+                if (++persistTick >= PERSIST_EVERY_TICKS) {
+                    persistTick = 0
+                    persistUsage()
+                }
             }
         }, "rrp-stats").apply { isDaemon = true; start() }
         statsThread = t
     }
 
-    private fun runLoop(r: Runner) {
+    // ---------- лимит трафика ----------
+
+    private data class Usage(val used: Long, val limit: Long)
+
+    /** Сбрасывает счётчик при смене периода, возвращает [used, limit]. */
+    private fun accountTraffic(delta: Long): Usage {
+        val p = prefs()
+        val limit = p.getLong(KEY_TRAFFIC_LIMIT, 0L)
+        val period = p.getString(KEY_LIMIT_PERIOD, PERIOD_DAY) ?: PERIOD_DAY
+        val key = usagePeriodKey(period)
+        var used = p.getLong(KEY_TRAFFIC_USED, 0L)
+        if (p.getString(KEY_USAGE_PERIOD, null) != key) {
+            used = 0
+            p.edit().putString(KEY_USAGE_PERIOD, key).apply()
+        }
+        if (delta > 0) used += delta
+        return Usage(used, limit)
+    }
+
+    private fun persistUsage() {
+        val usage = accountTraffic(0)
+        prefs().edit().putLong(KEY_TRAFFIC_USED, usage.used).apply()
+    }
+
+    /** Ключ периода: "2026-10-08" для суток, "2026-10" для месяца. */
+    private fun usagePeriodKey(period: String): String {
+        val fmt = if (period == PERIOD_MONTH) "yyyy-MM" else "yyyy-MM-dd"
+        return SimpleDateFormat(fmt, Locale.ROOT).format(Date())
+    }
+
+    private fun wifiOnly(): Boolean = prefs().getBoolean(KEY_WIFI_ONLY, false)
+
+    /** Подключение сейчас по Wi-Fi? (API 21+: capabilities; 14–20: legacy тип). */
+    @Suppress("DEPRECATION")
+    private fun isOnWifi(): Boolean {
+        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                val net = cm.activeNetwork ?: return false
+                val caps = cm.getNetworkCapabilities(net) ?: return false
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            } else {
+                val info = cm.activeNetworkInfo
+                info != null && info.type == ConnectivityManager.TYPE_WIFI && info.isConnected
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ---------- смена протокола (валидация → коммит, иначе откат) ----------
+
+    /**
+     * Валидационная смена протокола:
+     * 1) provisional-коннект с новым протоколом + PROBE реального хоста;
+     * 2) успех → коммит: сохраняем протокол и обновляем ссылку в конфиге;
+     * 3) неудача (3 ретрая) → мгновенный откат UI на текущий протокол,
+     *    ссылка НЕ меняется; cooldown, чтобы не молотить по rate-limit.
+     */
+    private fun switchProtocol(newProtoRaw: String) {
+        val newProto = RrpProtocols.normalize(newProtoRaw)
+        val oldProto = currentProto()
+        val p = prefs()
+        if (switchingProto) {
+            updateStatus(STATE_INFO, getString(R.string.status_switch_busy))
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now < nextSwitchAllowedAt) {
+            updateStatus(STATE_INFO, getString(R.string.status_switch_cooldown, (nextSwitchAllowedAt - now) / 1000))
+            return
+        }
+        if (newProto == oldProto) {
+            updateStatus(STATE_INFO, getString(R.string.status_switch_same, newProto))
+            return
+        }
+        switchingProto = true
+        try {
+            val cfg = try {
+                RrpUri.parse(p.getString(KEY_CONFIG, null) ?: "")
+            } catch (e: Exception) {
+                updateStatus(STATE_ERROR, getString(R.string.status_no_config))
+                return
+            }
+            updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, newProto))
+            var lastErr = ""
+            for (attempt in 1..SWITCH_RETRIES) {
+                val client = buildClient(cfg, newProto, validate = true)
+                try {
+                    client.connect()
+                    // валидация (PROBE) уже прошла внутри connect() — коммитим
+                    commitProto(newProto, cfg)
+                    updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, newProto))
+                    try { client.close() } catch (_: Exception) {}
+                    restartRunnersQuietly()
+                    return
+                } catch (e: Exception) {
+                    lastErr = e.message ?: "?"
+                    pushLog("смена протокола: попытка $attempt/$SWITCH_RETRIES не удалась: $lastErr")
+                    updateStatus(STATE_ERROR, getString(R.string.status_switch_fail, newProto, lastErr))
+                } finally {
+                    try { client.close() } catch (_: Exception) {}
+                }
+                if (attempt < SWITCH_RETRIES) {
+                    try { Thread.sleep(SWITCH_RETRY_PAUSE_MS) } catch (_: InterruptedException) { break }
+                }
+            }
+            // откат: UI вернёт выбор на старый протокол сразу, не дожидаясь реконнекта
+            nextSwitchAllowedAt = System.currentTimeMillis() + SWITCH_COOLDOWN_MS
+            updateStatus(STATE_ERROR, getString(R.string.status_switch_rolled_back, newProto, oldProto, lastErr))
+            sendBroadcast(
+                Intent(ACTION_STATUS).setPackage(packageName)
+                    .putExtra(EXTRA_STATE, STATE_PROTO_ROLLBACK)
+                    .putExtra(EXTRA_STATUS, getString(R.string.status_switch_rolled_back, newProto, oldProto, lastErr))
+                    .putExtra(EXTRA_PROTO, oldProto)
+            )
+        } finally {
+            switchingProto = false
+        }
+    }
+
+    /** Коммит: протокол + ссылка с новым proto= сохраняются ПОСЛЕ успешной валидации. */
+    private fun commitProto(proto: String, cfg: RrpUriConfig) {
+        prefs().edit().putString(KEY_PROTO, proto).apply()
+        // обновляем ссылку: proto= должен отражать реально работающий протокол
+        val updated = cfg.copy(proto = proto).serialize()
+        prefs().edit().putString(KEY_CONFIG, updated).apply()
+        pushLog("протокол применён: $proto (ссылка обновлена)")
+    }
+
+    /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
+    private fun restartRunnersQuietly() {
+        if (stopping) return
+        val active: List<Runner>
+        synchronized(runners) {
+            active = runners.toList()
+            runners.clear()
+        }
+        active.forEach {
+            it.kick = true
+            try { it.client?.close() } catch (_: Exception) {}
+        }
+        spawnRunners()
+    }
+
+    private fun buildClient(cfg: RrpUriConfig, proto: String, validate: Boolean): RrpClient {
+        return RrpClient(
+            host = cfg.host,
+            port = cfg.ports.firstOrNull() ?: 4433,
+            token = cfg.token,
+            pin = cfg.pin,
+            allowLan = allowLan(),
+            listener = clientListener,
+            deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
+            transport = cfg.transport,
+            agentName = "ReverseRay-Android/" + appVersion(),
+            protoId = proto,
+            validateProbeTarget = if (validate) prefs().getString(KEY_PROBE_TARGET, DEFAULT_PROBE_TARGET) else null,
+        )
+    }
+
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (_: Exception) {
+        "?"
+    }
+
+    private fun runLoop(r: Runner, proto: String) {
         var attempt = 0
         var lastError = "?"
         while (!stopping) {
@@ -170,6 +434,8 @@ class TunnelService : Service() {
                 listener = clientListener,
                 deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
                 transport = cfg.transport,
+                agentName = "ReverseRay-Android/" + appVersion(),
+                protoId = proto,
             )
             r.client = client
             try {
@@ -193,9 +459,8 @@ class TunnelService : Service() {
             if (stopping) break
             attempt++
             val delay = RrpClient.backoffDelayMs(attempt - 1, rnd)
-            // v0.7.3: ERROR держится на экране минимум HOLD_ERROR_MS, чтобы юзер
-            // успел прочитать причину, а не мигал «реконнект»; текст ошибки
-            // остаётся виден и в статусе RETRY.
+            // ERROR держится на экране минимум HOLD_ERROR_MS, чтобы юзер
+            // успел прочитать причину, а не мигал «реконнект».
             try { Thread.sleep(ERROR_HOLD_MS) } catch (_: InterruptedException) {}
             if (stopping) break
             updateStatus(STATE_RETRY, getString(R.string.status_retry_last, r.target.port, delay / 1000, lastError))
@@ -223,8 +488,6 @@ class TunnelService : Service() {
 
     private fun stopTunnel() {
         stopping = true
-        // форс-закрытие активных клиентов: мгновенный стоп,
-        // не дожидаемся handshake/connect-таймаутов
         val active: List<Runner>
         synchronized(runners) {
             active = runners.toList()
@@ -238,7 +501,12 @@ class TunnelService : Service() {
         statsThread = null
         unregisterNetworkWatching()
         releaseWakeLock()
+        persistUsageSafely()
         updateStatus(STATE_STOPPED, getString(R.string.status_stopped))
+    }
+
+    private fun persistUsageSafely() {
+        try { persistUsage() } catch (_: Exception) {}
     }
 
     // ---------- сеть ----------
@@ -252,7 +520,14 @@ class TunnelService : Service() {
                 }
             }
             try {
-                cm.registerNetworkCallback(NetworkRequest.Builder().build(), cb)
+                val req = if (Build.VERSION.SDK_INT >= 23 && wifiOnly()) {
+                    NetworkRequest.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                        .build()
+                } else {
+                    NetworkRequest.Builder().build()
+                }
+                cm.registerNetworkCallback(req, cb)
                 networkCallback = cb
             } catch (e: Exception) {
                 Log.w(TAG, "NetworkCallback не зарегистрирован: ${e.message}")
@@ -276,7 +551,14 @@ class TunnelService : Service() {
         if (now - last < NET_RETRY_COOLDOWN_MS) return
         if (!lastNetKick.compareAndSet(last, now)) return
         Log.d(TAG, "сеть появилась — мгновенный retry")
+        // wifi-only: kick только если мы на Wi-Fi
+        if (wifiOnly() && !isOnWifi()) {
+            updateStatus(STATE_INFO, getString(R.string.status_wait_wifi))
+            return
+        }
         synchronized(runners) { runners.forEach { it.kick = true } }
+        // если туннель ещё не поднимался из-за отсутствия Wi-Fi — поднимаем
+        if (runners.isEmpty() && !stopping) spawnRunners()
     }
 
     private fun unregisterNetworkWatching() {
@@ -301,7 +583,6 @@ class TunnelService : Service() {
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
-            // 29..33: константы specialUse ещё нет; <29: перегрузки с типом не существует
             startForeground(NOTIF_ID, notification)
         }
     }
@@ -395,12 +676,28 @@ class TunnelService : Service() {
         const val KEY_AUTOSTART = "autostart"
         const val KEY_ALLOW_LAN = "allow_lan"
 
+        // v0.7.4: протокол и лимит трафика
+        const val KEY_PROTO = "proto"
+        const val KEY_TRAFFIC_LIMIT = "traffic_limit"      // байт; 0 = без лимита
+        const val KEY_LIMIT_PERIOD = "limit_period"        // PERIOD_DAY | PERIOD_MONTH
+        const val KEY_LIMIT_RESET_DAY = "limit_reset_day"  // 1..28 (для месяца)
+        const val KEY_TRAFFIC_USED = "traffic_used"        // израсходовано за период
+        const val KEY_USAGE_PERIOD = "usage_period"        // ключ периода ("2026-10-08")
+        const val KEY_WIFI_ONLY = "wifi_only"
+        const val KEY_PROBE_TARGET = "probe_target"
+        const val KEY_AUTO_UPDATE = "auto_update"          // проверка обновлений раз в 24 ч
+        const val PERIOD_DAY = "day"
+        const val PERIOD_MONTH = "month"
+        const val DEFAULT_PROBE_TARGET = "1.1.1.1:443"
+
         const val STATE_CONNECTING = "CONNECTING"
         const val STATE_CONNECTED = "CONNECTED"
         const val STATE_RETRY = "RETRY"
         const val STATE_ERROR = "ERROR"
         const val STATE_STOPPED = "STOPPED"
         const val STATE_INFO = "INFO"
+        const val STATE_PROTO = "PROTO"
+        const val STATE_PROTO_ROLLBACK = "PROTO_ROLLBACK"
 
         const val EXTRA_STATE = "state"
 
@@ -408,17 +705,33 @@ class TunnelService : Service() {
         const val ACTION_STOP = "dev.stelgen.reverseray.action.STOP"
         const val ACTION_STATUS = "dev.stelgen.reverseray.action.STATUS"
         const val ACTION_STATS = "dev.stelgen.reverseray.action.STATS"
+        const val ACTION_SWITCH_PROTO = "dev.stelgen.reverseray.action.SWITCH_PROTO"
         const val EXTRA_STATUS = "status"
         const val EXTRA_TX_RATE = "tx_rate"
         const val EXTRA_RX_RATE = "rx_rate"
         const val EXTRA_TX_TOTAL = "tx_total"
         const val EXTRA_RX_TOTAL = "rx_total"
+        const val EXTRA_PROTO = "proto"
+        const val EXTRA_PKT_TX_COUNT = "pkt_tx_count"
+        const val EXTRA_PKT_RX_COUNT = "pkt_rx_count"
+        const val EXTRA_PKT_TX_SIZE = "pkt_tx_size"
+        const val EXTRA_PKT_RX_SIZE = "pkt_rx_size"
+        const val EXTRA_PKT_KIND = "pkt_kind"
+        const val EXTRA_USAGE_BYTES = "usage_bytes"
+        const val EXTRA_USAGE_LIMIT = "usage_limit"
         private const val STATS_INTERVAL_MS = 500L
         private const val ERROR_HOLD_MS = 1_500L
+        private const val PERSIST_EVERY_TICKS = 10 // ~5 c
 
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIF_ID = 1
         private const val NET_RETRY_COOLDOWN_MS = 3_000L
+
+        // смена протокола: ретраи/паузы/cooldown — защита от rate-limit циклов
+        private const val SWITCH_RETRIES = 3
+        private const val SWITCH_RETRY_PAUSE_MS = 5_000L
+        private const val SWITCH_COOLDOWN_MS = 60_000L
+        @Volatile private var nextSwitchAllowedAt = 0L
 
         @Volatile var lastStatus: String = ""
 
@@ -431,6 +744,32 @@ class TunnelService : Service() {
             synchronized(logLines) {
                 logLines.addFirst(line)
                 while (logLines.size > 200) logLines.removeLast()
+            }
+        }
+
+        /**
+         * Логирование изменения настройки: вызывается ТОЛЬКО когда значение
+         * реально изменилось (проверка на стороне MainActivity). Попадает и в
+         * журнал, и в статусную строку главного экрана.
+         */
+        fun logSettingChange(name: String, from: String, to: String) {
+            if (from == to) return // не менялось — не пишем
+            val line = "настройка: $name: $from → $to"
+            pushLog(line)
+            lastStatus = line
+        }
+
+        /** Первый не-loopback IPv4 в локальной сети (или IPv6 как фолбэк). */
+        fun localIp(): String? {
+            return try {
+                val cand = NetworkInterface.getNetworkInterfaces().asSequence()
+                    .filter { it.isUp && !it.isLoopback }
+                    .flatMap { it.inetAddresses.asSequence() }
+                    .toList()
+                cand.firstOrNull { !it.isLoopbackAddress && it is java.net.Inet4Address }?.hostAddress
+                    ?: cand.firstOrNull { !it.isLoopbackAddress }?.hostAddress
+            } catch (_: Exception) {
+                null
             }
         }
     }

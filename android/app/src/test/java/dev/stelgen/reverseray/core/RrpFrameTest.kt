@@ -188,7 +188,7 @@ class RrpFrameTest {
         assertEquals("n0nc3=", a.nonceB64)
 
         val ok = RrpFrame.parse(
-            RrpFrame.HelloOk("sess-1", "0.1.0", 262144L).encode()
+            RrpFrame.HelloOk("sess-1", "0.1.0", "AAAA", 262144L).encode()
         ) as RrpFrame.HelloOk
         assertEquals("sess-1", ok.sessionId)
         assertEquals("0.1.0", ok.serverVer)

@@ -94,6 +94,12 @@ class RrpClient(
     private val listener: Listener? = null,
     /** Имя устройства (поле device в HELLO; сервер требует непустое ≤64). */
     private val deviceName: String = "phone-1",
+    /** Желаемый протокол (&proto= из ссылки; мусор сводится к дефолту). */
+    private val protoId: String = RrpProtocols.DEFAULT,
+    /** v0.7.4: цель валидационного PROBE после READY ("host:port").
+     *  null — не проверять. Это «реальный трафик до реального хоста»:
+     *  сервер диалит цель с егресса и отвечает фактом установки TCP. */
+    private val validateProbeTarget: String? = null,
     /** Транспорт: "tcp" (сырой RRP/1) или "ws" (WebSocket-апгрейд /rrp). */
     private val transport: String = TRANSPORT_TCP,
     /**
@@ -141,6 +147,23 @@ class RrpClient(
     private val txBytes = AtomicLong(0)
     private val rxBytes = AtomicLong(0)
 
+    /** v0.7.4: счётчики ПАКЕТОВ (кадров DATA/UDP_DATA) и последний размер —
+     *  для строки «стрелки» на главном экране (тип, размер, пакеты туда/сюда). */
+    private val packetsTx = AtomicLong(0)
+    private val packetsRx = AtomicLong(0)
+    private val lastPacketTxSize = AtomicLong(0)
+    private val lastPacketRxSize = AtomicLong(0)
+
+    /** Тип последнего пакета: "TCP" (DATA) или "UDP" (UDP_DATA). */
+    @Volatile var lastPacketKind: String = ""
+        private set
+
+    /** [txCount, rxCount, lastTxSize, lastRxSize] — снимок для UI. */
+    fun packetsSnapshot(): LongArray = longArrayOf(
+        packetsTx.get(), packetsRx.get(),
+        lastPacketTxSize.get(), lastPacketRxSize.get(),
+    )
+
     /** Фактически принятый SPKI-пин сервера (заполняется в TOFU-режиме). */
     @Volatile var acceptedPin: String? = null
         private set
@@ -153,6 +176,16 @@ class RrpClient(
 
     @Volatile var sessionId: String? = null
         private set
+
+    /** Протокол, выбранный сервером в этой сессии (канон после READY). */
+    @Volatile var negotiatedProto: String = RrpProtocols.DEFAULT
+        private set
+
+    /** Реестр протоколов, присланный сервером (для UI-переключателя). */
+    @Volatile var serverProtocols: List<String> = emptyList()
+        private set
+
+    @Volatile private var probeResp: RrpFrame.ProbeResp? = null
 
     @Volatile var tunnelWindow: Long = DEFAULT_TUNNEL_WINDOW
         private set
@@ -228,8 +261,16 @@ class RrpClient(
         setState(State.HANDSHAKE)
         Thread({ readerLoop() }, "rrp-reader-$port").apply { isDaemon = true }.start()
 
-        val hello = RrpFrame.Hello(agentName, RrpFrame.VERSION, deviceName, listOf("chacha20", "alpn"), MAX_STREAMS_REQUEST)
-        log("SENT HELLO agent=$agentName device=$deviceName ver=${RrpFrame.VERSION} caps=[chacha20,alpn] max_streams=$MAX_STREAMS_REQUEST (${hello.encode().size}Б)")
+        val hello = RrpFrame.Hello(
+            agent = agentName,
+            protocolVersion = RrpFrame.VERSION,
+            device = deviceName,
+            caps = listOf("chacha20", "alpn"),
+            maxStreams = MAX_STREAMS_REQUEST,
+            proto = RrpProtocols.normalize(protoId),
+            protocols = RrpProtocols.displayList(),
+        )
+        log("SENT HELLO agent=$agentName device=$deviceName ver=${RrpFrame.VERSION} caps=[chacha20,alpn] proto=${RrpProtocols.normalize(protoId)} max_streams=$MAX_STREAMS_REQUEST (${hello.encode().size}Б)")
         sendFrame(hello)
         try {
             if (!helloLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
@@ -254,7 +295,10 @@ class RrpClient(
             } ?: throw RrpClientException("HELLO_OK: nonce не base64 (${ok.nonce.take(32)})")
             val macInput = nonceBytes + ok.sessionId.toByteArray(Charsets.UTF_8)
             val hmacKey = MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
-            val hmac = Base64.getEncoder()
+            // v0.7.4 ФИКС: HMAC — base64url БЕЗ паддинга (RawURLEncoding на сервере).
+            // APK 0.7.3 кодировал стандартным base64 (с «+ /» и «=») — сервер
+            // не мог декодировать и отвечал «ERROR 1: auth failed».
+            val hmac = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(hmacSha256(hmacKey, macInput))
             log("SENT AUTH mode=$MODE_TOKEN_HMAC nonce=${ok.nonce} hmac=${hmac.take(12)}… sessionId=$sessionId")
             sendFrame(
@@ -268,11 +312,28 @@ class RrpClient(
             val rd = readyFrame ?: throw RrpClientException("READY без данных")
             if (rd.tunnelWindow > 0) tunnelWindow = rd.tunnelWindow
             if (rd.maxStreams > 0) maxStreams = rd.maxStreams
+            negotiatedProto = RrpProtocols.normalize(rd.proto)
+            RrpProtocols.rememberServerProtocols(rd.protocols)
+            serverProtocols = rd.protocols
 
             setState(State.READY)
             lastPongMs.set(System.currentTimeMillis())
             scheduleNextPing()
-            log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
+            log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} proto=${rd.proto} protocols=${rd.protocols} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
+
+            // v0.7.4: валидация «реального трафика» — PROBE до реального хоста.
+            // Используется при смене протокола: коммит только после успеха.
+            validateProbeTarget?.let { target ->
+                log("PROBE → $target (валидация протокола ${rd.proto})")
+                val pr = probeOnce(target, PROBE_TIMEOUT_MS)
+                if (pr == null) {
+                    throw RrpClientException("PROBE не отвечен сервером (валидация не пройдена)")
+                }
+                if (!pr.ok) {
+                    throw RrpClientException("валидация не пройдена: ${pr.err.ifEmpty { "нет egress" }}")
+                }
+                log("PROBE OK — egress до $target подтверждён")
+            }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             close()
@@ -308,6 +369,9 @@ class RrpClient(
         when (frame) {
             is RrpFrame.HelloOk -> {
                 helloOkFrame = frame
+                RrpProtocols.rememberServerProtocols(frame.protocols)
+                serverProtocols = frame.protocols
+                negotiatedProto = RrpProtocols.normalize(frame.proto)
                 helloLatch.countDown()
             }
             is RrpFrame.Ready -> {
@@ -320,11 +384,17 @@ class RrpClient(
             is RrpFrame.OpenOk -> pendingOpens.remove(frame.streamId)?.complete(frame.errCode)
             is RrpFrame.Data -> {
                 rxBytes.addAndGet(frame.bytes.size.toLong())
+                packetsRx.incrementAndGet()
+                lastPacketRxSize.set(frame.bytes.size.toLong())
+                lastPacketKind = KIND_TCP
                 handleData(frame)
             }
             is RrpFrame.UdpAssoc -> handleIncomingUdpAssoc(frame)
             is RrpFrame.UdpData -> {
                 rxBytes.addAndGet(frame.bytes.size.toLong())
+                packetsRx.incrementAndGet()
+                lastPacketRxSize.set(frame.bytes.size.toLong())
+                lastPacketKind = KIND_UDP
                 handleUdpData(frame)
             }
             is RrpFrame.Close -> closeStream(frame.streamId, notify = false)
@@ -333,6 +403,11 @@ class RrpClient(
             is RrpFrame.Ping -> sendFrameQuiet(RrpFrame.Pong(frame.nonce))
             is RrpFrame.Pong -> lastPongMs.set(System.currentTimeMillis())
             is RrpFrame.Stats -> log("STATS: ${frame.json}")
+            is RrpFrame.ProbeResp -> {
+                log("RECV PROBE ok=${frame.ok} err=${frame.err} proto=${frame.proto}")
+                probeResp = frame
+            }
+            is RrpFrame.ProbeReq -> log("PROBE от сервера не ожидается")
             is RrpFrame.ErrorFrame -> {
                 log("сервер ERROR ${frame.code}: ${frame.message} (raw payload ${frame.rawHex()})")
                 for (id in pendingOpens.keys) {
@@ -638,6 +713,32 @@ class RrpClient(
         override fun close() = ws.closeFrame()
     }
 
+    // ------------------------------------------------------------------ PROBE
+
+    /** Результат PROBE-валидации egress. */
+    data class ProbeResult(val ok: Boolean, val err: String)
+
+    /**
+     * Отправляет PROBE и ждёт ответ (единичный, без ретраев — ретраи и
+     * откат делает владелец). null — таймаут/нет ответа.
+     */
+    fun probeOnce(target: String, timeoutMs: Long): ProbeResult? {
+        if (state != State.READY) return null
+        probeResp = null
+        return try {
+            sendFrame(RrpFrame.ProbeReq(target, timeoutMs))
+            val deadline = System.currentTimeMillis() + timeoutMs + 1_000
+            while (System.currentTimeMillis() < deadline) {
+                probeResp?.let { return ProbeResult(it.ok, it.err) }
+                try { Thread.sleep(50) } catch (_: InterruptedException) { return null }
+            }
+            null
+        } catch (e: IOException) {
+            log("PROBE не отправлен: ${e.message}")
+            null
+        }
+    }
+
     // ------------------------------------------------------------------ PING
 
     private fun scheduleNextPing() {
@@ -661,8 +762,18 @@ class RrpClient(
     private fun sendFrame(frame: RrpFrame) {
         val out = wireOut ?: throw RrpClientException("нет соединения")
         when (frame) {
-            is RrpFrame.Data -> txBytes.addAndGet(frame.bytes.size.toLong())
-            is RrpFrame.UdpData -> txBytes.addAndGet(frame.bytes.size.toLong())
+            is RrpFrame.Data -> {
+                txBytes.addAndGet(frame.bytes.size.toLong())
+                packetsTx.incrementAndGet()
+                lastPacketTxSize.set(frame.bytes.size.toLong())
+                lastPacketKind = KIND_TCP
+            }
+            is RrpFrame.UdpData -> {
+                txBytes.addAndGet(frame.bytes.size.toLong())
+                packetsTx.incrementAndGet()
+                lastPacketTxSize.set(frame.bytes.size.toLong())
+                lastPacketKind = KIND_UDP
+            }
             else -> {}
         }
         synchronized(sendLock) {
@@ -857,7 +968,13 @@ class RrpClient(
     }
 
     companion object {
-        const val DEFAULT_AGENT = "ReverseRay-Android/0.7.0"
+        const val DEFAULT_AGENT = "ReverseRay-Android/0.7.4"
+
+        const val KIND_TCP = "TCP"
+        const val KIND_UDP = "UDP"
+
+        /** Таймаут валидационного PROBE, мс (сервер клампит в 1..15 с). */
+        const val PROBE_TIMEOUT_MS = 5_000L
         const val TRANSPORT_TCP = "tcp"
         const val TRANSPORT_WS = "ws"
 

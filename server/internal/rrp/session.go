@@ -22,6 +22,11 @@ type SessionConfig struct {
 	Budget       int64         // total outstanding bytes cap on this session
 	IdleTimeout  time.Duration // no frames -> close
 	PingInterval time.Duration // server-side keepalive
+	// Protocol — согласованный id протокола сессии (см. protocol.go).
+	Protocol string
+	// ProbeDialer — исходящий диал для PROBE-валидации (реальный трафик до
+	// реальных хостов перед переключением протокола). nil — PROBE отключён.
+	ProbeDialer func(ctx context.Context, target string, timeout time.Duration) error
 }
 
 func DefaultSessionConfig() SessionConfig {
@@ -62,6 +67,7 @@ type Stats struct {
 type Session struct {
 	ID     string
 	Device string
+	Proto  string
 
 	cfg SessionConfig
 
@@ -115,6 +121,7 @@ func NewSession(id, device string, conn io.ReadWriteCloser, cfg SessionConfig) *
 	s := &Session{
 		ID:       id,
 		Device:   device,
+		Proto:    cfg.Protocol,
 		cfg:      cfg,
 		wc:       conn,
 		outq:     make(chan outItem, 256),
@@ -212,6 +219,9 @@ func (s *Session) handle(f *Frame) error {
 	case TypeUdpData:
 		s.routeUdp(f)
 		return nil
+	case TypeProbe:
+		s.handleProbe(f)
+		return nil
 	case TypePing:
 		s.writeAsync(&Frame{Type: TypePong, Payload: f.Payload})
 		return nil
@@ -247,6 +257,61 @@ func (s *Session) handle(f *Frame) error {
 		return ErrUnknownType
 	}
 }
+
+// ---- PROBE (v0.7.4): валидация реального egress для смены протокола ----
+
+type probeRequest struct {
+	Target    string `json:"target"`
+	TimeoutMs int64  `json:"timeout_ms"`
+}
+
+type probeResponse struct {
+	OK    bool   `json:"ok"`
+	Err   string `json:"err"`
+	Proto string `json:"proto"`
+}
+
+// handleProbe диалит цель с сервера (егресс сервера = егресс туннеля) и
+// отвечает результатом. Клиент использует это как доказательство «туннель
+// реально возит трафик до реальных хостов» перед коммитом смены протокола.
+func (s *Session) handleProbe(f *Frame) {
+	resp := probeResponse{OK: false, Err: "probe disabled", Proto: s.cfg.Protocol}
+	defer func() {
+		b, _ := json.Marshal(resp)
+		s.writeAsync(&Frame{Type: TypeProbe, Payload: b})
+	}()
+	if s.cfg.ProbeDialer == nil {
+		return
+	}
+	var req probeRequest
+	if err := json.Unmarshal(f.Payload, &req); err != nil {
+		resp.Err = "bad probe json"
+		return
+	}
+	timeout := time.Duration(req.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if timeout > 15*time.Second {
+		timeout = 15 * time.Second
+	}
+	_, _, err := net.SplitHostPort(req.Target)
+	if err != nil {
+		resp.Err = "bad probe target"
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := s.cfg.ProbeDialer(ctx, req.Target, timeout); err != nil {
+		resp.Err = err.Error()
+		return
+	}
+	resp.OK = true
+	resp.Err = ""
+}
+
+// Protocol returns the negotiated protocol id for this session.
+func (s *Session) Protocol() string { return s.cfg.Protocol }
 
 // ---- UDP (v0.7) ----
 

@@ -18,7 +18,7 @@ class RrpUriTest {
 
     @Test
     fun `canonical string serialize roundtrip`() {
-        val raw = "rrp://token@host.example:443,8443/?pin=SPKI&name=Home"
+        val raw = "rrp://token@host.example:443,8443/?pin=SPKI&name=Home&proto=rrp1"
         assertEquals(raw, RrpUri.parse(raw).serialize())
     }
 
@@ -41,7 +41,7 @@ class RrpUriTest {
         assertEquals("t", cfg.token)
         assertEquals("2001:db8::1", cfg.host)
         assertEquals(listOf(443), cfg.ports)
-        assertEquals("rrp://t@[2001:db8::1]:443", cfg.serialize())
+        assertEquals("rrp://t@[2001:db8::1]:443/?proto=rrp1", cfg.serialize())
     }
 
     @Test

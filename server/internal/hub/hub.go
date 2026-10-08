@@ -136,6 +136,9 @@ func (h *Hub) Snapshot() []map[string]any {
 				"device":      d.Name,
 				"outstanding": s.Outstanding(),
 				"rtt_ms":      s.RTT(),
+				"proto":       s.Proto,
+				"bytes_in":    s.LastStats().BytesIn,
+				"bytes_out":   s.LastStats().BytesOut,
 			})
 		}
 		d.mu.Unlock()

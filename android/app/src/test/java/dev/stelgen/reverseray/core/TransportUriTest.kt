@@ -36,9 +36,10 @@ class TransportUriTest {
     }
 
     @Test
-    fun `unknown transport rejected`() {
-        assertThrows(RrpUriException::class.java) {
-            RrpUri.parse("rrp://tok@h:4433/?transport=grpc")
-        }
+    fun `unknown transport falls back to tcp, not error`() {
+        // v0.7.4: мусорный transport больше не ломает разбор — сводится к tcp
+        val cfg = RrpUri.parse("rrp://tok@h:4433/?transport=grpc")
+        assertEquals(RrpUri.TRANSPORT_TCP, cfg.transport)
+        assertEquals(RrpUri.TRANSPORT_WS, RrpUri.parse("rrp://tok@h:4433/?transport=ws").transport)
     }
 }

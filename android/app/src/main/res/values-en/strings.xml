@@ -50,4 +50,76 @@
     <string name="netinfo_failed">Network: unknown</string>
     <string name="netinfo_ip">IP %1$s</string>
     <string name="status_retry_last">Port %1$d: reconnecting in %2$d s — last error: %3$s</string>
+
+    <!-- v0.7.4: tabs -->
+    <string name="tab_home">Home</string>
+    <string name="tab_link">Connection</string>
+    <string name="tab_update">Update</string>
+    <string name="tab_settings">Settings</string>
+    <string name="btn_stop_short">STOP</string>
+
+    <!-- Connection -->
+    <string name="link_tab_hint">Paste an rrp:// link — the parser cleans up junk by itself: invisible chars, quotes, surrounding text, trailing dots and commas.</string>
+    <string name="link_fix">Check &amp; fix</string>
+    <string name="link_fixed">Link is valid: %1$s</string>
+
+    <!-- Protocols -->
+    <string name="proto_section">Tunnel protocol</string>
+    <string name="proto_unknown">Protocol: unknown (connect once — the server will send its list)</string>
+    <string name="proto_switch">Switch protocol</string>
+    <string name="proto_switching">Switching to %1$s (validating with real traffic…)</string>
+    <string name="proto_current">Protocol: %1$s</string>
+    <string name="proto_current_list">Protocol: %1$s · server supports: %2$s</string>
+    <string name="proto_rollback_toast">New protocol failed validation — rolled back to the last working one</string>
+
+    <!-- Update -->
+    <string name="version_row">Version: %1$s (code %2$d)</string>
+    <string name="update_auto">Check for updates every 24 hours</string>
+    <string name="update_log_hint">Technical update log:</string>
+    <string name="update_log_empty">Update log is empty</string>
+
+    <!-- Settings -->
+    <string name="settings_device">About this device</string>
+    <string name="dev_model">Model</string>
+    <string name="dev_android">Android</string>
+    <string name="dev_build">Build</string>
+    <string name="dev_patch">Security patch</string>
+    <string name="dev_kernel">Kernel</string>
+    <string name="dev_cpu">Architecture</string>
+    <string name="dev_screen">Screen</string>
+    <string name="dev_mem">Memory (heap)</string>
+    <string name="dev_version">ReverseRay version</string>
+    <string name="dev_copy">Copy device info</string>
+    <string name="set_wifi_only">Wi-Fi only</string>
+    <string name="set_allow_lan">Allow LAN access</string>
+    <string name="set_auto_update">Auto update check</string>
+    <string name="set_limit_title">Traffic limit</string>
+    <string name="set_limit_switch">Enable limit (unlimited by default)</string>
+    <string name="set_limit_gb_hint">Limit, GB (e.g. 5)</string>
+    <string name="set_limit_period_hint">Reset day for monthly limit (1–28)</string>
+    <string name="set_limit_apply">Apply limit</string>
+    <string name="set_limit_reset">Reset counter</string>
+    <string name="set_limit_reset_done">Traffic counter reset</string>
+    <string name="set_limit_applied">Limit applied</string>
+    <string name="set_limit_bad_value">Set a limit greater than 0 GB</string>
+    <string name="set_limit_counter">Traffic counter</string>
+    <string name="set_probe_title">PROBE target</string>
+    <string name="set_probe_hint">host:port — the server dials it when switching protocols (real egress check)</string>
+    <string name="set_probe_apply">Save</string>
+    <string name="set_probe_bad">Expected host:port</string>
+
+    <!-- Traffic/status v0.7.4 -->
+    <string name="packets_line">%1$s · ↑ %2$s · ↓ %3$s · packets ↑%4$d ↓%5$d</string>
+    <string name="local_ip">Local IP: %1$s</string>
+    <string name="usage_no_limit">Traffic this period: %1$s (no limit)</string>
+    <string name="usage_with_limit">Traffic: %1$s of %2$s (%3$d%%)</string>
+    <string name="status_wait_wifi">Waiting for Wi-Fi ("Wi-Fi only" is on)</string>
+    <string name="status_limit_reached">Traffic limit reached — tunnel stopped. Reset the counter in Settings.</string>
+    <string name="status_switch_busy">A protocol switch is already in progress</string>
+    <string name="status_switch_cooldown">Protocol switch available in %1$d s (rate-limit protection)</string>
+    <string name="status_switch_same">Protocol %1$s is already active</string>
+    <string name="status_switch_trying">Switching protocol: %1$s — validating with real traffic…</string>
+    <string name="status_switch_done">Protocol %1$s connected and validated (real traffic passed)</string>
+    <string name="status_switch_fail">Protocol %1$s failed: %2$s</string>
+    <string name="status_switch_rolled_back">Protocol %1$s failed validation (%2$s) — staying on %3$s, link unchanged</string>
 </resources>

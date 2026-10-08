@@ -172,55 +172,82 @@ def banner(w: int = 1600, h: int = 640) -> Image.Image:
 
 
 def app_mock(w: int = 720, h: int = 1440) -> Image.Image:
-    """Мокап интерфейса приложения (Material 3, тёмная тема)."""
-    img = Image.new("RGB", (w, h), (10, 12, 18))
+    """Мокап v0.7.4: 4 вкладки, большая круглая Старт/Стоп, окно трафика,
+    «терминальный» лог — как в реальном приложении (Material 3, тёмная тема)."""
+    img = Image.new("RGB", (w, h), (11, 16, 32))
     d = ImageDraw.Draw(img)
     f_title = _font(int(w * 0.075))
     fs = _font(int(w * 0.042))
     fw = _font(int(w * 0.045))
+    fm = _font(int(w * 0.036))
+    CARD = (18, 26, 48)
+    LINE = (31, 43, 77)
+    GREEN = (57, 217, 138)
+    TERM_BG = (11, 16, 32)
+    TERM_TX = (139, 209, 124)
 
-    d.text((w * 0.08, h * 0.05), "ReverseRay", font=f_title, fill=(255, 255, 255))
+    # шапка: иконка-эмблема + имя
+    emb = emblem(int(w * 0.11), dark=True)
+    img.paste(emb, (int(w * 0.445), int(h * 0.025)), emb)
+    d.text((w * 0.5 - f_title.getlength("ReverseRay") / 2, h * 0.145),
+           "ReverseRay", font=f_title, fill=(255, 255, 255))
 
-    # карточка статуса: зелёная галочка
-    card = [w * 0.06, h * 0.14, w * 0.94, h * 0.235]
-    d.rounded_rectangle(card, radius=18, fill=(22, 27, 34))
-    d.ellipse([card[0] + 24, card[1] + (card[3] - card[1]) / 2 - 16,
-               card[0] + 24 + 32, card[1] + (card[3] - card[1]) / 2 + 16],
-              outline=(46, 125, 50), width=5)
-    d.text((card[0] + 24 + 44, card[1] + (card[3] - card[1]) / 2 - 26), "✓",
-           font=_font(28), fill=(76, 175, 80))
-    d.text((card[0] + 24 + 44, card[1] + (card[3] - card[1]) / 2 - 12),
-           "Ready: port 4433", font=fs, fill=(230, 237, 243))
+    # вкладки
+    ty = h * 0.215
+    tabs = ["Главная", "Связь", "Обновление", "Настройки"]
+    tw = w / 4
+    d.line([0, ty + 64, w, ty + 64], fill=LINE, width=2)
+    for i, t in enumerate(tabs):
+        cx = i * tw
+        col = (255, 255, 255) if i == 0 else (143, 163, 217)
+        d.text((cx + tw / 2 - fm.getlength(t) / 2, ty + 18), t, font=fm, fill=col)
+        if i == 0:
+            d.line([cx + 30, ty + 64, cx + tw - 30, ty + 64], fill=(53, 182, 255), width=5)
 
-    # поле конфигурации (outlined)
-    fconf = [w * 0.06, h * 0.27, w * 0.94, h * 0.42]
-    d.rounded_rectangle(fconf, radius=18, fill=(22, 27, 34), outline=(48, 54, 61), width=2)
-    d.text((fconf[0] + 24, fconf[1] + 20), "rrp://…", font=fs, fill=(139, 148, 158))
-    d.line([fconf[0] + 24, fconf[1] + 74, fconf[0] + 24 + int(w * 0.35), fconf[1] + 74],
-           fill=ACCENT, width=3)
+    # большая круглая кнопка СТАРТ
+    by = h * 0.27
+    r = int(w * 0.23)
+    cx, cy = w // 2, by + r
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(46, 125, 50))
+    t1, t2 = "СТАРТ", "туннель"
+    d.text((cx - fw.getlength(t1) / 2, cy - 34), t1, font=fw, fill=(255, 255, 255))
+    d.text((cx - fm.getlength(t2) / 2, cy + 22), t2, font=fm, fill=(220, 245, 224))
 
-    y0 = h * 0.46
-    bh = int(h * 0.055)
-    d.rounded_rectangle([w * 0.06, y0, w * 0.94, y0 + bh], radius=14, fill=ACCENT)
-    d.text((w * 0.40, y0 + bh / 2 - 20), "Start tunnel", font=fw, fill=(6, 16, 34))
+    # карточка трафика
+    cy0 = cy + r + 40
+    card = [w * 0.06, cy0, w * 0.94, cy0 + h * 0.13]
+    d.rounded_rectangle(card, radius=18, fill=CARD, outline=LINE, width=2)
+    d.text((card[0] + 24, card[1] + 16), "✓ Готов: порт 4433", font=fs, fill=GREEN)
+    d.text((card[0] + 24, card[1] + 66), "↓ 128.4 КБ/с · ↑ 61.9 КБ/с", font=fm, fill=(219, 228, 255))
+    d.text((card[0] + 24, card[1] + 110), "TCP · ↑ 512 Б · ↓ 1.2 КБ · пакеты ↑34 ↓56", font=fm, fill=(143, 163, 217))
+    d.text((card[0] + 24, card[1] + 154), "IP 85.140.10.20 · RU · Mobile-ISP", font=fm, fill=(143, 163, 217))
+    d.text((card[0] + 24, card[1] + 198), "Протокол: rrp1 · сервер: rrp1", font=fm, fill=(53, 182, 255))
 
-    y1 = y0 + bh + 20
-    d.rounded_rectangle([w * 0.06, y1, w * 0.47, y1 + bh], radius=14, outline=(48, 54, 61), width=2)
-    d.text((w * 0.12, y1 + bh / 2 - 20), "Scan QR", font=fw, fill=(230, 237, 243))
-    d.rounded_rectangle([w * 0.53, y1, w * 0.94, y1 + bh], radius=14, outline=(48, 54, 61), width=2)
-    d.text((w * 0.61, y1 + bh / 2 - 20), "Show QR", font=fw, fill=(230, 237, 243))
+    # график трафика (ломаная)
+    gy = card[3] + 36
+    d.rounded_rectangle([w * 0.06, gy, w * 0.94, gy + h * 0.085], radius=18, fill=CARD, outline=LINE, width=2)
+    pts = []
+    for i in range(16):
+        px = w * 0.085 + i * (w * 0.83 / 15)
+        py = gy + h * 0.07 - (0.35 + abs(((i * 7) % 11) - 5) / 5 * 0.4) * h * 0.055
+        pts.append((px, py))
+    d.line(pts, fill=(53, 182, 255), width=5)
 
-    y2 = y1 + bh + 20
-    d.rounded_rectangle([w * 0.06, y2, w * 0.94, y2 + bh], radius=14, fill=(22, 27, 34))
-    d.text((w * 0.44, y2 + bh / 2 - 20), "Stop", font=fw, fill=(248, 81, 73))
+    # терминальный лог
+    ly = gy + h * 0.085 + 40
+    d.rounded_rectangle([w * 0.06, ly, w * 0.94, ly + h * 0.155], radius=18, fill=TERM_BG, outline=LINE, width=2)
+    lines = [
+        "81.25.59.194:4433: SENT HELLO ver=1 proto=rrp1",
+        "81.25.59.194:4433: RECV HELLO_OK nonce=…",
+        "81.25.59.194:4433: SENT AUTH token-hmac",
+        "81.25.59.194:4433: RECV READY proto=rrp1",
+        "81.25.59.194:4433: PROBE OK — egress подтверждён",
+        "туннель готов: порт 4433",
+    ]
+    for i, t in enumerate(lines):
+        d.text((w * 0.085, ly + 26 + i * 52), t, font=fm, fill=TERM_TX)
 
-    y3 = y2 + bh + 26
-    d.rounded_rectangle([w * 0.06, y3, w * 0.47, y3 + bh], radius=14, outline=(48, 54, 61), width=2)
-    d.text((w * 0.10, y3 + bh / 2 - 20), "Check updates", font=fw, fill=(230, 237, 243))
-    d.rounded_rectangle([w * 0.53, y3, w * 0.94, y3 + bh], radius=14, outline=(48, 54, 61), width=2)
-    d.text((w * 0.66, y3 + bh / 2 - 20), "Log", font=fw, fill=(230, 237, 243))
-
-    d.text((w * 0.08, h * 0.93), "Android egress  ·  TLS 1.3  ·  no logs",
+    d.text((w * 0.08, h * 0.955), "Android egress · TLS 1.3 · вкладки · лимиты трафика",
            font=_font(int(w * 0.032)), fill=(139, 148, 158))
     return img
 

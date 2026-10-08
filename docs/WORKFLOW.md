@@ -47,7 +47,8 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 
 - **Go**: unit + E2E (fake-phone) + hostile-environment (`evilclient_test.go`)
   — запускаются в каждом PR и релизе.
-- **Android**: 55+ unit (Robolectric API 21/31, evil-сервер, QR, SSRF, тайминги);
+- **Android**: 101 unit (Robolectric API 21/31, evil-сервер, QR, SSRF, тайминги,
+  канон HELLO/AUTH, бронепарсер rrp://, согласование протоколов, PROBE-кадры);
   JVM-изоляция (`forkEvery=1`) обязательна.
 - **Ассеты**: детерминизм, размеры, синхронность лендинг-копий.
 

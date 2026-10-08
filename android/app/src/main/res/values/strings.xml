@@ -50,4 +50,76 @@
     <string name="netinfo_failed">Сеть: не определено</string>
     <string name="netinfo_ip">IP %1$s</string>
     <string name="status_retry_last">Порт %1$d: переподключение через %2$d с — последняя ошибка: %3$s</string>
+
+    <!-- v0.7.4: вкладки -->
+    <string name="tab_home">Главная</string>
+    <string name="tab_link">Связь</string>
+    <string name="tab_update">Обновление</string>
+    <string name="tab_settings">Настройки</string>
+    <string name="btn_stop_short">СТОП</string>
+
+    <!-- Связь -->
+    <string name="link_tab_hint">Вставь rrp://-ссылку — парсер сам почистит мусор: невидимые символы, кавычки, текст вокруг ссылки, точки и запятые на концах.</string>
+    <string name="link_fix">Проверить и починить</string>
+    <string name="link_fixed">Ссылка валидна: %1$s</string>
+
+    <!-- Протоколы -->
+    <string name="proto_section">Протокол туннеля</string>
+    <string name="proto_unknown">Протокол: неизвестно (подключись — сервер пришлёт список)</string>
+    <string name="proto_switch">Сменить протокол</string>
+    <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
+    <string name="proto_current">Протокол: %1$s</string>
+    <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>
+    <string name="proto_rollback_toast">Новый протокол не прошёл валидацию — вернулись на последний рабочий</string>
+
+    <!-- Обновление -->
+    <string name="version_row">Версия: %1$s (код %2$d)</string>
+    <string name="update_auto">Проверять обновления каждые 24 часа</string>
+    <string name="update_log_hint">Технический журнал обновления:</string>
+    <string name="update_log_empty">Журнал обновления пуст</string>
+
+    <!-- Настройки -->
+    <string name="settings_device">Об устройстве</string>
+    <string name="dev_model">Модель</string>
+    <string name="dev_android">Android</string>
+    <string name="dev_build">Билд</string>
+    <string name="dev_patch">Патч безопасности</string>
+    <string name="dev_kernel">Ядро</string>
+    <string name="dev_cpu">Архитектура</string>
+    <string name="dev_screen">Экран</string>
+    <string name="dev_mem">Память (heap)</string>
+    <string name="dev_version">Версия ReverseRay</string>
+    <string name="dev_copy">Скопировать инфо об устройстве</string>
+    <string name="set_wifi_only">Только по Wi-Fi</string>
+    <string name="set_allow_lan">Разрешить доступ в локальную сеть</string>
+    <string name="set_auto_update">Авто-проверка обновлений</string>
+    <string name="set_limit_title">Лимит трафика</string>
+    <string name="set_limit_switch">Включить лимит (по умолчанию без ограничений)</string>
+    <string name="set_limit_gb_hint">Лимит, ГБ (например 5)</string>
+    <string name="set_limit_period_hint">День сброса для месячного лимита (1–28)</string>
+    <string name="set_limit_apply">Применить лимит</string>
+    <string name="set_limit_reset">Сбросить счётчик</string>
+    <string name="set_limit_reset_done">Счётчик трафика сброшен</string>
+    <string name="set_limit_applied">Лимит применён</string>
+    <string name="set_limit_bad_value">Укажи лимит больше 0 ГБ</string>
+    <string name="set_limit_counter">Счётчик трафика</string>
+    <string name="set_probe_title">Цель PROBE-валидации</string>
+    <string name="set_probe_hint">host:port — сервер дёрнет сюда TCP при смене протокола (проверка реального egress)</string>
+    <string name="set_probe_apply">Сохранить</string>
+    <string name="set_probe_bad">Ожидался вид host:port</string>
+
+    <!-- Трафик/статус v0.7.4 -->
+    <string name="packets_line">%1$s · ↑ %2$s · ↓ %3$s · пакеты ↑%4$d ↓%5$d</string>
+    <string name="local_ip">Локальный IP: %1$s</string>
+    <string name="usage_no_limit">Трафик за период: %1$s (без лимита)</string>
+    <string name="usage_with_limit">Трафик: %1$s из %2$s (%3$d%%)</string>
+    <string name="status_wait_wifi">Жду Wi-Fi (включено «только по Wi-Fi»)</string>
+    <string name="status_limit_reached">Лимит трафика исчерпан — туннель остановлен. Сбрось счётчик в Настройках.</string>
+    <string name="status_switch_busy">Смена протокола уже идёт</string>
+    <string name="status_switch_cooldown">Смена протокола доступна через %1$d с (защита от rate-limit)</string>
+    <string name="status_switch_same">Протокол %1$s уже активен</string>
+    <string name="status_switch_trying">Смена протокола: %1$s — проверяю реальным трафиком…</string>
+    <string name="status_switch_done">Протокол %1$s подключён и проверен (реальный трафик прошёл)</string>
+    <string name="status_switch_fail">Протокол %1$s: не прошёл — %2$s</string>
+    <string name="status_switch_rolled_back">Протокол %1$s не прошёл валидацию (%2$s) — остаёмся на %3$s, ссылка не менялась</string>
 </resources>

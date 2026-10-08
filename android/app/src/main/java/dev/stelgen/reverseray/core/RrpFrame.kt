@@ -63,22 +63,33 @@ sealed class RrpFrame(val type: Int) {
 
     // ------------------- типы кадров -------------------
 
-    /** 0x01 C→S: JSON {agent, ver, caps, max_streams} */
+    /** 0x01 C→S: JSON {agent, ver, device, caps, max_streams, proto}.
+     *  v0.7.4 ФИКС: ver — ОБЯЗАТЕЛЬНО строка в кавычках ("ver":"1").
+     *  APK 0.7.3 слал число ("ver":1) — сервер Go падал на json.Unmarshal
+     *  в string-поле и отвечал ERROR 2 «protocol error» (регресс на проде).
+     *  Канон-строка валидна и для старых серверов 0.7.x, и для новых. */
     class Hello(
         val agent: String,
         val protocolVersion: Int,
         val device: String,
         val caps: List<String>,
         val maxStreams: Int,
+        /** Желаемый протокол (значение &proto= из ссылки; мусор → сервер сводит к дефолту). */
+        val proto: String = "rrp1",
+        /** Список протоколов, которые клиент готов поддерживать. */
+        val protocols: List<String> = listOf(proto),
     ) : RrpFrame(TYPE_HELLO) {
         override fun buildPayload(): ByteArray {
             val capsJson = caps.joinToString(",") { MiniJson.q(it) }
+            val protosJson = protocols.joinToString(",") { MiniJson.q(it) }
             val json = MiniJson.obj(
                 "agent" to MiniJson.q(agent),
-                "ver" to protocolVersion.toString(),
+                "ver" to MiniJson.q(protocolVersion.toString()), // КАНОН: строка!
                 "device" to MiniJson.q(device),
                 "caps" to "[$capsJson]",
                 "max_streams" to maxStreams.toString(),
+                "proto" to MiniJson.q(proto),
+                "protocols" to "[$protosJson]",
             )
             return json.toByteArray(Charsets.UTF_8)
         }
@@ -90,12 +101,18 @@ sealed class RrpFrame(val type: Int) {
                     .split(',')
                     .map { it.trim().trim('"') }
                     .filter { it.isNotEmpty() }
+                val protos = (m["protocols"] ?: "")
+                    .split(',')
+                    .map { it.trim().trim('"') }
+                    .filter { it.isNotEmpty() }
                 return Hello(
                     agent = m["agent"] ?: "",
                     protocolVersion = m["ver"]?.toIntOrNull() ?: VERSION,
                     device = m["device"] ?: "",
                     caps = caps,
                     maxStreams = m["max_streams"]?.toIntOrNull() ?: 0,
+                    proto = m["proto"] ?: "rrp1",
+                    protocols = protos,
                 )
             }
         }
@@ -107,12 +124,17 @@ sealed class RrpFrame(val type: Int) {
         val serverVer: String,
         val nonce: String,
         val tunnelWindow: Long,
+        /** Протокол, выбранный сервером для сессии. */
+        val proto: String = "rrp1",
+        /** Полный реестр протоколов сервера (для UI-переключателя). */
+        val protocols: List<String> = emptyList(),
     ) : RrpFrame(TYPE_HELLO_OK) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "session_id" to MiniJson.q(sessionId),
             "server_ver" to MiniJson.q(serverVer),
             "nonce" to MiniJson.q(nonce),
             "tunnel_window" to tunnelWindow.toString(),
+            "proto" to MiniJson.q(proto),
         ).toByteArray(Charsets.UTF_8)
 
         companion object {
@@ -123,8 +145,13 @@ sealed class RrpFrame(val type: Int) {
                     serverVer = m["server_ver"] ?: "",
                     nonce = m["nonce"] ?: "",
                     tunnelWindow = m["tunnel_window"]?.toLongOrNull() ?: 0L,
+                    proto = m["proto"] ?: "rrp1",
+                    protocols = splitCsv(m["protocols"]),
                 )
             }
+
+            internal fun splitCsv(raw: String?): List<String> =
+                (raw ?: "").split(',').map { it.trim().trim('"') }.filter { it.isNotEmpty() }
         }
     }
 
@@ -155,6 +182,10 @@ sealed class RrpFrame(val type: Int) {
         val role: String,
         val maxStreams: Int,
         val tunnelWindow: Long,
+        /** Протокол сессии (финальное подтверждение). */
+        val proto: String = "rrp1",
+        /** Реестр протоколов сервера. */
+        val protocols: List<String> = emptyList(),
     ) : RrpFrame(TYPE_READY) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "tunnel_id" to MiniJson.q(tunnelId),
@@ -171,6 +202,8 @@ sealed class RrpFrame(val type: Int) {
                     role = m["role"] ?: "",
                     maxStreams = m["max_streams"]?.toIntOrNull() ?: 0,
                     tunnelWindow = m["tunnel_window"]?.toLongOrNull() ?: 0L,
+                    proto = m["proto"] ?: "rrp1",
+                    protocols = HelloOk.splitCsv(m["protocols"]),
                 )
             }
         }
@@ -337,6 +370,42 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
+    /** 0x23 C→S: JSON {"target":"host:port","timeout_ms":N} — запрос валидации egress. */
+    class ProbeReq(
+        val target: String,
+        val timeoutMs: Long = 5_000,
+    ) : RrpFrame(TYPE_PROBE) {
+        override fun buildPayload(): ByteArray = MiniJson.obj(
+            "target" to MiniJson.q(target),
+            "timeout_ms" to timeoutMs.toString(),
+        ).toByteArray(Charsets.UTF_8)
+    }
+
+    /** 0x23 S→C: JSON {"ok":true|false,"err":"","proto":"rrp1"} — ответ на PROBE. */
+    class ProbeResp(
+        val ok: Boolean,
+        val err: String,
+        val proto: String,
+    ) : RrpFrame(TYPE_PROBE) {
+        override fun buildPayload(): ByteArray = MiniJson.obj(
+            "ok" to ok.toString(),
+            "err" to MiniJson.q(err),
+            "proto" to MiniJson.q(proto),
+        ).toByteArray(Charsets.UTF_8)
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): ProbeResp {
+                val m = MiniJson.parseFlat(p)
+                    ?: throw RrpFrameException("PROBE: некорректный JSON")
+                return ProbeResp(
+                    ok = (m["ok"] ?: "false") == "true",
+                    err = m["err"] ?: "",
+                    proto = m["proto"] ?: "rrp1",
+                )
+            }
+        }
+    }
+
     /** 0x20: utf8 JSON */
     class Stats(val json: String) : RrpFrame(TYPE_STATS) {
         override fun buildPayload(): ByteArray = json.toByteArray(Charsets.UTF_8)
@@ -385,6 +454,7 @@ sealed class RrpFrame(val type: Int) {
         const val TYPE_STATS = 0x20
         const val TYPE_UDP_ASSOC = 0x21
         const val TYPE_UDP_DATA = 0x22
+        const val TYPE_PROBE = 0x23
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
@@ -431,6 +501,7 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_PONG -> Pong.fromPayload(payload)
                 TYPE_UDP_ASSOC -> UdpAssoc(streamId)
                 TYPE_UDP_DATA -> UdpData.fromPayload(streamId, payload)
+                TYPE_PROBE -> ProbeResp.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)
                 else -> throw RrpFrameException("неизвестный тип кадра 0x${Integer.toHexString(type)}")

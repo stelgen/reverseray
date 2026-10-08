@@ -13,10 +13,10 @@
 
 | Тип | Код | Направление | Payload |
 |---|---|---|---|
-| HELLO | 0x01 | C→S | JSON `{agent, ver, device, caps?, max_streams}` |
-| HELLO_OK | 0x02 | S→C | JSON `{session_id, server_ver, nonce, tunnel_window}` |
-| AUTH | 0x03 | C→S | JSON `{mode:"token-hmac", hmac}` |
-| READY | 0x04 | S→C | JSON `{tunnel_id, role:"active", max_streams, tunnel_window}` |
+| HELLO | 0x01 | C→S | JSON `{agent, ver, device, caps?, max_streams, proto?, protocols?}` |
+| HELLO_OK | 0x02 | S→C | JSON `{session_id, server_ver, nonce, tunnel_window, proto, protocols}` |
+| AUTH | 0x03 | C→S | JSON `{mode:"token-hmac", hmac, nonce}` |
+| READY | 0x04 | S→C | JSON `{tunnel_id, role:"active", max_streams, tunnel_window, proto, protocols}` |
 | OPEN | 0x10 | S→C | `[u8 atyp][addr][u16 port]`; домен: `[3][len][name][port]` |
 | OPEN_OK | 0x17 | C→S | `[u8 err_code]` (0 = дial успешен) |
 | DATA | 0x11 | оба | сырые байты стрима |
@@ -26,21 +26,45 @@
 | STATS | 0x20 | C→S | JSON `{bytes_in, bytes_out, rtt_ms}` |
 | UDP_ASSOC | 0x21 | S→C | пустой; `stream_id` = id ассоциации; телефон отвечает OPEN_OK(err) |
 | UDP_DATA | 0x22 | оба | `[u8 atyp][addr][u16 port][data]`; S→C — назначение, C→S — фактический источник |
+| PROBE | 0x23 | оба | C→S: JSON `{"target":"host:port","timeout_ms":N}`; S→C: `{"ok":bool,"err":"","proto":"…"}` |
 | ERROR | 0x7F | оба | `[u16be code][utf8 msg]` |
 
 Лимиты payload (hardening): DATA ≤ 65535; **все остальные ≤ 4096**. Нарушение → ERROR + закрытие сессии.
 
 ## Аутентификация
 
-- Токен: 32 байта, base64url (`rrp://TOKEN@host:443/?pin=CA_PIN&name=phone-1`).
+- Токен: 32 байта, base64url (`rrp://TOKEN@host:443/?pin=CA_PIN&name=phone-1&proto=rrp1`).
 - Сервер хранит **только SHA256(token)**; утечка хранилища не раскрывает токены.
-- `hmac = base64url(HMAC-SHA256(key = SHA256(token), msg = nonce ‖ session_id))`.
+- `hmac = base64url_без_паддинга(HMAC-SHA256(key = SHA256(token), msg = nonce ‖ session_id))`.
+- **Толерантность кодировок (v0.7.4)**: сервер принимает base64url (с/без паддинга)
+  и стандартный base64 — это ОДНИ И ТЕ ЖЕ байты; сравнение остаётся constant-time.
+  Канон для новых клиентов — base64url без паддинга (исторический баг 0.7.3:
+  std-base64 → «auth failed»; ver числом → «bad HELLO»/ERROR 2).
 - `nonce` — 128 бит crypto/rand из HELLO_OK, **одноразовый**, TTL 60 с (анти-replay).
 - Сравнение constant-time; перебор всех токенов сервера (их единицы).
 - Rate-limit: ≤120 handshakes/min/IP (v0.7, настраивается `limits.handshakes_per_min`
   / `RR_LIMITS_HANDSHAKES_PER_MIN`; до v0.7 было 10 по доке / 60 по коду — рвало
   легитимные реконнекты мобильных сетей); lockout — **только** за невалидный HMAC:
   5 неудач → 30 c·2^n (макс 10 мин). Мусорный TLS/сканы лочить не могут.
+
+## Согласование протоколов (v0.7.4)
+
+Реестр протоколов живёт в `server/internal/rrp/protocol.go` и зеркалится в
+`core/RrpProtocols.kt`. Правила:
+
+1. Клиент в HELLO присылает желаемый `proto` (значение `&proto=` ссылки) и
+   список `protocols`, которые умеет; сервер в HELLO_OK/READY отвечает
+   выбранным `proto` и **полным реестром** `protocols`.
+2. Выбор: явный валидный id клиента → первый общий из списков → дефолт сервера.
+3. **Мусор/пустота никогда не дают ошибку** — сводятся к дефолту (`rrp1`,
+   самый стабильный протокол). Дефолт сервера задаётся `RR_PROTOCOL` (env/compose);
+   мусорное значение env тоже сводится к дефолту.
+4. Смена протокола на лету: APK поднимает provisional-сессию с новым `proto`,
+   сервер подтверждает выбор в HELLO_OK/READY, затем клиент шлёт **PROBE** —
+   сервер диалит `host:port` (по умолчанию `1.1.1.1:443`) с своего egress и
+   отвечает `{ok, err}`. Коммит (запись ссылки/выбора) — только после успешного
+   PROBE; иначе — мгновенный откат UI на последний рабочий протокол
+   (3 ретрая по 5 с, cooldown 60 с от rate-limit).
 
 ## TLS / PKI
 
@@ -71,3 +95,13 @@
 ## Логирование
 
 Хосты назначения **не логируются** (redaction по умолчанию). ADMIN API: unix socket или `127.0.0.1` TCP — `healthz/readyz/metrics/sessions/tokens/reload/devices/kick`.
+
+## Веб-морда (v0.7.4)
+
+- `/ui` — read-only дашборд (vanilla JS, без зависимостей): туннели, стримы,
+  устройства, auth OK/fail, egress IP, сессии (протокол/RTT/трафик).
+  Авто-обновление 3 с; CSS `clamp/auto-fit` — скейл от старых телефонов до
+  ультрашироких мониторов.
+- `/status` — тот же срез в JSON (для скриптов/rr.sh).
+- По умолчанию админ-порт слушает `127.0.0.1`; в LAN — через
+  `RR_METRICS_BIND=0.0.0.0` (rr.sh делает это сам и печатает URL `http://<LAN_IP>:9090/ui`).

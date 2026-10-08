@@ -9,6 +9,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/stelgen/reverseray/server/internal/rrp"
 )
 
 // Config is the full server configuration.
@@ -43,6 +45,10 @@ type Config struct {
 		Redact bool   `json:"redact"` // never log destination hosts (default true)
 	} `json:"log"`
 
+	// DefaultProtocol — протокол туннеля по умолчанию (RR_PROTOCOL).
+	// Любое мусорное/пустое значение сводится к стабильному дефолту без ошибки.
+	DefaultProtocol string `json:"default_protocol"`
+
 	Limits struct {
 		MaxStreams          int `json:"max_streams"`
 		StreamWindow        int `json:"stream_window"`
@@ -68,6 +74,7 @@ func Default() *Config {
 	c.TokensFile = "" // default: <state_dir>/tokens.json
 	c.Log.Level = "info"
 	c.Log.Redact = true
+	c.DefaultProtocol = "" // Validate() сводит пустое/мусорное к дефолту протокола
 	c.Limits.MaxStreams = 256
 	c.Limits.StreamWindow = 512 * 1024
 	c.Limits.MaxStreamWindow = 4 * 1024 * 1024
@@ -121,6 +128,11 @@ func (c *Config) applyEnv() {
 	setStr(&c.Auth.Password, "RR_AUTH_PASSWORD")
 	setStr(&c.Auth.PasswordFile, "RR_AUTH_PASSWORD_FILE")
 	setStr(&c.Log.Level, "RR_LOG_LEVEL")
+	// Протокол по умолчанию: RR_PROTOCOL (короткая форма) и
+	// RR_DEFAULT_PROTOCOL (длинная, для наглядности в compose). Мусор/пустое
+	// НЕ приводят к ошибке — Validate() сводит к самому стабильному протоколу.
+	setStr(&c.DefaultProtocol, "RR_PROTOCOL")
+	setStr(&c.DefaultProtocol, "RR_DEFAULT_PROTOCOL")
 	setInt := func(dst *int, key string) {
 		if v := os.Getenv(key); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
@@ -143,6 +155,7 @@ func (c *Config) Validate() error {
 	if c.Listen.Tunnels == "" && c.Listen.Mixed == "" {
 		return errors.New("config: at least one of listen.tunnels / listen.mixed required")
 	}
+	c.DefaultProtocol = rrp.NormalizeProto(c.DefaultProtocol) // мусор → дефолт, никогда не ошибка
 	if c.TokensFile == "" {
 		c.TokensFile = c.StateDir + "/tokens.json"
 	}

@@ -1,15 +1,18 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.3}
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.4}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"
       - "${RR_SOCKS_PORT:-1080}:1080/udp" # v0.7: SOCKS5 UDP ASSOCIATE через туннель
       - "${RR_TUNNEL_PORT:-4433}:4433"
-      - "127.0.0.1:${RR_METRICS_PORT:-9090}:9090" # admin/metrics только с localhost
+      - "${RR_METRICS_BIND:-127.0.0.1}:${RR_METRICS_PORT:-9090}:9090" # admin/metrics/web UI; RR_METRICS_BIND=0.0.0.0 откроет /ui в LAN
     environment:
       RR_STATE_DIR: /var/lib/reverseray
+      # Протокол туннеля по умолчанию (RR_PROTOCOL). Мусорное/пустое значение
+      # сводится к самому стабильному протоколу (rrp1) без ошибки — v0.7.4.
+      RR_PROTOCOL: "${RR_PROTOCOL:-rrp1}"
       # RR_PUBLIC_HOST: my-home.example.com   # DDNS-домен: используется в конфиг-строках вместо IP
       RR_LISTEN_TUNNELS: ":4433"
       RR_LISTEN_MIXED: ":1080"
