@@ -71,6 +71,8 @@ jobs:
             adb shell settings put global animator_duration_scale 0.0
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             ok=0
+            # ВАЖНО: script у emulator-runner исполняется из КОРНЯ репо —
+            # все файлы пишем туда (артефакт и шаг нормализации смотрят туда же)
             for attempt in 1 2 3 4 5 6 7 8; do
               echo "shot attempt $attempt"
               adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
@@ -81,6 +83,7 @@ jobs:
                 adb shell am start -n dev.stelgen.reverseray/.MainActivity >/dev/null 2>&1 || true
                 sleep 2
               done
+              adb exec-out screencap -p > "shot-attempt-$attempt.png" || true
               if [ "$focused" != "1" ]; then
                 echo "app never focused on attempt $attempt"
                 adb logcat -d | tail -60
@@ -98,7 +101,11 @@ jobs:
             done
             if [ "$ok" != "1" ]; then
               echo "no good frame in 8 attempts"
-              adb logcat -d | tail -200 > shot-fail-logcat.txt || true
+              {
+                echo "== logcat tail =="; adb logcat -d | tail -300
+                echo "== windows focus =="; adb shell dumpsys window 2>/dev/null | grep -i -A2 focus
+                echo "== resumed activity =="; adb shell dumpsys activity activities 2>/dev/null | grep -i -m5 'mResumedActivity\|topResumedActivity'
+              } > shot-fail-logcat.txt || true
               exit 1
             fi
       - name: Upload raw shot + logcat (diagnostics, always)
@@ -107,14 +114,16 @@ jobs:
         with:
           name: screenshot-diagnostics
           path: |
-            android/shot-raw.png
-            android/shot-fail-logcat.txt
+            shot-raw.png
+            shot-attempt-*.png
+            shot-fail-logcat.txt
           if-no-files-found: ignore
       - name: Normalize 720x1440 + ensure README embeds the shot
+        working-directory: ${{ github.workspace }}
         run: |
           python3 - <<'PY'
           from PIL import Image
-          img = Image.open("android/shot-raw.png").convert("RGB")
+          img = Image.open("shot-raw.png").convert("RGB")
           img = img.resize((720, 1440), Image.LANCZOS)
           img.save("assets/brand/screenshot.png", optimize=True)
           print("screenshot normalized:", img.size)
