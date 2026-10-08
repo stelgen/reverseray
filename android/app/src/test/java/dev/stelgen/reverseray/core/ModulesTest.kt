@@ -5,12 +5,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Модули (v0.8): манифест — общий с сервером. Проверяем канон:
  * валидация, мусор НЕ применяется, rrp1 обязателен, даунгрейд запрещён,
  * реестр применяется в RrpProtocols без переустановки APK.
  */
+@RunWith(RobolectricTestRunner::class) // org.json в unit-тестах живёт в Robolectric
+@Config(sdk = [31])
 class ModulesTest {
 
     private val goodManifest = """

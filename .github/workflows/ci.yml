@@ -144,10 +144,10 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           $(go env GOPATH)/bin/govulncheck ./...
 
-  # v0.8: реальный скриншот APK на главной репо (не «рисунок в Paint»):
-  # Robolectric рендерит MainActivity, робот коммитит PNG в assets/brand
+  # v0.8: РЕАЛЬНЫЙ скриншот APK на главной репо (не «рисунок в Paint»):
+  # эмулятор Android → приложение → adb screencap → робот коммитит в assets/brand
   screenshot:
-    name: Real app screenshot
+    name: Real app screenshot (emulator)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -159,26 +159,39 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v6
-      - name: Render screenshot via Robolectric
+      - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --no-daemon \
-            -Drr.screenshot.out=build/screenshot/app.png \
-            --tests "dev.stelgen.reverseray.ScreenshotTest"
-      - name: Commit screenshot if changed
-        working-directory: android
+          ./gradlew :app:assembleDebug --no-daemon
+      - name: Screenshot on real emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          script: |
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -n dev.stelgen.reverseray/.MainActivity
+            sleep 6
+            adb exec-out screencap -p > shot-raw.png
+            adb shell pidof dev.stelgen.reverseray | grep -q . || (adb logcat -d | tail -50; exit 1)
+      - name: Normalize to 720x1440 and commit
         run: |
-          if [ ! -f build/screenshot/app.png ]; then echo "no screenshot"; exit 1; fi
-          cp build/screenshot/app.png ../assets/brand/screenshot.png
-          cd ..
+          pip install pillow
+          python3 - <<'PY'
+          from PIL import Image
+          img = Image.open("shot-raw.png").convert("RGB")
+          img = img.resize((720, 1440), Image.LANCZOS)
+          img.save("assets/brand/screenshot.png", optimize=True)
+          print("screenshot normalized:", img.size)
+          PY
           if git diff --quiet assets/brand/screenshot.png; then
             echo "screenshot unchanged"
           else
             git config user.name "reverseray-screenshot-bot"
             git config user.email "bot@reverseray.local"
             git add assets/brand/screenshot.png
-            git commit -m "[skip ci] docs: real APK screenshot (auto-rendered by CI)"
+            git commit -m "[skip ci] docs: real APK screenshot (captured on emulator by CI)"
             git push
           fi
 

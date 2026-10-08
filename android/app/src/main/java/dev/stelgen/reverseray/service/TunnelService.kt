@@ -68,6 +68,13 @@ import java.util.concurrent.atomic.AtomicLong
  *   фактическом изменении значения.
  * - Счётчики пакетов/последний размер для строки «стрелки» на главном экране.
  */
+/** Роль строки журнала — цвет в едином консольном окне (v0.8). Файловый уровень:
+ *  импортируется MainActivity и тестами. */
+enum class LogKind { INFO, OK, WARN, ERR }
+
+/** Строка журнала с цветовой ролью. */
+class LogLine(val text: String, val kind: LogKind)
+
 class TunnelService : Service() {
 
     private class Target(val host: String, val port: Int)
@@ -281,7 +288,7 @@ class TunnelService : Service() {
                 lastRx = rx
 
                 // v0.8: счётчик за всё время (канон: RAM, запись на диск пореже)
-                p(getSharedPreferences(PREFS, MODE_PRIVATE)).edit()
+                prefs().edit()
                     .putLong(KEY_TRAFFIC_LIFETIME, lifetime.addAndGet(drx + dtx)).apply()
                 // v0.7.4/v0.8: учёт лимита трафика (сумма вход+выход за период)
                 val usage = accountTraffic(drx + dtx)
@@ -877,11 +884,6 @@ class TunnelService : Service() {
         @Volatile private var nextSwitchAllowedAt = 0L
 
         @Volatile var lastStatus: String = ""
-
-        /** Роль строки журнала — цвет в едином консольном окне (v0.8). */
-        enum class LogKind { INFO, OK, WARN, ERR }
-
-        class LogLine(val text: String, val kind: LogKind)
 
         /** Журнал статусов/ошибок (новые сверху) с цветовой ролью строки. */
         private val logLines = ArrayDeque<LogLine>()

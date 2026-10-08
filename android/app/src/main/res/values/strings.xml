@@ -159,7 +159,6 @@
     <string name="set_limit_period">Период</string>
     <string name="set_limit_period_day">Сутки</string>
     <string name="set_limit_period_month">Месяц</string>
-    <string name="set_limit_reset">Сбросить счётчик</string>
 
     <string name="status_limit_reached">Лимит трафика исчерпан — отправлено РОВНО 0 байт, туннель остановлен. Сброс: Настройки → Лимит.</string>
     <string name="status_limit_wait">Лимит достигнут. Жду сброса (≈%1$d ч) — подключусь автоматически.</string>

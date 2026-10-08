@@ -51,9 +51,8 @@ import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
+import dev.stelgen.reverseray.service.LogKind
 import dev.stelgen.reverseray.service.TunnelService
-import dev.stelgen.reverseray.service.TunnelService.LogKind
-import dev.stelgen.reverseray.service.TunnelService.LogLine
 import dev.stelgen.reverseray.ui.StatusConsole
 import dev.stelgen.reverseray.ui.TrafficGraphView
 import dev.stelgen.reverseray.update.UpdateChecker
@@ -835,9 +834,6 @@ class MainActivity : AppCompatActivity() {
         var selectedPeriod = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
             ?: TunnelService.PERIOD_DAY
         fun paintPeriod() {
-            val sel = com.google.android.material.R.attr.materialButtonFilledStyle
-            val unsel = com.google.android.material.R.attr.materialButtonOutlinedStyle
-            periodDay.context.theme.applyStyle(0, false)
             periodDay.backgroundTintList = android.content.res.ColorStateList.valueOf(
                 if (selectedPeriod == TunnelService.PERIOD_DAY) 0xFF2E7D32.toInt() else 0x00FFFFFF,
             )
@@ -1616,6 +1612,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Строка «следующий сброс счётчика» — настройки + главный. */
+    private fun refreshLimitNext() {
+        val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
+        val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
+        limitNextView.text = if (limit > 0) {
+            getString(R.string.set_limit_next, nextResetDateString())
+        } else {
+            ""
+        }
+        setUsageText(usageSummaryText(used, limit))
+    }
+
     private fun nextResetDateString(): String {
         val period = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
             ?: TunnelService.PERIOD_DAY
@@ -1662,7 +1670,7 @@ class MainActivity : AppCompatActivity() {
             RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
         } catch (_: Exception) { RrpProtocols.DEFAULT }
         val modulesV = RrpProtocols.registryVersion().ifEmpty { getString(R.string.app_modules_builtin) }
-        infoRow(appInfoBox, getString(R.string.app_version_row), "$currentVersion() ($code)")
+        infoRow(appInfoBox, getString(R.string.app_version_row), "${currentVersion()} ($code)")
         infoRow(appInfoBox, getString(R.string.app_modules_row), "$modulesV · ${RrpProtocols.displayList().joinToString(", ")}")
         infoRow(appInfoBox, getString(R.string.app_ram_row), fmtBytes(ramUsed))
         infoRow(appInfoBox, getString(R.string.app_disk_row), fmtBytes(apkLen + dataLen))
@@ -1836,6 +1844,7 @@ class MainActivity : AppCompatActivity() {
 object LimitReset {
 
     fun nextResetAtMs(period: String, resetDay: Int): Long {
+        val cal = Calendar.getInstance()
         if (period == TunnelService.PERIOD_MONTH) {
             cal.add(Calendar.MONTH, 1)
             cal.set(Calendar.DAY_OF_MONTH, resetDay.coerceIn(1, 28))

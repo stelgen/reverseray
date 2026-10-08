@@ -71,7 +71,7 @@ class StatusConsole @JvmOverloads constructor(
     private val liveBtn = TextView(context).apply {
         text = "↧ live"
         textSize = 11f
-        setTypeface(typeface, Typeface.MONOSPACE, Typeface.BOLD)
+        setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
         setPadding(dp(8), dp(2), dp(8), dp(2))
         setTextColor(0xFF8BD17C.toInt())
         // «кнопка в баре», не отдельная огромная кнопка

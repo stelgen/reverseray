@@ -154,17 +154,16 @@ object MtProto {
 
     // ---------------------------------------------------------------- IGE
 
-    /** AES-256-IGE поверх ECB: идентично серверу (без JCE-провайдер-магии). */
+    /** AES-256-IGE поверх ECB: идентично серверу (без JCE-провайдер-магии).
+     *  Cipher переинициализируется под направление (потокобезопасно по вызову). */
     internal class Ige(key: ByteArray) {
+        private val keySpec = SecretKeySpec(key, "AES")
         private val cipher: Cipher = Cipher.getInstance("AES/ECB/NoPadding")
         private val block = ByteArray(16)
 
-        init {
-            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"))
-        }
-
         fun encrypt(data: ByteArray, iv: ByteArray): ByteArray {
             require(data.size % 16 == 0) { "IGE: длина не кратна блоку" }
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec)
             val x = iv.copyOfRange(0, 16) // c-цепочка
             val y = iv.copyOfRange(16, 32) // p-цепочка
             val out = ByteArray(data.size)
@@ -182,6 +181,7 @@ object MtProto {
 
         fun decrypt(data: ByteArray, iv: ByteArray): ByteArray {
             require(data.size % 16 == 0) { "IGE: длина не кратна блоку" }
+            cipher.init(Cipher.DECRYPT_MODE, keySpec)
             val x = iv.copyOfRange(0, 16) // c-цепочка (c_{i-1})
             val y = iv.copyOfRange(16, 32) // p-цепочка (p_{i-1})
             val out = ByteArray(data.size)

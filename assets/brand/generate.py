@@ -400,7 +400,7 @@ def check() -> int:
     # v0.8: скриншот — РЕАЛЬНЫЙ рендер APK (кладёт CI-робот), не мокап генератора
     shot = os.path.join(REPO_ROOT, "assets/brand", "screenshot.png")
     if not os.path.exists(shot):
-        failures.append("screenshot.png missing — ждём CI-робота (ScreenshotTest)")
+        failures.append("screenshot.png missing — ждём CI-робота (эмулятор, adb screencap)")
     else:
         img = Image.open(shot)
         if img.size != (720, 1440):

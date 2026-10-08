@@ -159,7 +159,6 @@
     <string name="set_limit_period">Period</string>
     <string name="set_limit_period_day">Day</string>
     <string name="set_limit_period_month">Month</string>
-    <string name="set_limit_reset">Reset counter</string>
 
     <string name="status_limit_reached">Traffic limit exhausted — sent EXACTLY 0 bytes, tunnel stopped. Reset: Settings → Limit.</string>
     <string name="status_limit_wait">Limit reached. Waiting for reset (≈%1$d h) — will connect automatically.</string>
