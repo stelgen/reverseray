@@ -27,6 +27,15 @@ type StatusReport struct {
 	DefaultProto string           `json:"default_proto"`
 	Protocols    []string         `json:"protocols"`
 	Sessions     []map[string]any `json:"sessions"`
+	// v0.8: WAN-защита и модули — та же открытость, что и в APK:
+	// пользователь/админ видит, что защищает сервер и что он обновил.
+	HardeningProfile string `json:"hardening_profile"`
+	HardeningScans   uint64 `json:"hardening_scans_total"`
+	HardeningDropped uint64 `json:"hardening_dropped_total"`
+	HardeningLimited uint64 `json:"hardening_limited_total"`
+	ModulesVersion   string `json:"modules_version,omitempty"`
+	ModulesSource    string `json:"modules_source,omitempty"`
+	ProtoSessions    int64  `json:"proto_sessions_non_default"` // уже int64
 }
 
 // egressIP caches the outbound IPv4 of the server (targets are never logged).
@@ -58,18 +67,29 @@ func (e *egressIP) get() string {
 
 func (a *App) statusJSON() []byte {
 	s := StatusReport{
-		OK:           true,
-		Version:      Version,
-		EgressIP:     a.egress.get(),
-		TunnelsUp:    a.met.TunnelsUp.Load(),
-		StreamsOpen:  a.met.StreamsOpen.Load(),
-		Devices:      len(a.store.Devices()),
-		AuthOK:       a.met.AuthOK.Load(),
-		AuthFail:     a.met.AuthFailures.Load(),
-		InboundConns: a.met.InboundConns.Load(),
-		DefaultProto: rrp.NormalizeProto(a.cfg.DefaultProtocol),
-		Protocols:    rrp.SupportedIDs(),
-		Sessions:     a.hub.Snapshot(),
+		OK:               true,
+		Version:          Version,
+		EgressIP:         a.egress.get(),
+		TunnelsUp:        a.met.TunnelsUp.Load(),
+		StreamsOpen:      a.met.StreamsOpen.Load(),
+		Devices:          len(a.store.Devices()),
+		AuthOK:           a.met.AuthOK.Load(),
+		AuthFail:         a.met.AuthFailures.Load(),
+		InboundConns:     a.met.InboundConns.Load(),
+		DefaultProto:     rrp.NormalizeProto(a.cfg.DefaultProtocol),
+		Protocols:        rrp.SupportedIDs(),
+		Sessions:         a.hub.Snapshot(),
+		HardeningProfile: a.gate.Describe(),
+		HardeningScans:   a.hardSt.Scans.Load(),
+		HardeningDropped: a.hardSt.Dropped.Load(),
+		HardeningLimited: a.hardSt.Limited.Load(),
+		ProtoSessions:    a.met.ProtoSessions.Load(),
+	}
+	if a.modSync != nil {
+		s.ModulesVersion = a.modSync.ActiveVersion()
+		if ms := a.modSync.Status(); ms.Source != "" {
+			s.ModulesSource = ms.Source
+		}
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

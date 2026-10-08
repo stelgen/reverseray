@@ -27,8 +27,11 @@ import (
 
 	"github.com/stelgen/reverseray/server/internal/auth"
 	"github.com/stelgen/reverseray/server/internal/config"
+	"github.com/stelgen/reverseray/server/internal/hardening"
 	"github.com/stelgen/reverseray/server/internal/hub"
 	"github.com/stelgen/reverseray/server/internal/inbound"
+	"github.com/stelgen/reverseray/server/internal/modules"
+	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 	"github.com/stelgen/reverseray/server/internal/tlscert"
 )
@@ -46,6 +49,11 @@ type Metrics struct {
 	BytesRelayed atomic.Uint64
 	Reconnects   atomic.Uint64
 	WsTunnels    atomic.Int64
+	// v0.8 hardening: WAN-атаки видимы в метриках (без IP и содержимого).
+	HardeningScans   atomic.Uint64 // соединений классифицировано как скан/мусор
+	HardeningDropped atomic.Uint64 // из них tarpit/тихо закрыто
+	HardeningLimited atomic.Uint64 // отклонено лимитами параллельности
+	ProtoSessions    atomic.Int64  // сессий с протоколом != rrp1 (например mtproto2)
 }
 
 // addInbound регистрирует inbound для метрик UDP (вызывается в Run).
@@ -76,6 +84,11 @@ type App struct {
 	met    *Metrics
 	// egress — кешированный внешний IP сервера для /status и веб-морды
 	egress egressIP
+
+	// v0.8: hardening-гейт туннельного порта + синхронизатор модулей
+	hardSt  *hardening.Stats
+	gate    *hardening.Gate
+	modSync *modules.Syncer
 
 	inbMu    sync.Mutex
 	inbounds []*inbound.Inbound
@@ -122,6 +135,22 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		log.Warn("PKI is EPHEMERAL: state dir not writable — CA pin changes on every restart (clients need re-enroll); fix: compose user 0:0 or chown state dir to 65532")
 	}
 	log.Info("PKI ready", "ca_pin", bundle.CAPin)
+	hardSt := &hardening.Stats{}
+	gate := hardening.NewGate(cfg.Hardening.Enabled, cfg.Hardening.TarpitSec,
+		cfg.Hardening.MaxConns, cfg.Hardening.PerIPConns, hardSt)
+	gate.Logf = func(f string, args ...any) {
+		if cfg.Log.Redact {
+			log.Info("hardening: non-TLS probe tarpitted (ip redacted)")
+			return
+		}
+		log.Info(fmt.Sprintf(f, args...))
+	}
+	modSync := modules.NewSyncer(modules.ModulesConfig{
+		URL:        cfg.Modules.URL,
+		Auto:       cfg.Modules.Auto,
+		CheckHours: cfg.Modules.CheckHours,
+	}, log, cfg.StateDir)
+	log.Info("hardening gate up", "profile", gate.Describe())
 	return &App{
 		cfg:            cfg,
 		log:            log,
@@ -130,6 +159,9 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		bundle:         bundle,
 		met:            &Metrics{},
 		bootstrapToken: bootstrapToken,
+		hardSt:         hardSt,
+		gate:           gate,
+		modSync:        modSync,
 	}, nil
 }
 
@@ -145,6 +177,15 @@ func (a *App) Run(ctx context.Context) error {
 	defer stop()
 	go a.reloadLoop(ctx)
 	go a.logConnectInfo(ctx)
+	// v0.8: фоновая синхронизация модулей (первый прогон при старте)
+	if a.cfg.Modules.Auto {
+		go a.modSync.Run(ctx)
+		// манифест, скачанный/сохранённый ранее, применяется сразу
+		if m := a.modSync.Cached(); m != nil {
+			rrp.SetRegistry(m.ProtocolRegistry(), m.Version)
+			a.log.Info("modules: cached manifest applied", "version", m.Version, "protocols", m.EnabledProtocolIDs())
+		}
+	}
 
 	errCh := make(chan error, 4)
 
@@ -319,7 +360,7 @@ func (a *App) acceptTunnels(ln net.Listener) {
 			a.log.Warn("tunnel accept", "err", err)
 			return
 		}
-		go a.handleTunnel(conn)
+		go a.handleTunnelRaw(conn)
 	}
 }
 
@@ -340,13 +381,36 @@ func (a *App) tunnelTLSConfig() *tls.Config {
 	}
 }
 
-func (a *App) handleTunnel(conn net.Conn) {
-	ip := remoteIP(conn)
+// handleTunnelRaw — входная точка: hardening-гейт до TLS (v0.8).
+// Сканеры/мусор здесь заканчиваются тишиной, реальные TLS-клиенты — далее.
+func (a *App) handleTunnelRaw(raw net.Conn) {
+	defer a.recoverGoroutine("handleTunnelRaw")
+	ip := remoteIP(raw)
+	if !a.gate.Admit(ip) {
+		_ = raw.Close()
+		return
+	}
+	defer a.gate.Release(ip)
+	conn, ok := a.gate.Classify(raw)
+	if !ok {
+		return // tarpit/тихое закрытие: ни одного ответного байта
+	}
+	if a.hardSt != nil {
+		a.met.HardeningScans.Store(a.hardSt.Scans.Load())
+		a.met.HardeningDropped.Store(a.hardSt.Dropped.Load())
+		a.met.HardeningLimited.Store(a.hardSt.Limited.Load())
+	}
 	if !a.store.AllowHandshake(ip) {
 		a.met.AuthFailures.Add(1)
 		_ = conn.Close()
 		return
 	}
+	a.handleTunnel(conn)
+}
+
+func (a *App) handleTunnel(conn net.Conn) {
+	defer a.recoverGoroutine("handleTunnel")
+	ip := remoteIP(conn)
 	conn = tls.Server(conn, a.tunnelTLSConfig())
 
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
@@ -432,13 +496,6 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.Protocol = proto
 	scfg.ProbeDialer = a.probeDialer()
 
-	sess := rrp.NewSession(sid, device, framed, scfg)
-	if err := a.hub.Attach(device, sess, a.cfg.Limits.MaxTunnelsPerDevice); err != nil {
-		a.log.Warn("attach rejected", "device", device, "err", err)
-		writeJSONTyped(framed, rrp.TypeHelloOK, map[string]string{"error": err.Error()})
-		_ = framed.Close()
-		return
-	}
 	_ = tc.SetDeadline(time.Time{})
 	if err := writeJSONTyped(framed, rrp.TypeReady, &rrp.Ready{
 		TunnelID:     sid,
@@ -448,7 +505,34 @@ func (a *App) handleTunnel(conn net.Conn) {
 		Proto:        proto,
 		Protocols:    rrp.SupportedIDs(),
 	}); err != nil {
-		_ = sess.Close()
+		_ = framed.Close()
+		return
+	}
+
+	// v0.8: протокол mtproto2 — ПОСЛЕ READY (клиент ждёт READY, потом KEY_REQ)
+	// ключи туннеля перегенерируются DH-обменом и DATA/UDP_DATA уходят
+	// в MTProto 2.0-конверте (AES-256-IGE, см. internal/mtproto).
+	if proto == mtproto.ProtoID {
+		// дедлайн на обмен ключами: битый клиент не висит горутиной вечно
+		_ = tc.SetDeadline(time.Now().Add(15 * time.Second))
+		upgraded, uerr := mtproto.UpgradeServer(framed, sid, a.log)
+		if uerr != nil {
+			a.log.Warn("mtproto upgrade failed", "device", device, "err", uerr)
+			a.rejectHandshake(ip, framed, "protocol error")
+			return
+		}
+		framed = upgraded
+		a.met.ProtoSessions.Add(1)
+		defer a.met.ProtoSessions.Add(-1)
+		_ = tc.SetDeadline(time.Time{}) // дальше сессия ставит свои таймауты
+		a.log.Info("mtproto2 transport engaged", "device", device, "session", sid)
+	}
+
+	sess := rrp.NewSession(sid, device, framed, scfg)
+	if err := a.hub.Attach(device, sess, a.cfg.Limits.MaxTunnelsPerDevice); err != nil {
+		a.log.Warn("attach rejected", "device", device, "err", err)
+		writeJSONTyped(framed, rrp.TypeHelloOK, map[string]string{"error": err.Error()})
+		_ = framed.Close()
 		return
 	}
 	a.met.TunnelsUp.Add(1)
@@ -562,11 +646,11 @@ func parseAllowlist(specs []string) []*net.IPNet {
 
 func (a *App) mountAdmin(mux *http.ServeMux) {
 	a.mountUI(mux)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/healthz", a.safeHandler("healthz", secureHeaders(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+	})))
+	mux.HandleFunc("/readyz", a.safeHandler("readyz", secureHeaders(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if len(a.store.Devices()) == 0 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -574,8 +658,8 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 			return
 		}
 		fmt.Fprint(w, `{"ready":true}`)
-	})
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+	})))
+	mux.HandleFunc("/metrics", a.safeHandler("metrics", secureHeaders(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		m := a.met
 		fmt.Fprintf(w, "# HELP reverseray_tunnels_up active tunnels\n# TYPE reverseray_tunnels_up gauge\nreverseray_tunnels_up %d\n", m.TunnelsUp.Load())
@@ -586,19 +670,39 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 		fmt.Fprintf(w, "# HELP reverseray_reconnects_total tunnel connects\n# TYPE reverseray_reconnects_total counter\nreverseray_reconnects_total %d\n", m.Reconnects.Load())
 		fmt.Fprintf(w, "# HELP reverseray_udp_datagrams_total udp datagrams through tunnel\n# TYPE reverseray_udp_datagrams_total counter\nreverseray_udp_datagrams_total %d\n", a.udpDatagrams())
 		fmt.Fprintf(w, "# HELP reverseray_ws_tunnels active websocket tunnels\n# TYPE reverseray_ws_tunnels gauge\nreverseray_ws_tunnels %d\n", m.WsTunnels.Load())
-	})
-	mux.HandleFunc("/sessions", func(w http.ResponseWriter, _ *http.Request) {
+		// v0.8: hardening (анти-скан) и модули — наблюдаемость WAN-защиты
+		fmt.Fprintf(w, "# HELP reverseray_hardening_scans_total non-TLS probes classified as scans\n# TYPE reverseray_hardening_scans_total counter\nreverseray_hardening_scans_total %d\n", m.HardeningScans.Load())
+		fmt.Fprintf(w, "# HELP reverseray_hardening_dropped_total non-TLS probes tarpitted/closed silently\n# TYPE reverseray_hardening_dropped_total counter\nreverseray_hardening_dropped_total %d\n", m.HardeningDropped.Load())
+		fmt.Fprintf(w, "# HELP reverseray_hardening_limited_total connections rejected by concurrency limits\n# TYPE reverseray_hardening_limited_total counter\nreverseray_hardening_limited_total %d\n", m.HardeningLimited.Load())
+		fmt.Fprintf(w, "# HELP reverseray_proto_sessions_non_default sessions on non-default protocol\n# TYPE reverseray_proto_sessions_non_default gauge\nreverseray_proto_sessions_non_default %d\n", m.ProtoSessions.Load())
+		if a.modSync != nil {
+			fmt.Fprintf(w, "# HELP reverseray_modules_version modules manifest version\n# TYPE reverseray_modules_version gauge\nreverseray_modules_version{version=%q} 1\n", a.modSync.ActiveVersion())
+			fmt.Fprintf(w, "# HELP reverseray_modules_last_check_success last modules sync ok\n# TYPE reverseray_modules_last_check_success gauge\nreverseray_modules_last_check_success %d\n", boolToInt(a.modSync.LastCheckOK()))
+		}
+	})))
+	mux.HandleFunc("/sessions", a.safeHandler("sessions", secureHeaders(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(a.hub.Snapshot())
-	})
-	mux.HandleFunc("/tokens/reload", func(w http.ResponseWriter, _ *http.Request) {
+	})))
+	mux.HandleFunc("/tokens/reload", a.safeHandler("tokens_reload", secureHeaders(func(w http.ResponseWriter, _ *http.Request) {
 		if err := a.Reload(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			// текст ошибки ТОЛЬКО в лог — наружу без деталей (canon: ноль утечек)
+			a.log.Warn("tokens reload failed", "err", err)
+			http.Error(w, "reload failed", http.StatusInternalServerError)
 			return
 		}
 		fmt.Fprint(w, "reloaded")
-	})
-	mux.HandleFunc("/devices/kick", func(w http.ResponseWriter, r *http.Request) {
+	})))
+	// v0.8: статус модулей (версия, протоколы, последний чек) — только чтение
+	mux.HandleFunc("/modules", a.safeHandler("modules", secureHeaders(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if a.modSync == nil {
+			fmt.Fprint(w, `{"enabled":false}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(a.modSync.Status())
+	})))
+	mux.HandleFunc("/devices/kick", a.safeHandler("devices_kick", secureHeaders(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
 			return
@@ -609,7 +713,14 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 			return
 		}
 		fmt.Fprintf(w, "kicked %d sessions", a.hub.Kick(name)) // #nosec G705: name не выводится в ответ, только валидируется
-	})
+	})))
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // toU32 — безопасная конверсия конфиг-лимитов (gosec G115): отрицательное -> 0, >MaxUint32 -> MaxUint32.

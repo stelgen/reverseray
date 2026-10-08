@@ -49,6 +49,25 @@ type Config struct {
 	// Любое мусорное/пустое значение сводится к стабильному дефолту без ошибки.
 	DefaultProtocol string `json:"default_protocol"`
 
+	// Hardening — WAN-стойкость туннельного порта (v0.8): скрытие сервиса
+	// от сканеров (tarpit без ответных байтов), глобальный/per-IP лимиты
+	// параллельных соединений. См. internal/hardening и SECURITY.md.
+	Hardening struct {
+		Enabled    bool `json:"enabled"`
+		TarpitSec  int  `json:"tarpit_sec"`
+		MaxConns   int  `json:"max_conns"`
+		PerIPConns int  `json:"per_ip_conns"`
+	} `json:"hardening"`
+
+	// Modules — автообновляемый манифест модулей (v0.8): общий для APK и
+	// сервера источник правил (реестр протоколов, политики). См.
+	// internal/modules и modules/README.md.
+	Modules struct {
+		URL        string `json:"url"`
+		Auto       bool   `json:"auto"`
+		CheckHours int    `json:"check_hours"`
+	} `json:"modules"`
+
 	Limits struct {
 		MaxStreams          int `json:"max_streams"`
 		StreamWindow        int `json:"stream_window"`
@@ -87,6 +106,15 @@ func Default() *Config {
 	// реконнекты при нестабильной мобильной сети (реконнект ≈ 1/с уже упирался
 	// в потолок, у NAT за ним могли сидеть несколько клиентов).
 	c.Limits.HandshakesPerMin = 120
+	// v0.8 hardening: сканеры получают тишину+tarpit, реальные клиенты — TLS.
+	c.Hardening.Enabled = true
+	c.Hardening.TarpitSec = 3
+	c.Hardening.MaxConns = 4096
+	c.Hardening.PerIPConns = 32
+	// v0.8 modules: чек манифеста раз в сутки (только при изменении версии/хеша).
+	c.Modules.URL = "https://raw.githubusercontent.com/stelgen/reverseray/main/modules/modules.json"
+	c.Modules.Auto = true
+	c.Modules.CheckHours = 24
 	return &c
 }
 
@@ -145,6 +173,18 @@ func (c *Config) applyEnv() {
 	setInt(&c.Limits.IdleTimeoutSec, "RR_LIMITS_IDLE_TIMEOUT")
 	setInt(&c.Limits.DialTimeoutSec, "RR_LIMITS_DIAL_TIMEOUT")
 	setInt(&c.Limits.HandshakesPerMin, "RR_LIMITS_HANDSHAKES_PER_MIN")
+	// v0.8: hardening (RR_HARDENING=false/0 выключает скрытие порта) и модули.
+	if v := os.Getenv("RR_HARDENING"); v != "" {
+		c.Hardening.Enabled = v != "false" && v != "0"
+	}
+	setInt(&c.Hardening.TarpitSec, "RR_HARDENING_TARPIT_SEC")
+	setInt(&c.Hardening.MaxConns, "RR_HARDENING_MAX_CONNS")
+	setInt(&c.Hardening.PerIPConns, "RR_HARDENING_PER_IP_CONNS")
+	setStr(&c.Modules.URL, "RR_MODULES_URL")
+	if v := os.Getenv("RR_MODULES_AUTO"); v != "" {
+		c.Modules.Auto = v != "false" && v != "0"
+	}
+	setInt(&c.Modules.CheckHours, "RR_MODULES_CHECK_HOURS")
 	if v := os.Getenv("RR_LOG_REDACT"); v != "" {
 		c.Log.Redact = v != "false" && v != "0"
 	}
@@ -167,6 +207,19 @@ func (c *Config) Validate() error {
 	}
 	if c.Limits.HandshakesPerMin <= 0 {
 		c.Limits.HandshakesPerMin = 120
+	}
+	// hardening: мусорные/нереалистичные значения сводятся к дефолту без ошибки
+	if c.Hardening.TarpitSec < 0 || c.Hardening.TarpitSec > 60 {
+		c.Hardening.TarpitSec = 3
+	}
+	if c.Hardening.MaxConns <= 0 {
+		c.Hardening.MaxConns = 4096
+	}
+	if c.Hardening.PerIPConns <= 0 {
+		c.Hardening.PerIPConns = 32
+	}
+	if c.Modules.CheckHours <= 0 {
+		c.Modules.CheckHours = 24
 	}
 	return nil
 }

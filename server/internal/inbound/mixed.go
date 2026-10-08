@@ -103,13 +103,23 @@ func (in *Inbound) logf(f string, a ...any) {
 	}
 }
 
+// handle — v0.8: panic-safety (недоверенный ввод не роняет процесс) и
+// slowloris-гвард: первый запрос обязан прийти ≤30 с, дальше дедлайн
+// снимается (relay ставит свои).
 func (in *Inbound) handle(c net.Conn) {
-	defer c.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			in.logf("inbound panic recovered: %v", r)
+		}
+		_ = c.Close()
+	}()
 	br := bufio.NewReaderSize(c, 16*1024)
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 	first, err := br.Peek(1)
 	if err != nil {
 		return
 	}
+	_ = c.SetDeadline(time.Time{})
 	switch first[0] {
 	case 0x05:
 		in.socks5(c, br)

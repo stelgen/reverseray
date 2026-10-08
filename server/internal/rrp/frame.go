@@ -47,6 +47,13 @@ const (
 	// Клиент использует PROBE для валидации «реального трафика до реальных
 	// хостов» перед переключением протокола (валидация → коммит, иначе откат).
 	TypeProbe = 0x23
+
+	// Обмен ключами протокола mtproto2 (v0.8, module protocol.mtproto2):
+	// происходит ПОСЛЕ приватного хендшейка (TLS+HMAC) и READY. S→C KEY_REQ
+	// несёт p/g/g_a (base64 256-байтовые доли), C→S KEY_RESP — g_b.
+	// После обмена payload'ы DATA/UDP_DATA уходят в MTProto 2.0-конверте.
+	TypeKeyReq  = 0x24
+	TypeKeyResp = 0x25
 )
 
 const (

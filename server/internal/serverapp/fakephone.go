@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 )
 
@@ -21,6 +22,8 @@ import (
 // through the provided hook (the "phone" does the actual egress).
 type fakePhone struct {
 	conn net.Conn
+	// wrap — mtproto2-обёртка (v0.8): nil в обычном режиме RRP/1.
+	wrap io.ReadWriteCloser
 
 	wmu sync.Mutex
 	mu  sync.Mutex
@@ -76,6 +79,13 @@ func makePhoneTLSConfig(caPinB64 string) (*tls.Config, error) {
 // DialPhone connects over TLS with CA-SPKI pinning and handshakes RRP/1.
 func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
 	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+	return DialPhoneProto(t, serverAddr, caPinB64, token, device, "", dial)
+}
+
+// DialPhoneProto — как DialPhone, но с согласованием протокола (v0.8:
+// "mtproto2" — после READY DH-апгрейд; весь обмен дальше в MTProto-конверте).
+func DialPhoneProto(t *testing.T, serverAddr, caPinB64, token, device, proto string,
+	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
 
 	t.Helper()
 	cfg, err := makePhoneTLSConfig(caPinB64)
@@ -91,27 +101,42 @@ func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
 		raw.Close()
 		return nil, "", err
 	}
-	return DialPhoneOn(t, conn, token, device, dial)
+	return DialPhoneOnProto(t, conn, token, device, proto, dial)
 }
 
 // DialPhoneOn handshakes RRP/1 over a pre-built transport (TLS, WS-over-TLS,
 // net.Pipe — что угодно). Используется транспортными тестами (ws_test).
 func DialPhoneOn(t *testing.T, conn net.Conn, token, device string,
 	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+	return DialPhoneOnProto(t, conn, token, device, "", dial)
+}
+
+// DialPhoneOnProto — как DialPhoneOn, но с согласованием протокола
+// (v0.8: "mtproto2" — после READY выполняет DH-апгрейд, весь дальнейший
+// обмен идёт в MTProto-конверте).
+func DialPhoneOnProto(t *testing.T, conn net.Conn, token, device, proto string,
+	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
 
 	t.Helper()
 	p := &fakePhone{conn: conn, dst: make(map[uint32]net.Conn), dial: dial}
-	sid, err := clientHandshake(p.conn, token, device)
+	sid, err := clientHandshake(p.conn, token, device, proto)
 	if err != nil {
 		conn.Close()
 		return nil, "", err
+	}
+	if proto == "mtproto2" {
+		p.wrap, err = mtproto.UpgradeClient(conn, sid, nil)
+		if err != nil {
+			conn.Close()
+			return nil, "", err
+		}
 	}
 	go p.loop()
 	return p, sid, nil
 }
 
-func clientHandshake(conn net.Conn, token, device string) (string, error) {
-	hb, _ := json.Marshal(&rrp.Hello{Agent: "fake-phone", Ver: "1.0", Device: device, MaxStreams: 64})
+func clientHandshake(conn net.Conn, token, device, proto string) (string, error) {
+	hb, _ := json.Marshal(&rrp.Hello{Agent: "fake-phone", Ver: "1.0", Device: device, MaxStreams: 64, Proto: rrp.FlexString(proto)})
 	if err := rrpWrite1(conn, rrp.TypeHello, hb); err != nil {
 		return "", err
 	}
@@ -150,6 +175,9 @@ func (p *fakePhone) WritePing(nonce []byte) error {
 func (p *fakePhone) write(t uint8, streamID uint32, payload []byte) error {
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
+	if p.wrap != nil {
+		return rrpWriteS(p.wrap, t, streamID, payload)
+	}
 	return rrpWriteS(p.conn, t, streamID, payload)
 }
 
@@ -163,7 +191,11 @@ func (p *fakePhone) loop() {
 		p.conn.Close()
 	}()
 	for {
-		f, err := rrp.ReadFrame(p.conn)
+		src := io.Reader(p.conn)
+		if p.wrap != nil {
+			src = p.wrap
+		}
+		f, err := rrp.ReadFrame(src)
 		if err != nil {
 			return
 		}
