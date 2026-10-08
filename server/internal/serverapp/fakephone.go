@@ -91,6 +91,15 @@ func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
 		raw.Close()
 		return nil, "", err
 	}
+	return DialPhoneOn(t, conn, token, device, dial)
+}
+
+// DialPhoneOn handshakes RRP/1 over a pre-built transport (TLS, WS-over-TLS,
+// net.Pipe — что угодно). Используется транспортными тестами (ws_test).
+func DialPhoneOn(t *testing.T, conn net.Conn, token, device string,
+	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+
+	t.Helper()
 	p := &fakePhone{conn: conn, dst: make(map[uint32]net.Conn), dial: dial}
 	sid, err := clientHandshake(p.conn, token, device)
 	if err != nil {

@@ -1,10 +1,11 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.4.0}
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.0}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"
+      - "${RR_SOCKS_PORT:-1080}:1080/udp" # v0.7: SOCKS5 UDP ASSOCIATE через туннель
       - "${RR_TUNNEL_PORT:-4433}:4433"
       - "127.0.0.1:${RR_METRICS_PORT:-9090}:9090" # admin/metrics только с localhost
     environment:

@@ -52,6 +52,7 @@ type Config struct {
 		IdleTimeoutSec      int `json:"idle_timeout_sec"`
 		PingIntervalSec     int `json:"ping_interval_sec"`
 		DialTimeoutSec      int `json:"dial_timeout_sec"`
+		HandshakesPerMin    int `json:"handshakes_per_min"`
 	} `json:"limits"`
 }
 
@@ -75,6 +76,10 @@ func Default() *Config {
 	c.Limits.IdleTimeoutSec = 180
 	c.Limits.PingIntervalSec = 60
 	c.Limits.DialTimeoutSec = 10
+	// v0.7: смягчённый rate-limit рукопожатий. Лимит 60/min рвал легитимные
+	// реконнекты при нестабильной мобильной сети (реконнект ≈ 1/с уже упирался
+	// в потолок, у NAT за ним могли сидеть несколько клиентов).
+	c.Limits.HandshakesPerMin = 120
 	return &c
 }
 
@@ -127,6 +132,7 @@ func (c *Config) applyEnv() {
 	setInt(&c.Limits.MaxTunnelsPerDevice, "RR_LIMITS_MAX_TUNNELS")
 	setInt(&c.Limits.IdleTimeoutSec, "RR_LIMITS_IDLE_TIMEOUT")
 	setInt(&c.Limits.DialTimeoutSec, "RR_LIMITS_DIAL_TIMEOUT")
+	setInt(&c.Limits.HandshakesPerMin, "RR_LIMITS_HANDSHAKES_PER_MIN")
 	if v := os.Getenv("RR_LOG_REDACT"); v != "" {
 		c.Log.Redact = v != "false" && v != "0"
 	}
@@ -145,6 +151,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Limits.MaxStreams <= 0 || c.Limits.MaxStreams > 1024 {
 		return errors.New("config: limits.max_streams out of range (1..1024)")
+	}
+	if c.Limits.HandshakesPerMin <= 0 {
+		c.Limits.HandshakesPerMin = 120
 	}
 	return nil
 }

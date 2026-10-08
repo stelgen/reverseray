@@ -9,6 +9,8 @@ import (
 	"net"
 	"strings"
 	"testing"
+
+	"github.com/stelgen/reverseray/server/internal/rrp"
 	"time"
 )
 
@@ -18,6 +20,8 @@ type stubDialer struct {
 	lastAddr []byte
 	lastPort uint16
 	fail     bool
+	udpFail  bool
+	udpSess  *rrp.Session // set by udp tests
 }
 
 func (s *stubDialer) Dial(_ context.Context, atyp byte, addr []byte, port uint16, _ time.Duration) (net.Conn, error) {
@@ -28,6 +32,18 @@ func (s *stubDialer) Dial(_ context.Context, atyp byte, addr []byte, port uint16
 	sc, cc := net.Pipe()
 	go func() { _, _ = io.Copy(sc, sc); sc.Close() }()
 	return cc, nil
+}
+
+func (s *stubDialer) DialUDP(ctx context.Context, timeout time.Duration) (*rrp.UdpChannel, error) {
+	if s.udpFail {
+		return nil, errors.New("no tunnel")
+	}
+	if s.udpSess == nil {
+		return nil, errors.New("udp session not wired")
+	}
+	ctx2, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return s.udpSess.UdpOpen(ctx2)
 }
 
 func socksHandshake(t *testing.T, c net.Conn, auth bool) {

@@ -3,19 +3,23 @@
 package serverapp
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -40,6 +44,25 @@ type Metrics struct {
 	InboundConns atomic.Int64
 	BytesRelayed atomic.Uint64
 	Reconnects   atomic.Uint64
+	WsTunnels    atomic.Int64
+}
+
+// addInbound регистрирует inbound для метрик UDP (вызывается в Run).
+func (a *App) addInbound(i *inbound.Inbound) {
+	a.inbMu.Lock()
+	a.inbounds = append(a.inbounds, i)
+	a.inbMu.Unlock()
+}
+
+// udpDatagrams суммирует счётчики всех инбоксов.
+func (a *App) udpDatagrams() uint64 {
+	a.inbMu.Lock()
+	defer a.inbMu.Unlock()
+	var n uint64
+	for _, i := range a.inbounds {
+		n += i.UdpDatagrams.Load()
+	}
+	return n
 }
 
 // App is the assembled server.
@@ -50,6 +73,9 @@ type App struct {
 	hub    *hub.Hub
 	bundle *tlscert.Bundle
 	met    *Metrics
+
+	inbMu    sync.Mutex
+	inbounds []*inbound.Inbound
 }
 
 // New assembles the app.
@@ -58,6 +84,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, fmt.Errorf("state dir: %w", err)
 	}
 	store := auth.New()
+	store.SetHandshakeLimit(cfg.Limits.HandshakesPerMin)
 	if err := store.LoadFile(cfg.TokensFile); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("tokens: %w", err)
@@ -116,9 +143,11 @@ func (a *App) Run(ctx context.Context) error {
 			return fmt.Errorf("%s listen: %w", spec.name, err)
 		}
 		a.log.Info("inbound up", "kind", spec.name, "addr", spec.addr)
-		go func(ln net.Listener) {
-			errCh <- a.inbound(ln).Serve(ln)
-		}(ln)
+		inb := a.inbound(ln)
+		a.addInbound(inb)
+		go func(i *inbound.Inbound, l net.Listener) {
+			errCh <- i.Serve(l)
+		}(inb, ln)
 	}
 
 	if addr := a.cfg.Listen.AdminTCP; addr != "" {
@@ -215,6 +244,7 @@ func (a *App) Reload() error {
 	if err := st.LoadFile(a.cfg.TokensFile); err != nil {
 		return err
 	}
+	st.SetHandshakeLimit(a.cfg.Limits.HandshakesPerMin)
 	a.store = st
 	a.log.Info("tokens reloaded", "devices", st.Devices())
 	return nil
@@ -271,6 +301,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+
 	// ALPN: require reverseray/1 when the client offers any ALPN. Some legacy
 	// pure-Java stacks (BC on API 14) cannot send ALPN — accept no-ALPN, keep the
 	// strict gate for ALPN-capable clients.
@@ -280,9 +311,27 @@ func (a *App) handleTunnel(conn net.Conn) {
 		return
 	}
 
-	hello, err := readJSON[*rrp.Hello](conn)
+	// Транспорт поверх одного TLS-порта (v0.7): HTTP GET в начале потока —
+	// WebSocket-апгрейд /rrp, иначе — сырой RRP/1 (старые клиенты).
+	br := bufio.NewReaderSize(tc, 32*1024)
+	var framed io.ReadWriteCloser = &bufferedConn{r: br, w: tc, c: tc}
+	transport := "tcp"
+	if rrp.IsWsPeek(br) {
+		wsc, werr := rrp.WsHandshakeServer(tc, br)
+		if werr != nil {
+			a.met.AuthFailures.Add(1)
+			a.log.Warn("websocket handshake failed", "err", werr)
+			return
+		}
+		framed = wsc
+		transport = "ws"
+		a.met.WsTunnels.Add(1)
+		defer a.met.WsTunnels.Add(-1)
+	}
+
+	hello, err := readJSON[*rrp.Hello](framed)
 	if err != nil || hello == nil || hello.Device == "" || len(hello.Device) > 64 {
-		a.rejectHandshake(ip, conn, "bad HELLO")
+		a.rejectHandshake(ip, framed, "bad HELLO")
 		return
 	}
 	nonce, err := rrp.NewNonce()
@@ -291,7 +340,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 		return
 	}
 	sid := rrp.NewID()
-	writeJSONTyped(conn, rrp.TypeHelloOK, &rrp.HelloOK{
+	writeJSONTyped(framed, rrp.TypeHelloOK, &rrp.HelloOK{
 		SessionID:    sid,
 		ServerVer:    Version,
 		Nonce:        nonce,
@@ -299,9 +348,9 @@ func (a *App) handleTunnel(conn net.Conn) {
 	})
 	a.store.PutNonce(nonce, 60*time.Second)
 
-	au, err := readJSON[*rrp.Auth](conn)
+	au, err := readJSON[*rrp.Auth](framed)
 	if err != nil || au == nil || au.Mode != "token-hmac" {
-		a.rejectHandshake(ip, conn, "bad AUTH")
+		a.rejectHandshake(ip, framed, "bad AUTH")
 		return
 	}
 	device, ok := a.store.Verify(nonce, sid, au.HMAC)
@@ -320,15 +369,15 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.IdleTimeout = a.cfg.IdleTimeout()
 	scfg.PingInterval = a.cfg.PingInterval()
 
-	sess := rrp.NewSession(sid, device, conn, scfg)
+	sess := rrp.NewSession(sid, device, framed, scfg)
 	if err := a.hub.Attach(device, sess, a.cfg.Limits.MaxTunnelsPerDevice); err != nil {
 		a.log.Warn("attach rejected", "device", device, "err", err)
-		writeJSONTyped(conn, rrp.TypeHelloOK, map[string]string{"error": err.Error()})
-		_ = conn.Close()
+		writeJSONTyped(framed, rrp.TypeHelloOK, map[string]string{"error": err.Error()})
+		_ = framed.Close()
 		return
 	}
-	_ = conn.SetDeadline(time.Time{})
-	if err := writeJSONTyped(conn, rrp.TypeReady, &rrp.Ready{
+	_ = tc.SetDeadline(time.Time{})
+	if err := writeJSONTyped(framed, rrp.TypeReady, &rrp.Ready{
 		TunnelID:     sid,
 		Role:         "active",
 		MaxStreams:   scfg.MaxStreams,
@@ -339,7 +388,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	}
 	a.met.TunnelsUp.Add(1)
 	a.met.Reconnects.Add(1)
-	a.log.Info("tunnel ready", "device", device, "session", sid)
+	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport)
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)
@@ -348,7 +397,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	sess.Run()
 }
 
-func (a *App) rejectHandshake(ip string, conn net.Conn, why string) {
+func (a *App) rejectHandshake(ip string, framed io.ReadWriteCloser, why string) {
 	a.met.AuthFailures.Add(1)
 	// lockout — только за невалидный HMAC (брутфорс токена); прочие ошибки
 	// рукопожатия (сканеры, кривые клиенты) не должны лочить NAT-клиентов
@@ -363,8 +412,29 @@ func (a *App) rejectHandshake(ip string, conn net.Conn, why string) {
 	} else {
 		payload = rrp.EncodeError(0x02, "protocol error")
 	}
-	_ = rrp.WriteFrame(conn, rrp.TypeError, 0, 0, payload)
-	_ = conn.Close()
+	_ = rrp.WriteFrame(framed, rrp.TypeError, 0, 0, payload)
+	_ = framed.Close()
+}
+
+// bufferedConn читает через peek-буфер (WS-детект) и пишет напрямую в TLS-соединение.
+type bufferedConn struct {
+	r *bufio.Reader
+	w io.Writer
+	c io.Closer
+}
+
+func (b *bufferedConn) Read(p []byte) (int, error)  { return b.r.Read(p) }
+func (b *bufferedConn) Write(p []byte) (int, error) { return b.w.Write(p) }
+func (b *bufferedConn) Close() error                { return b.c.Close() }
+
+// udpBindPort выводит порт UDP-сокета SOCKS5-инбокса из listen-адреса mixed.
+func udpBindPort(listen string) int {
+	if _, port, err := net.SplitHostPort(listen); err == nil {
+		if n, perr := strconv.Atoi(port); perr == nil && n > 0 {
+			return n
+		}
+	}
+	return 1080
 }
 
 // ---- inbound ----
@@ -380,6 +450,7 @@ func (a *App) inbound(ln net.Listener) *inbound.Inbound {
 		Password:    pass,
 		Allowlist:   parseAllowlist(a.cfg.Allowlist),
 		DialTimeout: a.cfg.DialTimeout(),
+		UDPBindPort: udpBindPort(a.cfg.Listen.Mixed),
 		Logf: func(f string, args ...any) {
 			if a.cfg.Log.Redact {
 				a.log.Info("inbound event redacted")
@@ -428,6 +499,8 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 		fmt.Fprintf(w, "# HELP reverseray_auth_ok_total successful auths\n# TYPE reverseray_auth_ok_total counter\nreverseray_auth_ok_total %d\n", m.AuthOK.Load())
 		fmt.Fprintf(w, "# HELP reverseray_inbound_conns_total inbound connections\n# TYPE reverseray_inbound_conns_total counter\nreverseray_inbound_conns_total %d\n", m.InboundConns.Load())
 		fmt.Fprintf(w, "# HELP reverseray_reconnects_total tunnel connects\n# TYPE reverseray_reconnects_total counter\nreverseray_reconnects_total %d\n", m.Reconnects.Load())
+		fmt.Fprintf(w, "# HELP reverseray_udp_datagrams_total udp datagrams through tunnel\n# TYPE reverseray_udp_datagrams_total counter\nreverseray_udp_datagrams_total %d\n", a.udpDatagrams())
+		fmt.Fprintf(w, "# HELP reverseray_ws_tunnels active websocket tunnels\n# TYPE reverseray_ws_tunnels gauge\nreverseray_ws_tunnels %d\n", m.WsTunnels.Load())
 	})
 	mux.HandleFunc("/sessions", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

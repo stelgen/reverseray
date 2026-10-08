@@ -33,6 +33,14 @@ const (
 	TypePing   = 0x14
 	TypePong   = 0x15
 	TypeError  = 0x7F
+
+	// UDP-over-tunnel (v0.7, RFC 1928 UDP ASSOCIATE analog).
+	// TypeUdpAssoc: S→C, пустой payload, stream_id = id ассоциации;
+	// телефон отвечает OPEN_OK(err_code) через существующий pending-механизм.
+	// TypeUdpData: оба направления, payload [u8 atyp][addr][u16 port][data],
+	// где S→C несёт адрес назначения, а C→S — фактический источник ответа.
+	TypeUdpAssoc = 0x21
+	TypeUdpData  = 0x22
 )
 
 const (
@@ -59,7 +67,7 @@ var (
 
 // MaxPayloadFor returns the hard payload limit for a frame type.
 func MaxPayloadFor(t uint8) int {
-	if t == TypeData {
+	if t == TypeData || t == TypeUdpData {
 		return MaxDataPayload
 	}
 	return MaxControlPayload
@@ -170,6 +178,56 @@ func DecodeOpen(payload []byte) (atyp byte, addr []byte, port uint16, err error)
 	}
 	port = binary.BigEndian.Uint16(payload[len(payload)-2:])
 	return atyp, addr, port, nil
+}
+
+// EncodeUdpData builds a UDP_DATA payload: [u8 atyp][addr][u16 port][data],
+// domain addresses carry a 1-byte length prefix (SOCKS5 style).
+func EncodeUdpData(atyp byte, addr []byte, port uint16, data []byte) []byte {
+	p := make([]byte, 0, 2+len(addr)+2+len(data))
+	p = append(p, atyp)
+	if atyp == ATYPDomain {
+		p = append(p, byte(len(addr))) // #nosec G115: ATYP-domain ограничен 255 байтами
+	}
+	p = append(p, addr...)
+	p = append(p, byte(port>>8), byte(port)) // #nosec G115: порт 1..65535 (u16)
+	p = append(p, data...)
+	return p
+}
+
+// DecodeUdpData parses a UDP_DATA payload.
+func DecodeUdpData(payload []byte) (atyp byte, addr []byte, port uint16, data []byte, err error) {
+	if len(payload) < 4 {
+		return 0, nil, 0, nil, errors.New("rrp: UDP_DATA payload too short")
+	}
+	atyp = payload[0]
+	off := 1
+	switch atyp {
+	case ATYPIPv4:
+		off = 1 + 4
+	case ATYPDomain:
+		if len(payload) < 3 {
+			return 0, nil, 0, nil, errors.New("rrp: bad domain UDP_DATA")
+		}
+		off = 2 + int(payload[1])
+	case ATYPIPv6:
+		off = 1 + 16
+	default:
+		return 0, nil, 0, nil, fmt.Errorf("rrp: unknown ATYP %d", atyp)
+	}
+	if len(payload) < off+2 {
+		return 0, nil, 0, nil, errors.New("rrp: UDP_DATA header truncated")
+	}
+	switch atyp {
+	case ATYPIPv4:
+		addr = payload[1:5]
+	case ATYPDomain:
+		addr = payload[2 : 2+int(payload[1])]
+	case ATYPIPv6:
+		addr = payload[1:17]
+	}
+	port = binary.BigEndian.Uint16(payload[off : off+2])
+	data = payload[off+2:]
+	return atyp, addr, port, data, nil
 }
 
 // EncodeDomainAddr encodes a hostname as atyp+addr bytes.

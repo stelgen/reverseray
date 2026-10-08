@@ -49,13 +49,19 @@ func TestWrongTokenFails(t *testing.T) {
 func TestRateLimitAndLockout(t *testing.T) {
 	s := New()
 	ip := "203.0.113.7"
-	for i := 0; i < maxHandshakesPerMin; i++ {
+	for i := 0; i < defaultHandshakesPerMin; i++ {
 		if !s.AllowHandshake(ip) {
 			t.Fatalf("attempt %d must pass", i)
 		}
 	}
 	if s.AllowHandshake(ip) {
-		t.Fatal("11th attempt must be rejected")
+		t.Fatal("limit+1 attempt must be rejected")
+	}
+
+	// Мягкий лимит настраивается (v0.7): больше лимита — больше пропусков.
+	s.SetHandshakeLimit(defaultHandshakesPerMin * 2)
+	if !s.AllowHandshake(ip) {
+		t.Fatal("after limit raise the attempt must pass")
 	}
 
 	locked := false

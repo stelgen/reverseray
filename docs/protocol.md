@@ -24,6 +24,8 @@
 | WINDOW | 0x13 | оба | `[u32be increment]` |
 | PING/PONG | 0x14/0x15 | оба | 8 байт nonce |
 | STATS | 0x20 | C→S | JSON `{bytes_in, bytes_out, rtt_ms}` |
+| UDP_ASSOC | 0x21 | S→C | пустой; `stream_id` = id ассоциации; телефон отвечает OPEN_OK(err) |
+| UDP_DATA | 0x22 | оба | `[u8 atyp][addr][u16 port][data]`; S→C — назначение, C→S — фактический источник |
 | ERROR | 0x7F | оба | `[u16be code][utf8 msg]` |
 
 Лимиты payload (hardening): DATA ≤ 65535; **все остальные ≤ 4096**. Нарушение → ERROR + закрытие сессии.
@@ -35,13 +37,19 @@
 - `hmac = base64url(HMAC-SHA256(key = SHA256(token), msg = nonce ‖ session_id))`.
 - `nonce` — 128 бит crypto/rand из HELLO_OK, **одноразовый**, TTL 60 с (анти-replay).
 - Сравнение constant-time; перебор всех токенов сервера (их единицы).
-- Rate-limit: ≤10 handshakes/min/IP; 5 неудач → lockout 30 c·2^n (макс 10 мин).
+- Rate-limit: ≤120 handshakes/min/IP (v0.7, настраивается `limits.handshakes_per_min`
+  / `RR_LIMITS_HANDSHAKES_PER_MIN`; до v0.7 было 10 по доке / 60 по коду — рвало
+  легитимные реконнекты мобильных сетей); lockout — **только** за невалидный HMAC:
+  5 неудач → 30 c·2^n (макс 10 мин). Мусорный TLS/сканы лочить не могут.
 
 ## TLS / PKI
 
 - При первом старте сервер генерирует **self-signed Ed25519 Root CA** (10 лет) и leaf-сертификат (90 дней, автопере выпуск).
 - Клиент пинит **SPKI SHA256 CA** → ротация leaf не ломает клиентов. Смена CA = повторный enroll (QR).
 - Дополнительно генерируется ECDSA P-256 leaf (резерв под TLS 1.2-compat профиль; по умолчанию выключен).
+- Клиент использует **BcTlsCrypto** (lightweight, без JCA) — не зависит от
+  платформенного провайдера "BC" (урезан на Android; причина исторического
+  падения «no such algorithm: SHA-512 for provider BC»).
 - 0-RTT/early data не используется; session resumption не допускает пропуска AUTH.
 
 ## Flow control

@@ -76,11 +76,11 @@ func (h *Hub) Detach(device string, s *rrp.Session) {
 	}
 }
 
-// Dial routes an egress connect to the least-outstanding tunnel.
-// The phone performs the real dial (and DNS) — the server never egresses.
-func (h *Hub) Dial(ctx context.Context, atyp byte, addr []byte, port uint16, timeout time.Duration) (net.Conn, error) {
-	var best *rrp.Session
+// pickSession returns the least-outstanding live session (phone pool).
+func (h *Hub) pickSession() *rrp.Session {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	var best *rrp.Session
 	for _, d := range h.devices {
 		d.mu.Lock()
 		for _, s := range d.sessions {
@@ -95,13 +95,32 @@ func (h *Hub) Dial(ctx context.Context, atyp byte, addr []byte, port uint16, tim
 		}
 		d.mu.Unlock()
 	}
-	h.mu.Unlock()
+	return best
+}
+
+// Dial routes an egress connect to the least-outstanding tunnel.
+// The phone performs the real dial (and DNS) — the server never egresses.
+func (h *Hub) Dial(ctx context.Context, atyp byte, addr []byte, port uint16, timeout time.Duration) (net.Conn, error) {
+	best := h.pickSession()
 	if best == nil {
 		return nil, ErrNoTunnel
 	}
 	dctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return best.Open(dctx, rrp.DialRequest{ATYP: atyp, Addr: addr, Port: port})
+}
+
+// DialUDP opens a UDP association on the least-outstanding tunnel (v0.7).
+// Дейтаграммы ходят через туннель до телефона, телефон выполняет реальный
+// UDP-обмен (и DNS) — сервер не делает исходящих соединений.
+func (h *Hub) DialUDP(ctx context.Context, timeout time.Duration) (*rrp.UdpChannel, error) {
+	best := h.pickSession()
+	if best == nil {
+		return nil, ErrNoTunnel
+	}
+	dctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return best.UdpOpen(dctx)
 }
 
 // Snapshot lists live sessions for the admin API.

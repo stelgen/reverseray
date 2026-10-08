@@ -20,8 +20,9 @@ type Store struct {
 
 	nonces map[string]time.Time // nonce b64 -> expiry (single-use)
 
-	muL     sync.Mutex
-	attempt map[string]*attempt // ip -> state
+	muL            sync.Mutex
+	attempt        map[string]*attempt // ip -> state
+	handshakeLimit int
 }
 
 type attempt struct {
@@ -31,17 +32,31 @@ type attempt struct {
 }
 
 const (
-	maxHandshakesPerMin = 60
-	maxFailsBeforeLock  = 5
+	// defaultHandshakesPerMin — мягкий лимит попыток рукопожатия (v0.7:
+	// 60 рвал легитимные реконнекты мобильных клиентов). Тюнинг —
+	// limits.handshakes_per_min / RR_LIMITS_HANDSHAKES_PER_MIN.
+	defaultHandshakesPerMin = 120
+	maxFailsBeforeLock      = 5
 )
 
 // New creates an empty store.
 func New() *Store {
 	return &Store{
-		tokens:  make(map[string][]byte),
-		nonces:  make(map[string]time.Time),
-		attempt: make(map[string]*attempt),
+		tokens:         make(map[string][]byte),
+		nonces:         make(map[string]time.Time),
+		attempt:        make(map[string]*attempt),
+		handshakeLimit: defaultHandshakesPerMin,
 	}
+}
+
+// SetHandshakeLimit tunes the per-IP handshake rate (>=1).
+func (s *Store) SetHandshakeLimit(n int) {
+	if n < 1 {
+		n = defaultHandshakesPerMin
+	}
+	s.muL.Lock()
+	s.handshakeLimit = n
+	s.muL.Unlock()
 }
 
 // LoadFile reads tokens.json: {"devices": {"phone-1": "<base64url or hex sha256>"}}.
@@ -158,7 +173,7 @@ func (s *Store) AllowHandshake(ip string) bool {
 		}
 	}
 	a.window = kept
-	if len(a.window) >= maxHandshakesPerMin {
+	if len(a.window) >= s.handshakeLimit {
 		return false
 	}
 	a.window = append(a.window, now)
