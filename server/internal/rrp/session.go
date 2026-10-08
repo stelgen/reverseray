@@ -362,10 +362,12 @@ func (s *Session) handleNoise(f *Frame) {
 	if !apimasq.Valid(resp) {
 		return
 	}
-	s.writeAsync(&Frame{Type: TypeNoise, Payload: resp})
+	// УЧЁТ ДО отправки: метрики/хук синхронны с обработкой кадра — иначе
+	// наблюдатель (тест/метрики) может увидеть ответ раньше счётчика (CI-флейк).
 	if s.cfg.NoiseHook != nil {
 		s.cfg.NoiseHook(len(f.Payload), len(resp))
 	}
+	s.writeAsync(&Frame{Type: TypeNoise, Payload: resp})
 }
 
 // Protocol returns the negotiated protocol id for this session.

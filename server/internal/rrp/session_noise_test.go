@@ -59,12 +59,28 @@ func TestSessionNoiseRoundTrip(t *testing.T) {
 	if len(f.Payload) == 0 || f.Payload[0] != '{' {
 		t.Fatalf("ответ не JSON-объект: %s", f.Payload)
 	}
-	hookMu.Lock()
-	defer hookMu.Unlock()
-	if hooked != 1 {
-		t.Fatalf("хук вызван %d раз", hooked)
-	}
+	// Детерминированное ожидание хука: планировщик может исполнить горутину
+	// handleNoise после того, как ответ уже прочитан тестом (CI-флейк).
+	waitForHook(t, &hookMu, &hooked, 1)
 	_ = s.Close()
+}
+
+// waitForHook ждёт, пока счётчик хука дойдёт до want (≤2 с; иначе фейл).
+func waitForHook(t *testing.T, mu *sync.Mutex, counter *int, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := *counter
+		mu.Unlock()
+		if n >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("хук вызван %d раз, ожидалось >= %d", n, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Мусорный NOISE не рвёт сессию (шум декоративный; рвать по нему = вектор DoS).

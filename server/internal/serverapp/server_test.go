@@ -74,9 +74,12 @@ func freePort(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// CI-флейк (Release #29): под -race на медленном раннере bootstrap
+// (PKI+listeners) не укладывался в 5 с — ждём 20 с (канон: флейк = причина,
+// а не ретраи).
 func waitTCP(t *testing.T, addr string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", addr, time.Second)
 		if err == nil {
