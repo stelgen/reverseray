@@ -105,6 +105,83 @@ jobs:
       - name: Verify committed assets match generator
         run: python3 assets/brand/generate.py --check
 
+  # v0.8: целостность общего манифеста модулей (APK ↔ сервер)
+  modules:
+    name: Modules integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Manifest canon check (schema/rrp1/duplicates/policy)
+        run: python3 scripts/modules_check.py modules/modules.json
+      - name: Go parser agrees (module tests)
+        working-directory: server
+        run: |
+          go vet ./internal/modules/ ./internal/rrp/
+          go test -count=1 ./internal/modules/ ./internal/rrp/
+
+  # v0.8: приватность — ни телеметрии, ни внешних хостов вне белого списка,
+  # ни реальных токенов/приватных IP в доках
+  privacy-audit:
+    name: Privacy audit (no leaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Scan for telemetry / unknown hosts / private data in docs
+        run: python3 scripts/privacy_audit.py .
+
+  # v0.8: known-vulnerabilities gate (stdlib Go)
+  govulncheck:
+    name: Govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - name: Run govulncheck
+        working-directory: server
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          $(go env GOPATH)/bin/govulncheck ./...
+
+  # v0.8: реальный скриншот APK на главной репо (не «рисунок в Paint»):
+  # Robolectric рендерит MainActivity, робот коммитит PNG в assets/brand
+  screenshot:
+    name: Real app screenshot
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Render screenshot via Robolectric
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon \
+            -Drr.screenshot.out=build/screenshot/app.png \
+            --tests "dev.stelgen.reverseray.ScreenshotTest"
+      - name: Commit screenshot if changed
+        working-directory: android
+        run: |
+          if [ ! -f build/screenshot/app.png ]; then echo "no screenshot"; exit 1; fi
+          cp build/screenshot/app.png ../assets/brand/screenshot.png
+          cd ..
+          if git diff --quiet assets/brand/screenshot.png; then
+            echo "screenshot unchanged"
+          else
+            git config user.name "reverseray-screenshot-bot"
+            git config user.email "bot@reverseray.local"
+            git add assets/brand/screenshot.png
+            git commit -m "[skip ci] docs: real APK screenshot (auto-rendered by CI)"
+            git push
+          fi
+
   # Секреты не пушим: docs/WORKFLOW.md обещает gitleaks в CI — вот он (v0.7)
   gitleaks:
     name: Secrets scan (gitleaks)

@@ -114,7 +114,6 @@
     <string name="usage_no_limit">Traffic this period: %1$s (no limit)</string>
     <string name="usage_with_limit">Traffic: %1$s of %2$s (%3$d%%)</string>
     <string name="status_wait_wifi">Waiting for Wi-Fi ("Wi-Fi only" is on)</string>
-    <string name="status_limit_reached">Traffic limit reached — tunnel stopped. Reset the counter in Settings.</string>
     <string name="status_switch_busy">A protocol switch is already in progress</string>
     <string name="status_switch_cooldown">Protocol switch available in %1$d s (rate-limit protection)</string>
     <string name="status_switch_same">Protocol %1$s is already active</string>
@@ -122,4 +121,67 @@
     <string name="status_switch_done">Protocol %1$s connected and validated (real traffic passed)</string>
     <string name="status_switch_fail">Protocol %1$s failed: %2$s</string>
     <string name="status_switch_rolled_back">Protocol %1$s failed validation (%2$s) — staying on %3$s, link unchanged</string>
+
+    <!-- v0.8 -->
+    <string name="tab_log">Log</string>
+    <string name="log_copy_all">Copy whole log</string>
+    <string name="log_share">Share log</string>
+    <string name="console_title_service">tunnel status · realtime</string>
+    <string name="console_title_update">update &amp; modules journal</string>
+
+    <string name="link_clear">Clear</string>
+    <string name="link_clear_confirm">Clear the link field?</string>
+    <string name="link_saved">Link saved</string>
+    <string name="link_status_ok">Link accepted and saved ✓</string>
+    <string name="link_status_bad">Link not recognized — paste an rrp:// string</string>
+
+    <string name="about_app_title">About the app</string>
+    <string name="app_version_row">Version</string>
+    <string name="app_modules_row">Modules (manifest)</string>
+    <string name="app_modules_builtin">built-in</string>
+    <string name="app_ram_row">App memory</string>
+    <string name="app_disk_row">Storage (APK + data)</string>
+    <string name="app_traffic_life_row">Traffic all-time</string>
+    <string name="app_proto_row">Current protocol</string>
+
+    <string name="about_net_title">About the network — what the app learned</string>
+    <string name="about_net_hint">We show EVERYTHING we collected and used. Nothing hidden — the canon rule. The list refreshes each time you open the tab.</string>
+
+    <string name="btn_share_app">Share app</string>
+    <string name="share_choose">Send a link or an APK?</string>
+    <string name="share_link">GitHub link</string>
+    <string name="share_apk">APK file</string>
+    <string name="share_apk_error">Could not package the APK for sharing</string>
+
+    <string name="set_autoreconnect">Connect automatically when the app opens</string>
+    <string name="set_autoreconnect_hint">Off by default. If the limit is reached — wait for the reset date and connect only after it (checks once per minute).</string>
+    <string name="set_limit_next">Next counter reset: %1$s</string>
+    <string name="set_limit_period">Period</string>
+    <string name="set_limit_period_day">Day</string>
+    <string name="set_limit_period_month">Month</string>
+    <string name="set_limit_reset">Reset counter</string>
+
+    <string name="status_limit_reached">Traffic limit exhausted — sent EXACTLY 0 bytes, tunnel stopped. Reset: Settings → Limit.</string>
+    <string name="status_limit_wait">Limit reached. Waiting for reset (≈%1$d h) — will connect automatically.</string>
+    <string name="limit_dialog_title">Traffic is out</string>
+    <string name="limit_dialog_msg">Traffic limit exhausted: %1$s of %2$s.\n\nWe send EXACTLY ZERO bytes — the “limit is king” rule.\n\nLimit refresh: %3$s.\nManual reset: Settings → Traffic limit.</string>
+    <string name="limit_dialog_wait">Wait for reset and connect</string>
+
+    <string name="modules_section">Modules (updated without APK reinstall)</string>
+    <string name="modules_check_now">Update modules</string>
+    <string name="modules_up_to_date">Modules are up to date</string>
+    <string name="modules_progress">Downloading modules: %1$d%% · %2$s</string>
+    <string name="modules_applied">Modules applied: version %1$s, protocols: %2$s</string>
+    <string name="modules_failed">Modules: failed — %1$s (running on built-ins)</string>
+
+    <string name="dev_cpu_model">CPU</string>
+    <string name="dev_ram_total">Total RAM</string>
+    <string name="dev_sdk">SDK</string>
+    <string name="dev_java">Java</string>
+
+    <string name="speedtest_line">Speed test: %1$s</string>
+    <string name="speedtest_waiting">Speed test: after connect (if limit not reached)</string>
+    <string name="config_hint_title">Connection link</string>
+    <string name="update_progress">Download: %1$d%% · %2$s</string>
+    <string name="dns_servers_line">DNS: %1$s</string>
 </resources>

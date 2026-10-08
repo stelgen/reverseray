@@ -3,7 +3,9 @@
 
 Deterministic generation of every visual asset:
   - og-image.png      1600x640 banner (black, wordmark, emblem, tagline)
-  - screenshot.png    720x1440 app-UI mockup for docs
+  - banner.gif        1600x400 ДИНАМИЧЕСКИЙ баннер (пульс-кольцо + бегущий трафик)
+  - screenshot.png    720x1440 — РЕАЛЬНЫЙ рендер APK (кладёт CI-робот из ScreenshotTest;
+                      app-mock.png — мокап-референс генератора)
   - logo-512.png / favicon-32.png / favicon-64.png / logo.svg
   - android res/: launcher icons (mdpi..xxxhdpi) + notification glyph
 
@@ -269,6 +271,54 @@ SVG_LOGO = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 '''
 
 
+def banner_gif(w: int = 1600, h: int = 400, frames: int = 24) -> list[Image.Image]:
+    """Динамический баннер главной страницы (GIF): пульс-кольцо вокруг
+    круглой кнопки Старт (как в APK v0.8) + бегущие точки трафика по лучу.
+    Детерминированный: одинаковые байты при каждом запуске."""
+    img0 = Image.new("RGB", (w, h), BG)
+    emb = emblem(int(h * 0.72), dark=True)
+    img0.paste(emb, (int(w * 0.03), int(h * 0.14)), emb)
+    d0 = ImageDraw.Draw(img0)
+    tx = int(w * 0.30)
+    d0.text((tx, int(h * 0.16)), "ReverseRay", font=_font(int(h * 0.22)), fill=TEXT)
+    tagline = "PHONE AS EGRESS   ·   TLS 1.3   ·   SELF-HOSTED   ·   MTProto/2"
+    d0.text((tx, int(h * 0.52)), tagline, font=fit_font(tagline, w - tx - 40, int(h * 0.07)), fill=MUTED)
+    sub = "v0.8 — hardening · modules · zero-byte limit rule"
+    d0.text((tx, int(h * 0.70)), sub, font=fit_font(sub, w - tx - 40, int(h * 0.06)), fill=MUTED)
+    # кнопка справа: тёмно-зелёный круг (как Старт в APK)
+    br = int(h * 0.26)
+    bcx, bcy = int(w * 0.885), h // 2
+    out = []
+    for f in range(frames):
+        img = img0.copy()
+        t = f / frames
+        # бегущие точки трафика (сервер → телефон)
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        for k in range(3):
+            prog = (t + k / 3.0) % 1.0
+            x = int(w * 0.24 + prog * (w * 0.50))
+            y = int(h * 0.5 + (k - 1) * h * 0.06)
+            r = int(h * 0.018)
+            od.ellipse([x - r, y - r, x + r, y + r], fill=ACCENT + (255,))
+        # пульс-кольцо
+        pr = br + int(t * br * 0.35)
+        alpha_ring = int(200 * (1 - t))
+        od.ellipse(
+            [bcx - pr, bcy - pr, bcx + pr, bcy + pr],
+            outline=(57, 217, 138, alpha_ring), width=int(h * 0.012),
+        )
+        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+        d = ImageDraw.Draw(img)
+        d.ellipse([bcx - br, bcy - br, bcx + br, bcy + br], fill=(46, 125, 50))
+        fw = _font(int(h * 0.10))
+        fm = _font(int(h * 0.055))
+        d.text((bcx - fw.getlength("СТАРТ") / 2, bcy - h * 0.075), "СТАРТ", font=fw, fill=TEXT)
+        d.text((bcx - fm.getlength("туннель") / 2, bcy + h * 0.045), "туннель", font=fm, fill=(220, 245, 224))
+        out.append(img)
+    return out
+
+
 def write_all() -> list[str]:
     """Пишет все ассеты. Возвращает список записанных путей."""
     written: list[str] = []
@@ -281,7 +331,17 @@ def write_all() -> list[str]:
 
     og = banner()
     save(og, "assets/brand/og-image.png")
-    save(app_mock(), "assets/brand/screenshot.png")
+    # v0.8: мокап — только как референс; РЕАЛЬНЫЙ скриншот кладёт CI-робот
+    # (ScreenshotTest рендерит MainActivity), генератор его НЕ перезаписывает.
+    save(app_mock(), "assets/brand/app-mock.png")
+    # динамический баннер главной страницы
+    gif_path = os.path.join(BRAND_DIR, "banner.gif")
+    frames = banner_gif()
+    frames[0].save(
+        gif_path, save_all=True, append_images=frames[1:],
+        duration=80, loop=0, optimize=False,
+    )
+    written.append(gif_path)
     save(logo_png(512), "assets/brand/logo-512.png")
     save(logo_png(64), "assets/brand/favicon-64.png")
     save(logo_png(32), "assets/brand/favicon-32.png")
@@ -333,17 +393,39 @@ def check() -> int:
             failures.append(f"{name}: wordmark pixels not found")
 
     expect("og-image.png", (1600, 640))
-    expect("screenshot.png", (720, 1440), max_mean=60)
     expect("logo-512.png", (512, 512), max_mean=170)  # иконка — брендовый градиент (яркая по дизайну)
     expect("favicon-32.png", (32, 32), max_mean=170)
     expect("favicon-64.png", (64, 64), max_mean=170)
+
+    # v0.8: скриншот — РЕАЛЬНЫЙ рендер APK (кладёт CI-робот), не мокап генератора
+    shot = os.path.join(REPO_ROOT, "assets/brand", "screenshot.png")
+    if not os.path.exists(shot):
+        failures.append("screenshot.png missing — ждём CI-робота (ScreenshotTest)")
+    else:
+        img = Image.open(shot)
+        if img.size != (720, 1440):
+            failures.append(f"screenshot.png: size {img.size} != (720, 1440)")
+        m = _metrics(img.convert("RGB"))
+        if m["mean"] > 90:
+            failures.append(f"screenshot.png: слишком светлый (mean={m['mean']}) — не похоже на тёмный APK")
+
+    # динамический баннер: должен существовать и анимироваться
+    gifp = os.path.join(BRAND_DIR, "banner.gif")
+    if not os.path.exists(gifp):
+        failures.append("banner.gif missing")
+    else:
+        gif = Image.open(gifp)
+        if getattr(gif, "n_frames", 1) < 3:
+            failures.append("banner.gif: мало кадров — анимация не живая")
+        if gif.size != (1600, 400):
+            failures.append(f"banner.gif: size {gif.size} != (1600, 400)")
 
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
         print("Run: python3 assets/brand/generate.py  (then commit the changes)")
         return 1
-    print("brand assets OK: 5 files match generator spec")
+    print("brand assets OK: спецификация v0.8 выполнена (og, real screenshot, banner.gif, logos)")
     return 0
 
 

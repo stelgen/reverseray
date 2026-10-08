@@ -5,24 +5,50 @@ package dev.stelgen.reverseray.core
  * Зеркало server/internal/rrp/protocol.go: идентификаторы, дефолт,
  * толерантная нормализация (мусор/пустота → дефолт, никогда не ошибка).
  *
- * Архитектура рассчитана на много протоколов: сервер присылает свой реестр
- * в HELLO_OK/READY (protocols), APK показывает список и переключает сессию
- * с валидацией реального трафика (PROBE) перед коммитом.
+ * v0.8: реестр динамический — модули (Modules.apply) применяют манифест,
+ * общий с сервером. Встроенные: rrp1 (фундамент, всегда) + mtproto2.
+ * Старые серверы/клиенты, не знающие mtproto2, автоматически фоллбечатся
+ * на общий протокол при согласовании.
  */
 object RrpProtocols {
 
     /** Самый стабильный протокол, имплементирован и клиентом, и сервером. */
     const val DEFAULT = "rrp1"
 
-    /** Протоколы, встроенные в APK (сервер может прислать свой больший список). */
-    val BUNDLED: List<String> = listOf(DEFAULT)
+    /** Встроенные (манифест может расширить/выключить — кроме rrp1). */
+    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID)
+
+    // ---- динамический реестр (манифест модулей) ----
+
+    @Volatile
+    private var registryIds: List<String> = BUNDLED
+
+    @Volatile
+    private var registryVersion: String = ""
+
+    /**
+     * Применяет реестр из манифеста модулей. Гарантии (зеркало SetRegistry
+     * сервера): rrp1 остаётся; пустой список НЕ применяется; мусорные id
+     * отбрасываются; rrp1 всегда дефолт.
+     */
+    fun applyRegistry(ids: List<String>, version: String) {
+        val clean = ids.map { Modules.normalizeId(it) }.filter { it.isNotEmpty() }.toMutableList()
+        if (!clean.contains(DEFAULT)) return // реестр без фундамента не применяем
+        synchronized(this) {
+            registryIds = LinkedHashSet(clean).toList()
+            registryVersion = version
+        }
+    }
+
+    /** Версия активного реестра ("" — встроенный). */
+    fun registryVersion(): String = registryVersion
 
     /** Толерантная нормализация любого значения (ссылка/сервер/пользователь). */
     fun normalize(raw: String?): String {
         if (raw == null) return DEFAULT
         val s = raw.trim().trim('"', '\'', '`', '«', '»', '“', '”', '„', '‘', '’')
             .lowercase().trim()
-        return if (s in BUNDLED || isKnown(s)) s else DEFAULT
+        return if (s in registryIds || isKnown(s)) s else DEFAULT
     }
 
     /** Известен ли id (учитываем и реестр, полученный от сервера). */
@@ -38,9 +64,9 @@ object RrpProtocols {
 
     fun serverProtocols(): List<String> = serverKnown.toList()
 
-    /** Полный список для UI: серверный реестр ∪ встроенные. */
+    /** Полный список для UI: серверный реестр ∪ активный локальный. */
     fun displayList(): List<String> {
-        val out = LinkedHashSet(BUNDLED)
+        val out = LinkedHashSet(registryIds)
         out.addAll(serverKnown)
         return out.toList()
     }
@@ -50,6 +76,7 @@ object RrpProtocols {
     /** Человекочитаемое имя для UI. */
     fun displayName(id: String): String = when (id) {
         DEFAULT -> "RRP/1 · стабильный"
+        MtProto.PROTO_ID -> "MTProto/2 · шифрование payload"
         else -> id
     }
 }

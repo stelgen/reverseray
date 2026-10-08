@@ -406,6 +406,40 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
+    /** 0x24 S→C (mtproto2): JSON {p,g,g_a} — параметры DH (base64url 256-байтовые доли). */
+    class KeyReq(
+        val p: String,
+        val g: Int,
+        val gA: String,
+    ) : RrpFrame(TYPE_KEY_REQ) {
+        override fun buildPayload(): ByteArray = MiniJson.obj(
+            "p" to MiniJson.q(p),
+            "g" to g.toString(),
+            "g_a" to MiniJson.q(gA),
+        ).toByteArray(Charsets.UTF_8)
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): KeyReq {
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("KEY_REQ: некорректный JSON")
+                return KeyReq(m["p"] ?: "", m["g"]?.toIntOrNull() ?: 0, m["g_a"] ?: "")
+            }
+        }
+    }
+
+    /** 0x25 C→S (mtproto2): JSON {g_b} — публичная доля клиента. */
+    class KeyResp(val gB: String) : RrpFrame(TYPE_KEY_RESP) {
+        override fun buildPayload(): ByteArray = MiniJson.obj(
+            "g_b" to MiniJson.q(gB),
+        ).toByteArray(Charsets.UTF_8)
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): KeyResp {
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("KEY_RESP: некорректный JSON")
+                return KeyResp(m["g_b"] ?: "")
+            }
+        }
+    }
+
     /** 0x20: utf8 JSON */
     class Stats(val json: String) : RrpFrame(TYPE_STATS) {
         override fun buildPayload(): ByteArray = json.toByteArray(Charsets.UTF_8)
@@ -455,6 +489,9 @@ sealed class RrpFrame(val type: Int) {
         const val TYPE_UDP_ASSOC = 0x21
         const val TYPE_UDP_DATA = 0x22
         const val TYPE_PROBE = 0x23
+        // v0.8: обмен ключами протокола mtproto2 (после READY, внутри приватного хендшейка)
+        const val TYPE_KEY_REQ = 0x24
+        const val TYPE_KEY_RESP = 0x25
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
@@ -502,6 +539,8 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_UDP_ASSOC -> UdpAssoc(streamId)
                 TYPE_UDP_DATA -> UdpData.fromPayload(streamId, payload)
                 TYPE_PROBE -> ProbeResp.fromPayload(payload)
+                TYPE_KEY_REQ -> KeyReq.fromPayload(payload)
+                TYPE_KEY_RESP -> KeyResp.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)
                 else -> throw RrpFrameException("неизвестный тип кадра 0x${Integer.toHexString(type)}")

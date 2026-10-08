@@ -151,8 +151,11 @@ async function tick(){
    ['Inbound-подключений',s.inbound_conns_total,''],
    ['Egress IP',s.egress_ip||'—',''],
   ];
+  const hard=s.hardening_profile?('<div class="card"><div class="k">Hardening (WAN)</div><div class="v ok">'+s.hardening_profile+'</div>'+
+   '<div class="k" style="margin-top:6px">Сканы отбито / лимит-дропов</div><div class="v">'+s.hardening_scans_total+' / '+s.hardening_limited_total+'</div></div>'):'';
+  const mods=s.modules_version?('<div class="card"><div class="k">Модули (общий манифест APK↔сервер)</div><div class="v ok">'+s.modules_version+'</div><div class="k" style="margin-top:6px">Источник</div><div class="v">'+(s.modules_source||'builtin')+'</div></div>'):'';
   document.getElementById('cards').innerHTML=c.map(([k,v,cls])=>
-   '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('');
+   '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('')+hard+mods;
   const rows=(s.sessions||[]).map(x=>
    '<tr><td>'+(x.device||'?')+'</td><td><code>'+String(x.session||'').slice(0,10)+'…</code></td>'+
    '<td>'+(x.proto||'—')+'</td><td>'+(x.rtt_ms!=null?x.rtt_ms+' мс':'—')+'</td>'+

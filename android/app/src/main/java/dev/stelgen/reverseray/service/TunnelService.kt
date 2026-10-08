@@ -27,7 +27,9 @@ import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
 import java.net.NetworkInterface
+import dev.stelgen.reverseray.net.SpeedTest
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.Random
@@ -40,6 +42,18 @@ import java.util.concurrent.atomic.AtomicLong
  * - сеть: NetworkCallback на 21+, CONNECTIVITY_ACTION — фолбэк для <21;
  * - при появлении сети — мгновенный retry всех коннектов с cooldown 3 c;
  * - экспоненциальный backoff 1→60 c ±30 % (RrpClient.backoffDelayMs);
+ *
+ * v0.8:
+ * - ЛИМИТ ТРАФИКА — КОРОЛЬ: при исчерпании отправляется РОВНО НОЛЬ байт
+ *   (туннель останавливается, все кадры затыкаются), на экране — сообщение
+ *   и отдельное окно при нажатии Старт/Реконнект; счётчик живёт в RAM и
+ *   пишется на память РЕДКО (раз в минуту — дисциплина SSD/памяти);
+ * - автоподключение (по умолчанию выкл): при достигнутом лимите ждём
+ *   даты сброса и переподключаемся только после него;
+ * - спидтест 5 с после CONNECTED — только если лимит не достигнут;
+ * - счётчик трафика за всё время (KEY_TRAFFIC_LIFETIME) — запись раз в минуту;
+ * - журнал статуса с цветовыми ролями (зелёный/красный/тёмно-жёлтый/белый)
+ *   для единого консольного окна на всех вкладках.
  *
  * v0.7.4:
  * - СМЕНА ПРОТОКОЛА с валидацией реального трафика (PROBE до реального хоста):
@@ -57,6 +71,8 @@ import java.util.concurrent.atomic.AtomicLong
 class TunnelService : Service() {
 
     private class Target(val host: String, val port: Int)
+
+    @Volatile private var lifetime: AtomicLong = AtomicLong(0)
 
     private inner class Runner(val target: Target) {
         @Volatile var kick = false
@@ -79,6 +95,10 @@ class TunnelService : Service() {
 
     /** Идёт ли сейчас валидационная смена протокола. */
     @Volatile private var switchingProto = false
+    /** Спидтест не молотит при каждом READY. */
+    @Volatile private var speedTestBusy = false
+    /** Ждун сброса лимита для авто-переподключения. */
+    @Volatile private var limitWaitThread: Thread? = null
 
     private val clientListener = object : RrpClient.Listener {
         override fun onLog(client: RrpClient, message: String) {
@@ -88,14 +108,53 @@ class TunnelService : Service() {
 
         override fun onState(client: RrpClient, state: RrpClient.State) {
             if (state == RrpClient.State.READY) {
+                if (client.mtProtoActive) {
+                    pushLog("MTProto/2: payload туннеля шифруется AES-256-IGE (ключи согласованы DH)", LogKind.OK)
+                }
                 sendBroadcast(
                     Intent(ACTION_STATUS).setPackage(packageName)
                         .putExtra(EXTRA_STATUS, client.negotiatedProto)
                         .putExtra(EXTRA_STATE, STATE_PROTO)
                         .putExtra(EXTRA_PROTO, client.negotiatedProto)
                 )
+                maybeRunSpeedTest()
             }
         }
+    }
+
+    /** Спидтест 5 с — ровно один раз на сессию, ТОЛЬКО если лимит не достигнут. */
+    private fun maybeRunSpeedTest() {
+        if (stopping) return
+        val usage = accountTraffic(0)
+        if (usage.limit > 0 && usage.used >= usage.limit) {
+            pushLog("спидтест пропущен: лимит трафика достигнут (правило нуля байт)", LogKind.WARN)
+            return
+        }
+        if (speedTestBusy) return
+        speedTestBusy = true
+        pushLog("спидтест: 5 секунд, ${SpeedTest.URL.substringBefore('?')}…")
+        Thread {
+            val r = SpeedTest.run()
+            val line = if (r.ok) {
+                val mbs = String.format(Locale.US, "%.2f", r.bytesPerSec / 1024.0 / 1024.0)
+                "спидтест: $mbs МБ/с (${fmtBytes(r.totalBytes)} за ${r.durationMs / 1000} с)"
+            } else {
+                "спидтест не удался: ${r.error ?: "нет данных"}"
+            }
+            pushLog(line, if (r.ok) LogKind.OK else LogKind.WARN)
+            sendBroadcast(
+                Intent(ACTION_STATS).setPackage(packageName)
+                    .putExtra(EXTRA_SPEEDTEST_TEXT, line)
+            )
+            speedTestBusy = false
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun fmtBytes(b: Long): String = when {
+        b >= 1L shl 30 -> String.format(Locale.US, "%.2f ГБ", b / 1073741824.0)
+        b >= 1L shl 20 -> String.format(Locale.US, "%.1f МБ", b / 1048576.0)
+        b >= 1L shl 10 -> String.format(Locale.US, "%.1f КБ", b / 1024.0)
+        else -> "$b Б"
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -103,6 +162,7 @@ class TunnelService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        lifetime = AtomicLong(prefs().getLong(KEY_TRAFFIC_LIFETIME, 0L))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -220,7 +280,10 @@ class TunnelService : Service() {
                 lastTx = tx
                 lastRx = rx
 
-                // v0.7.4: учёт лимита трафика (сумма вход+выход за период)
+                // v0.8: счётчик за всё время (канон: RAM, запись на диск пореже)
+                p(getSharedPreferences(PREFS, MODE_PRIVATE)).edit()
+                    .putLong(KEY_TRAFFIC_LIFETIME, lifetime.addAndGet(drx + dtx)).apply()
+                // v0.7.4/v0.8: учёт лимита трафика (сумма вход+выход за период)
                 val usage = accountTraffic(drx + dtx)
 
                 sendBroadcast(
@@ -239,11 +302,21 @@ class TunnelService : Service() {
                         .putExtra(EXTRA_USAGE_LIMIT, usage.limit)
                 )
                 if (usage.limit > 0 && usage.used >= usage.limit) {
+                    // КАНОН «ЛИМИТ — КОРОЛЬ»: ровно ноль байт от нас.
                     updateStatus(STATE_ERROR, getString(R.string.status_limit_reached))
-                    stopTunnel()
+                    pushLog(getString(R.string.status_limit_reached), LogKind.ERR)
+                    sendBroadcast(
+                        Intent(ACTION_STATUS).setPackage(packageName)
+                            .putExtra(EXTRA_STATE, STATE_LIMIT_REACHED)
+                            .putExtra(EXTRA_STATUS, getString(R.string.status_limit_reached))
+                            .putExtra(EXTRA_USAGE_BYTES, usage.used)
+                            .putExtra(EXTRA_USAGE_LIMIT, usage.limit)
+                    )
+                    stopTunnel() // туннель и все коннекты умирают — ноль байт
+                    maybeWaitLimitReset()
                     return@Thread
                 }
-                // персистим счётчик раз в ~5 с (чтобы лимит переживал рестарт)
+                // персистим счётчик РАЗ В МИНУТУ (дисциплина SSD/памяти, v0.8)
                 if (++persistTick >= PERSIST_EVERY_TICKS) {
                     persistTick = 0
                     persistUsage()
@@ -256,6 +329,61 @@ class TunnelService : Service() {
     // ---------- лимит трафика ----------
 
     private data class Usage(val used: Long, val limit: Long)
+
+    /**
+     * Ожидание сброса лимита (авто-реконнект вкл): вычисляем дату следующего
+     * сброса и ждём её, не тратя батарейку/трафик (грубые проверки раз в
+     * минуту). По сбросу — реконнект. Выключаемо нитью stopTunnel().
+     */
+    private fun maybeWaitLimitReset() {
+        if (!prefs().getBoolean(KEY_AUTO_RECONNECT, false)) return
+        if (limitWaitThread?.isAlive == true) return
+        val period = prefs().getString(KEY_LIMIT_PERIOD, PERIOD_DAY) ?: PERIOD_DAY
+        val day = prefs().getInt(KEY_LIMIT_RESET_DAY, 1)
+        val at = nextResetAtMs(period, day)
+        val hours = ((at - System.currentTimeMillis()) / 3_600_000L).coerceAtLeast(0)
+        pushLog(getString(R.string.status_limit_wait, hours), LogKind.WARN)
+        updateStatus(STATE_LIMIT_REACHED, getString(R.string.status_limit_reached))
+        val t = Thread {
+            while (!stopping) {
+                val usage = accountTraffic(0)
+                if (usage.limit <= 0) {
+                    pushLog("лимит снят пользователем — реконнект", LogKind.OK)
+                    startTunnel()
+                    return@Thread
+                }
+                if (System.currentTimeMillis() >= at) {
+                    pushLog("период лимита обновился — реконнект", LogKind.OK)
+                    startTunnel()
+                    return@Thread
+                }
+                try {
+                    Thread.sleep(LIMIT_POLL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }
+        t.isDaemon = true
+        limitWaitThread = t
+        t.start()
+    }
+
+    /** Следующая дата сброса: сутки — завтра в это же время; месяц — день сброса. */
+    internal fun nextResetAtMs(period: String, day: Int): Long {
+        val cal = Calendar.getInstance()
+        if (period == PERIOD_MONTH) {
+            cal.add(Calendar.MONTH, 1)
+            cal.set(Calendar.DAY_OF_MONTH, day.coerceIn(1, 28))
+        } else {
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
 
     /** Сбрасывает счётчик при смене периода, возвращает [used, limit]. */
     private fun accountTraffic(delta: Long): Usage {
@@ -499,6 +627,8 @@ class TunnelService : Service() {
         }
         statsThread?.interrupt()
         statsThread = null
+        limitWaitThread?.interrupt()
+        limitWaitThread = null
         unregisterNetworkWatching()
         releaseWakeLock()
         persistUsageSafely()
@@ -649,7 +779,14 @@ class TunnelService : Service() {
 
     private fun updateStatus(state: String, text: String) {
         lastStatus = text
-        pushLog(text)
+        // цветовая роль по состоянию (канон единого консольного окна v0.8)
+        val kind = when (state) {
+            STATE_CONNECTED, STATE_PROTO -> LogKind.OK
+            STATE_ERROR, STATE_STOPPED, STATE_LIMIT_REACHED -> LogKind.ERR
+            STATE_CONNECTING, STATE_RETRY -> LogKind.WARN
+            else -> LogKind.INFO
+        }
+        pushLog(text, kind)
         sendBroadcast(
             Intent(ACTION_STATUS)
                 .setPackage(packageName)
@@ -686,6 +823,9 @@ class TunnelService : Service() {
         const val KEY_WIFI_ONLY = "wifi_only"
         const val KEY_PROBE_TARGET = "probe_target"
         const val KEY_AUTO_UPDATE = "auto_update"          // проверка обновлений раз в 24 ч
+        // v0.8:
+        const val KEY_AUTO_RECONNECT = "auto_reconnect"    // автоподключение при открытии + ожидание сброса лимита (выкл по умолчанию)
+        const val KEY_TRAFFIC_LIFETIME = "traffic_lifetime" // суммарный трафик за всё время
         const val PERIOD_DAY = "day"
         const val PERIOD_MONTH = "month"
         const val DEFAULT_PROBE_TARGET = "1.1.1.1:443"
@@ -698,6 +838,7 @@ class TunnelService : Service() {
         const val STATE_INFO = "INFO"
         const val STATE_PROTO = "PROTO"
         const val STATE_PROTO_ROLLBACK = "PROTO_ROLLBACK"
+        const val STATE_LIMIT_REACHED = "LIMIT_REACHED" // v0.8: лимит — отдельное важное состояние
 
         const val EXTRA_STATE = "state"
 
@@ -719,9 +860,11 @@ class TunnelService : Service() {
         const val EXTRA_PKT_KIND = "pkt_kind"
         const val EXTRA_USAGE_BYTES = "usage_bytes"
         const val EXTRA_USAGE_LIMIT = "usage_limit"
+        const val EXTRA_SPEEDTEST_TEXT = "speedtest_text" // v0.8: строка спидтеста
         private const val STATS_INTERVAL_MS = 500L
         private const val ERROR_HOLD_MS = 1_500L
-        private const val PERSIST_EVERY_TICKS = 10 // ~5 c
+        private const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
+        private const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту
 
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIF_ID = 1
@@ -735,15 +878,20 @@ class TunnelService : Service() {
 
         @Volatile var lastStatus: String = ""
 
-        /** Журнал статусов/ошибок для копирования из GUI (новые сверху). */
-        private val logLines = ArrayDeque<String>()
+        /** Роль строки журнала — цвет в едином консольном окне (v0.8). */
+        enum class LogKind { INFO, OK, WARN, ERR }
 
-        fun snapshotLogs(): List<String> = synchronized(logLines) { logLines.toList() }
+        class LogLine(val text: String, val kind: LogKind)
 
-        private fun pushLog(line: String) {
+        /** Журнал статусов/ошибок (новые сверху) с цветовой ролью строки. */
+        private val logLines = ArrayDeque<LogLine>()
+
+        fun snapshotLogs(): List<LogLine> = synchronized(logLines) { logLines.toList() }
+
+        fun pushLog(line: String, kind: LogKind = LogKind.INFO) {
             synchronized(logLines) {
-                logLines.addFirst(line)
-                while (logLines.size > 200) logLines.removeLast()
+                logLines.addFirst(LogLine(line, kind))
+                while (logLines.size > 300) logLines.removeLast()
             }
         }
 
@@ -755,7 +903,7 @@ class TunnelService : Service() {
         fun logSettingChange(name: String, from: String, to: String) {
             if (from == to) return // не менялось — не пишем
             val line = "настройка: $name: $from → $to"
-            pushLog(line)
+            pushLog(line, LogKind.WARN) // важное (тёмно-жёлтое): изменение настроек
             lastStatus = line
         }
 

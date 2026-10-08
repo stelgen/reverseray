@@ -114,7 +114,6 @@
     <string name="usage_no_limit">Трафик за период: %1$s (без лимита)</string>
     <string name="usage_with_limit">Трафик: %1$s из %2$s (%3$d%%)</string>
     <string name="status_wait_wifi">Жду Wi-Fi (включено «только по Wi-Fi»)</string>
-    <string name="status_limit_reached">Лимит трафика исчерпан — туннель остановлен. Сбрось счётчик в Настройках.</string>
     <string name="status_switch_busy">Смена протокола уже идёт</string>
     <string name="status_switch_cooldown">Смена протокола доступна через %1$d с (защита от rate-limit)</string>
     <string name="status_switch_same">Протокол %1$s уже активен</string>
@@ -122,4 +121,67 @@
     <string name="status_switch_done">Протокол %1$s подключён и проверен (реальный трафик прошёл)</string>
     <string name="status_switch_fail">Протокол %1$s: не прошёл — %2$s</string>
     <string name="status_switch_rolled_back">Протокол %1$s не прошёл валидацию (%2$s) — остаёмся на %3$s, ссылка не менялась</string>
+
+    <!-- v0.8: вкладка Лог, единая консоль, модули, лимит-король, О приложении/сети -->
+    <string name="tab_log">Лог</string>
+    <string name="log_copy_all">Копировать весь лог</string>
+    <string name="log_share">Поделиться логом</string>
+    <string name="console_title_service">статус туннеля · реалтайм</string>
+    <string name="console_title_update">журнал обновления и модулей</string>
+
+    <string name="link_clear">Очистить</string>
+    <string name="link_clear_confirm">Очистить поле ссылки?</string>
+    <string name="link_saved">Ссылка сохранена</string>
+    <string name="link_status_ok">Ссылка принята и сохранена ✓</string>
+    <string name="link_status_bad">Ссылка не распознана — вставьте rrp:// строку</string>
+
+    <string name="about_app_title">О приложении</string>
+    <string name="app_version_row">Версия</string>
+    <string name="app_modules_row">Модули (манифест)</string>
+    <string name="app_modules_builtin">встроенные</string>
+    <string name="app_ram_row">Память приложения</string>
+    <string name="app_disk_row">Место (APK + данные)</string>
+    <string name="app_traffic_life_row">Трафик за всё время</string>
+    <string name="app_proto_row">Текущий протокол</string>
+
+    <string name="about_net_title">О сети — что приложение узнало</string>
+    <string name="about_net_hint">Мы показываем ВСЁ, что собрали и использовали. Ничего не прячем — правило канона. Список обновляется при каждом открытии вкладки.</string>
+
+    <string name="btn_share_app">Поделиться приложением</string>
+    <string name="share_choose">Отправить ссылку или APK?</string>
+    <string name="share_link">Ссылка на GitHub</string>
+    <string name="share_apk">APK-файл</string>
+    <string name="share_apk_error">Не удалось собрать APK для отправки</string>
+
+    <string name="set_autoreconnect">Подключаться автоматически при открытии приложения</string>
+    <string name="set_autoreconnect_hint">Выкл по умолчанию. Если лимит достигнут — ждать даты сброса и подключаться только после неё (проверки раз в минуту).</string>
+    <string name="set_limit_next">Следующий сброс счётчика: %1$s</string>
+    <string name="set_limit_period">Период</string>
+    <string name="set_limit_period_day">Сутки</string>
+    <string name="set_limit_period_month">Месяц</string>
+    <string name="set_limit_reset">Сбросить счётчик</string>
+
+    <string name="status_limit_reached">Лимит трафика исчерпан — отправлено РОВНО 0 байт, туннель остановлен. Сброс: Настройки → Лимит.</string>
+    <string name="status_limit_wait">Лимит достигнут. Жду сброса (≈%1$d ч) — подключусь автоматически.</string>
+    <string name="limit_dialog_title">Траффик закончился</string>
+    <string name="limit_dialog_msg">Лимит трафика исчерпан: %1$s из %2$s.\n\nМы отправляем РОВНО НОЛЬ байт — правило «лимит — король».\n\nОбновление лимита: %3$s.\nСброс вручную: Настройки → Лимит трафика.</string>
+    <string name="limit_dialog_wait">Ждать сброса и подключить</string>
+
+    <string name="modules_section">Модули (обновляются без переустановки APK)</string>
+    <string name="modules_check_now">Обновить модули</string>
+    <string name="modules_up_to_date">Модули актуальны</string>
+    <string name="modules_progress">Загрузка модулей: %1$d%% · %2$s</string>
+    <string name="modules_applied">Модули применены: версия %1$s, протоколы: %2$s</string>
+    <string name="modules_failed">Модули: не удалось — %1$s (работаем на встроенных)</string>
+
+    <string name="dev_cpu_model">Процессор</string>
+    <string name="dev_ram_total">Оперативная память</string>
+    <string name="dev_sdk">SDK</string>
+    <string name="dev_java">Java</string>
+
+    <string name="speedtest_line">Спидтест: %1$s</string>
+    <string name="speedtest_waiting">Спидтест: после подключения (если лимит не достигнут)</string>
+    <string name="config_hint_title">Ссылка подключения</string>
+    <string name="update_progress">Загрузка: %1$d%% · %2$s</string>
+    <string name="dns_servers_line">DNS: %1$s</string>
 </resources>

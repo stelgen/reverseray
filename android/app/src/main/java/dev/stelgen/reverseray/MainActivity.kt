@@ -2,6 +2,7 @@ package dev.stelgen.reverseray
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -16,7 +17,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -41,31 +44,51 @@ import com.google.android.material.textfield.TextInputLayout
 import com.journeyapps.barcodescanner.BarcodeEncoder
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import dev.stelgen.reverseray.core.Modules
+import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
+import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
 import dev.stelgen.reverseray.service.TunnelService
+import dev.stelgen.reverseray.service.TunnelService.LogKind
+import dev.stelgen.reverseray.service.TunnelService.LogLine
+import dev.stelgen.reverseray.ui.StatusConsole
 import dev.stelgen.reverseray.ui.TrafficGraphView
 import dev.stelgen.reverseray.update.UpdateChecker
 import dev.stelgen.reverseray.update.UpdateInfo
 import dev.stelgen.reverseray.update.UpdateLogger
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
 /**
- * ReverseRay v0.7.4 — Dashboard с четырьмя вкладками:
- *  1. Главная: большая круглая кнопка Старт/Стоп, окно трафика (скорость,
- *     пакеты «стрелками», внешний/локальный IP, страна/оператор), короткий лог.
- *  2. Связь: строка ссылки (бронепарсер чинит мусор сам), QR, файлы, смена протокола.
- *  3. Обновление: версия, авто-проверка раз в 24 ч, тех-лог обновления (для гиков).
- *  4. Настройки: инфо об устройстве (как в «О телефоне»), лимит трафика,
- *     только-Wi-Fi, цель PROBE, разрешить LAN.
+ * ReverseRay v0.8 — Dashboard с пятью вкладками:
+ *  1. Главная: ОДНА круглая кнопка Старт/Стоп с пульсацией, окно трафика
+ *     (скорость, пакеты, внешний/локальный IP, DNS, страна/оператор,
+ *     спидтест), ЕДИНОЕ консольное окно статуса (листается, live-кнопка
+ *     внутри бара, цветовые роли строк).
+ *  2. Связь: ссылка с авто-починкой при вставке + Очистить (с
+ *     подтверждением) + «Сохранено» зелёным + тост, QR, файлы, протоколы
+ *     (в т.ч. mtproto2 из модулей), «Поделиться приложением» (ссылка/APK).
+ *  3. Обновление: версия, авто-проверка 24 ч, модули без переустановки APK
+ *     (тот же манифест, что у сервера), прогресс % и скорость.
+ *  4. Лог: полный журнал сервиса в том же консольном окне + копирование
+ *     всего лога и «Поделиться».
+ *  5. Настройки: О приложении (версии/модули/RAM/диск/трафик за всё
+ *     время/протокол), О устройстве (CPU/RAM/Android/SDK/Java), О сети
+ *     (что приложение узнало — ВСЁ честно: DNS, реальный резолвер,
+ *     DoT/DoH/DNSSEC/ECS/SNI), лимит трафика («лимит — король»),
+ *     автоподключение (выкл по умолчанию), только-Wi-Fi, LAN, PROBE.
  *
- * Вся разметка собирается кодом — один источник правды. Стиль: аккуратный
- * «девопс-терминал» — тёмные моно-окна логов на светлом Material-каркасе.
+ * Канон приватности: мы не прячем НИЧЕГО из того, что делаем с сетью и
+ * данными пользователя — всё пишется в консоль и вкладку «О сети».
+ *
+ * Вся разметка собирается кодом — один источник правды. Совместимость:
+ * Android 4.0+ (API 14) — без java.time, без новее-API вызовов вне guard.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -74,22 +97,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pageHome: LinearLayout
     private lateinit var pageLink: LinearLayout
     private lateinit var pageUpdate: LinearLayout
+    private lateinit var pageLog: LinearLayout
     private lateinit var pageSettings: LinearLayout
 
     // ---------- главная ----------
-    private lateinit var statusView: TextView
-    private lateinit var statusIcon: TextView
-    private lateinit var statusSpinner: android.widget.ProgressBar
+    private lateinit var bigButton: MaterialButton
+    private lateinit var pulseRing: View
+    private var bigButtonIsStart = true
     private lateinit var trafficGraph: TrafficGraphView
     private lateinit var trafficLabel: TextView
     private lateinit var packetsLabel: TextView
     private lateinit var netFlag: ImageView
     private lateinit var netInfoView: TextView
     private lateinit var localIpView: TextView
-    private lateinit var miniLog: TextView
-    private lateinit var bigButton: MaterialButton
-    private lateinit var stopButton: MaterialButton
-    private var bigButtonIsStart = true
+    private lateinit var dnsLineView: TextView
+    private lateinit var speedTestView: TextView
+    private lateinit var homeConsole: StatusConsole
 
     /** Строки «текущий протокол» живут на двух вкладках — обновляем все. */
     private val protoLineViews = mutableListOf<TextView>()
@@ -98,14 +121,23 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- связь ----------
     private lateinit var configView: TextInputEditText
+    private lateinit var linkStatusView: TextView
+    private var configEditDebounce = 0L
 
     // ---------- обновление ----------
-    private lateinit var updateLog: TextView
     private lateinit var versionView: TextView
+    private lateinit var modulesInfoView: TextView
+    private lateinit var updateConsole: StatusConsole
+
+    // ---------- лог ----------
+    private lateinit var logConsole: StatusConsole
 
     // ---------- настройки ----------
     private lateinit var deviceInfoBox: LinearLayout
+    private lateinit var appInfoBox: LinearLayout
+    private lateinit var netInfoBox: LinearLayout
     private lateinit var usageSummaryView: TextView
+    private lateinit var limitNextView: TextView
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val netInfoRunnable = object : Runnable {
@@ -125,13 +157,7 @@ class MainActivity : AppCompatActivity() {
 
     private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
         val content = result.contents ?: return@registerForActivityResult
-        try {
-            val cfg = RrpUri.parse(content) // бронепарсер сам чинит мусор
-            configView.setText(cfg.serialize())
-            Toast.makeText(this, R.string.qr_imported, Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-        }
+        applyPastedConfig(content, announce = true)
     }
 
     private val exportFileLauncher =
@@ -144,6 +170,12 @@ class MainActivity : AppCompatActivity() {
             if (uri != null) readConfigFromFile(uri)
         }
 
+    /** SAF-приёмник для «Поделиться APK» (пишем копию в выбранное место). */
+    private val shareApkLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")) { uri ->
+            if (uri != null) copyApkTo(uri)
+        }
+
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent ?: return
@@ -153,7 +185,6 @@ class MainActivity : AppCompatActivity() {
                     val tx = intent.getLongExtra(TunnelService.EXTRA_TX_RATE, 0L)
                     trafficGraph.addSample(rx.toFloat(), tx.toFloat())
                     trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx))
-                    // строка «стрелок»: тип, последний размер, пакеты туда/сюда
                     val pkTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_COUNT, 0L)
                     val pkRx = intent.getLongExtra(TunnelService.EXTRA_PKT_RX_COUNT, 0L)
                     val szTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_SIZE, 0L)
@@ -164,20 +195,23 @@ class MainActivity : AppCompatActivity() {
                         kind.ifEmpty { "TCP" },
                         fmtBytes(szTx), fmtBytes(szRx), pkTx, pkRx,
                     )
+                    intent.getStringExtra(TunnelService.EXTRA_SPEEDTEST_TEXT)?.let {
+                        speedTestView.text = getString(R.string.speedtest_line, it)
+                    }
                     val used = intent.getLongExtra(TunnelService.EXTRA_USAGE_BYTES, 0L)
                     val limit = intent.getLongExtra(TunnelService.EXTRA_USAGE_LIMIT, 0L)
                     setUsageText(usageSummaryText(used, limit))
                 }
                 TunnelService.ACTION_STATUS -> {
-                    intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusView.text = it }
-                    val state = intent.getStringExtra(TunnelService.EXTRA_STATE) ?: TunnelService.STATE_INFO
-                    applyStatusVisual(state)
-                    when (state) {
-                        TunnelService.STATE_STOPPED, TunnelService.STATE_ERROR -> {
-                            trafficGraph.reset()
-                            trafficLabel.setText(R.string.traffic_idle)
-                            packetsLabel.text = ""
+                    val state = intent.getStringExtra(TunnelService.EXTRA_STATE)
+                        ?: TunnelService.STATE_INFO
+                    intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusText ->
+                        renderServiceLogs()
+                        if (state == TunnelService.STATE_LIMIT_REACHED) {
+                            showLimitDialog(statusText)
                         }
+                    }
+                    when (state) {
                         TunnelService.STATE_CONNECTED, TunnelService.STATE_RETRY -> {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { p ->
                                 setProtoText(getString(R.string.proto_current, p))
@@ -187,12 +221,15 @@ class MainActivity : AppCompatActivity() {
                         TunnelService.STATE_PROTO_ROLLBACK -> {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { old ->
                                 setProtoText(getString(R.string.proto_current, old))
-                                Toast.makeText(this@MainActivity, R.string.proto_rollback_toast, Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    R.string.proto_rollback_toast,
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             }
                         }
-                        TunnelService.STATE_STOPPED -> setRunningUi(false)
+                        TunnelService.STATE_STOPPED, TunnelService.STATE_ERROR -> setRunningUi(false)
                     }
-                    refreshMiniLog()
                 }
                 else -> {}
             }
@@ -202,13 +239,17 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
+        // v0.8: применить сохранённые модули до сборки UI (реестр протоколов)
+        loadCachedModules()
         buildUi()
-        statusView.text = TunnelService.lastStatus.ifEmpty { getString(R.string.status_idle) }
-        refreshMiniLog()
+        renderServiceLogs()
         refreshVersionRow()
+        refreshAppPanel()
         refreshDevicePanel()
         refreshUsageSummary()
+        refreshLimitNext()
         maybeAutoCheckUpdate()
+        maybeAutoConnect()
     }
 
     override fun onStart() {
@@ -239,7 +280,6 @@ class MainActivity : AppCompatActivity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        // Вкладки
         tabLayout = TabLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -247,6 +287,7 @@ class MainActivity : AppCompatActivity() {
             addTab(newTab().setText(R.string.tab_home))
             addTab(newTab().setText(R.string.tab_link))
             addTab(newTab().setText(R.string.tab_update))
+            addTab(newTab().setText(R.string.tab_log))
             addTab(newTab().setText(R.string.tab_settings))
             addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
                 override fun onTabSelected(tab: TabLayout.Tab) { showPage(tab.position) }
@@ -260,8 +301,9 @@ class MainActivity : AppCompatActivity() {
         pageHome = buildHomePage()
         pageLink = buildLinkPage()
         pageUpdate = buildUpdatePage()
+        pageLog = buildLogPage()
         pageSettings = buildSettingsPage()
-        listOf(pageHome, pageLink, pageUpdate, pageSettings).forEach {
+        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEach {
             it.visibility = View.GONE
             pages.addView(it)
         }
@@ -277,12 +319,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPage(index: Int) {
-        listOf(pageHome, pageLink, pageUpdate, pageSettings).forEachIndexed { i, p ->
+        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEachIndexed { i, p ->
             p.visibility = if (i == index) View.VISIBLE else View.GONE
         }
-        if (index == 3) { refreshDevicePanel(); refreshUsageSummary() }
-        if (index == 2) { refreshVersionRow(); refreshUpdateLog() }
-        if (index == 1) refreshProtoLine()
+        when (index) {
+            2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
+            3 -> renderServiceLogs()
+            4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
+            1 -> refreshProtoLine()
+        }
     }
 
     private fun page(): LinearLayout = LinearLayout(this).apply {
@@ -302,17 +347,22 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    /** Моно-окно лога в стиле «девопс-терминала»: тёмный фон, зелёный текст. */
-    private fun terminalView(heightDp: Int): TextView = TextView(this).apply {
-        typeface = Typeface.MONOSPACE
-        textSize = 12f
-        setTextColor(0xFF8BD17C.toInt())
-        setBackgroundColor(0xFF0B1020.toInt())
-        setPadding(dp(12), dp(10), dp(12), dp(10))
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(heightDp),
-        )
-        setTextIsSelectable(true)
+    private fun sectionTitle(textRes: Int, hint: String? = null): LinearLayout {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(TextView(this).apply {
+            setText(textRes)
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        hint?.let {
+            box.addView(TextView(this).apply {
+                text = it
+                textSize = 11f
+                setTextColor(0xFF6B7280.toInt())
+                setPadding(0, dp(2), 0, 0)
+            })
+        }
+        return box
     }
 
     private fun row(vararg buttons: MaterialButton): LinearLayout {
@@ -337,7 +387,7 @@ class MainActivity : AppCompatActivity() {
 
         p.addView(ImageView(this).apply {
             setImageResource(R.mipmap.ic_launcher)
-            layoutParams = LinearLayout.LayoutParams(dp(64), dp(64)).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setMargins(0, dp(4), 0, dp(2))
             }
@@ -345,67 +395,50 @@ class MainActivity : AppCompatActivity() {
         })
         p.addView(TextView(this).apply {
             setText(R.string.app_name)
-            textSize = 22f
+            textSize = 20f
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER_HORIZONTAL
         })
 
-        // Большая круглая кнопка Старт/Стоп
+        // ОДНА круглая кнопка Старт/Стоп (дубликат снизу убран — v0.8) с пульс-кольцом
+        val buttonBox = android.widget.FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(216), dp(216)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setMargins(0, dp(12), 0, dp(8))
+            }
+        }
+        pulseRing = View(this).apply {
+            layoutParams = android.widget.FrameLayout.LayoutParams(dp(216), dp(216)).apply {
+                gravity = Gravity.CENTER
+            }
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setStroke(dp(2), 0x6639D98A)
+            }
+            visibility = View.GONE
+        }
+        buttonBox.addView(pulseRing)
         bigButton = MaterialButton(this).apply {
             setText(R.string.btn_start_short)
             textSize = 22f
             setTypeface(typeface, Typeface.BOLD)
             shapeAppearanceModel = ShapeAppearanceModel.builder()
                 .setAllCornerSizes(dp(110).toFloat()).build()
-            layoutParams = LinearLayout.LayoutParams(dp(200), dp(200)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-                setMargins(0, dp(14), 0, dp(8))
+            layoutParams = android.widget.FrameLayout.LayoutParams(dp(196), dp(196)).apply {
+                gravity = Gravity.CENTER
             }
             setOnClickListener {
                 if (bigButtonIsStart) startTunnel() else stopTunnel()
             }
         }
-        p.addView(bigButton)
-        stopButton = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(R.string.btn_stop)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(0, dp(2), 0, dp(4)) }
-            setOnClickListener { stopTunnel() }
-        }
-        p.addView(stopButton)
+        buttonBox.addView(bigButton)
+        p.addView(buttonBox)
 
-        // Карточка трафика
+        // Карточка трафика: шапка состояния как в консоли
         val inner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val statusRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(40)
-        }
-        statusSpinner = android.widget.ProgressBar(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply { setMargins(0, 0, dp(10), 0) }
-            isIndeterminate = true
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(0xFFF9A825.toInt())
-            visibility = View.GONE
-        }
-        statusRow.addView(statusSpinner)
-        statusIcon = TextView(this).apply {
-            textSize = 18f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, 0, dp(10), 0)
-        }
-        statusRow.addView(statusIcon)
-        statusView = TextView(this).apply {
-            setText(R.string.status_idle)
-            maxLines = 3
-        }
-        baseStatusColor = currentTextColor()
-        statusRow.addView(statusView)
-        inner.addView(statusRow)
-
         trafficGraph = TrafficGraphView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(96),
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(84),
             ).apply { setMargins(0, dp(8), 0, dp(2)) }
         }
         inner.addView(trafficGraph)
@@ -422,7 +455,6 @@ class MainActivity : AppCompatActivity() {
         }
         inner.addView(packetsLabel)
 
-        // Сеть телефона: флаг + внешний IP/страна/оператор + локальный IP
         val netRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -445,6 +477,17 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF6B7280.toInt())
         }
         inner.addView(localIpView)
+        dnsLineView = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+        }
+        inner.addView(dnsLineView)
+        speedTestView = TextView(this).apply {
+            setText(R.string.speedtest_waiting)
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+        }
+        inner.addView(speedTestView)
         protoLineViews.add(TextView(this).apply {
             textSize = 12f
             setPadding(0, dp(2), 0, 0)
@@ -452,14 +495,11 @@ class MainActivity : AppCompatActivity() {
         inner.addView(protoLineViews.last())
         p.addView(card(inner))
 
-        // Короткий лог подключения — тоже «терминал»
-        p.addView(TextView(this).apply {
-            setText(R.string.logs_title)
-            textSize = 13f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        miniLog = terminalView(150)
-        p.addView(miniLog)
+        // Единое консольное окно статуса (листается, live-кнопка в баре)
+        homeConsole = StatusConsole(this).apply {
+            setTitle(getString(R.string.console_title_service))
+        }
+        p.addView(homeConsole)
 
         usageViews.add(TextView(this).apply {
             textSize = 12f
@@ -479,36 +519,58 @@ class MainActivity : AppCompatActivity() {
             textSize = 13f
             setPadding(0, dp(4), 0, dp(4))
         })
+
+        // Окно ссылки в стиле «О устройстве»: статус + поле + Очистить
+        val linkCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        linkCard.addView(sectionTitle(R.string.config_hint_title, null))
+        linkStatusView = TextView(this).apply {
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        linkCard.addView(linkStatusView)
         val layout = TextInputLayout(this).apply {
             hint = getString(R.string.config_hint)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(0, dp(8), 0, dp(8)) }
+            ).apply { setMargins(0, dp(4), 0, dp(8)) }
         }
         configView = TextInputEditText(this).apply {
             setText(prefs().getString(TunnelService.KEY_CONFIG, ""))
             minLines = 2
-            minHeight = dp(88)
+            minHeight = dp(80)
+            // КАНОН v0.8: вставил — приложение само всё починило и сохранило
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    val now = System.currentTimeMillis()
+                    if (now - configEditDebounce < 400) return // дебаунс на пасту
+                    configEditDebounce = now
+                    val text = s?.toString() ?: ""
+                    if (text.isBlank()) {
+                        setLinkStatus(null)
+                        return
+                    }
+                    applyPastedConfig(text, announce = false, silentFail = true)
+                }
+            })
         }
         layout.addView(configView)
-        p.addView(layout)
+        linkCard.addView(layout)
+        linkCard.addView(
+            row(
+                outlined(R.string.link_clear).apply {
+                    setOnClickListener { confirmClearLink() }
+                },
+                outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
+            )
+        )
+        p.addView(card(linkCard))
 
-        val bFix = outlined(R.string.link_fix)
-        bFix.setOnClickListener {
-            try {
-                val cfg = RrpUri.parse(configView.text.toString())
-                configView.setText(cfg.serialize())
-                Toast.makeText(this, getString(R.string.link_fixed, cfg.host), Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-            }
+        if (qrSupported) {
+            p.addView(row(outlined(R.string.qr_show).apply { setOnClickListener { showQr() } }))
         }
-        val bScan = outlined(R.string.qr_scan)
-        bScan.setOnClickListener { launchScan() }
-        val bShow = outlined(R.string.qr_show)
-        bShow.setOnClickListener { showQr() }
-        p.addView(if (qrSupported) row(bFix, bScan) else row(bFix, bShow))
-        p.addView(row(bShow))
 
         if (fileIoSupported) {
             p.addView(
@@ -546,6 +608,23 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showProtocolPicker() }
         })
         p.addView(card(protoCard))
+
+        // Поделиться приложением: ссылка или APK (модули вшиты, настроек нет)
+        val shareCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        shareCard.addView(sectionTitle(R.string.btn_share_app, null))
+        shareCard.addView(TextView(this).apply {
+            setText(R.string.share_choose)
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+            setPadding(0, dp(2), 0, dp(4))
+        })
+        shareCard.addView(
+            row(
+                filled(R.string.share_link).apply { setOnClickListener { shareAppLink() } },
+                outlined(R.string.share_apk).apply { setOnClickListener { shareAppApk() } },
+            )
+        )
+        p.addView(card(shareCard))
         return p
     }
 
@@ -560,6 +639,19 @@ class MainActivity : AppCompatActivity() {
         }
         p.addView(versionView)
 
+        // Модули: обновляются без переустановки APK (как POS-машины)
+        val modulesCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        modulesCard.addView(sectionTitle(R.string.modules_section, null))
+        modulesInfoView = TextView(this).apply {
+            textSize = 12f
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        modulesCard.addView(modulesInfoView)
+        modulesCard.addView(filled(R.string.modules_check_now).apply {
+            setOnClickListener { syncModulesAsync(force = true) }
+        })
+        p.addView(card(modulesCard))
+
         val autoSwitch = SwitchMaterial(this).apply {
             setText(R.string.update_auto)
             isChecked = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
@@ -568,7 +660,7 @@ class MainActivity : AppCompatActivity() {
                 if (old != checked) {
                     prefs().edit().putBoolean(TunnelService.KEY_AUTO_UPDATE, checked).apply()
                     TunnelService.logSettingChange(getString(R.string.set_auto_update), old.toString(), checked.toString())
-                    refreshMiniLog()
+                    renderServiceLogs()
                 }
             }
         }
@@ -581,33 +673,57 @@ class MainActivity : AppCompatActivity() {
                 },
             )
         )
-        p.addView(TextView(this).apply {
-            setText(R.string.update_log_hint)
-            textSize = 13f
-            setPadding(0, dp(4), 0, dp(4))
-        })
-        updateLog = terminalView(260)
-        p.addView(updateLog)
 
-        val share = outlined(R.string.logs_copy)
-        share.setOnClickListener { copyUpdateLog() }
-        p.addView(row(share))
+        // Журнал обновления/модулей — ТО ЖЕ консольное окно и формат, что на главной
+        updateConsole = StatusConsole(this).apply {
+            setTitle(getString(R.string.console_title_update))
+        }
+        p.addView(updateConsole)
         return p
     }
 
-    // ---------- Вкладка 4: Настройки ----------
+    // ---------- Вкладка 4: Лог ----------
+
+    private fun buildLogPage(): LinearLayout {
+        val p = page()
+        p.addView(TextView(this).apply {
+            setText(R.string.logs_title)
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(4), 0, dp(4))
+        })
+        logConsole = StatusConsole(this).apply {
+            setTitle(getString(R.string.console_title_service))
+        }
+        p.addView(logConsole)
+        p.addView(
+            row(
+                outlined(R.string.log_copy_all).apply { setOnClickListener { copyServiceLog() } },
+                outlined(R.string.log_share).apply { setOnClickListener { shareServiceLog() } },
+            )
+        )
+        return p
+    }
+
+    // ---------- Вкладка 5: Настройки ----------
 
     private fun buildSettingsPage(): LinearLayout {
         val p = page()
 
-        // «О телефоне»-панель
-        p.addView(TextView(this).apply {
-            setText(R.string.settings_device)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-        })
+        // О приложении: версии/модули/Рам/диск/трафик за всё время/протокол
+        p.addView(sectionTitle(R.string.about_app_title, null))
+        appInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        p.addView(card(appInfoBox))
+
+        // О устройстве (как «О телефоне» + CPU/RAM/SDK/Java)
+        p.addView(sectionTitle(R.string.settings_device, null))
         deviceInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         p.addView(card(deviceInfoBox))
+
+        // О сети: ВСЁ, что приложение узнало — честно, по группам
+        p.addView(sectionTitle(R.string.about_net_title, getString(R.string.about_net_hint)))
+        netInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        p.addView(card(netInfoBox))
 
         // Только Wi-Fi
         p.addView(card(LinearLayout(this).apply {
@@ -620,7 +736,7 @@ class MainActivity : AppCompatActivity() {
                     if (old != checked) {
                         prefs().edit().putBoolean(TunnelService.KEY_WIFI_ONLY, checked).apply()
                         TunnelService.logSettingChange(getString(R.string.set_wifi_only), old.toString(), checked.toString())
-                        refreshMiniLog()
+                        renderServiceLogs()
                     }
                 }
             })
@@ -637,13 +753,36 @@ class MainActivity : AppCompatActivity() {
                     if (old != checked) {
                         prefs().edit().putBoolean(TunnelService.KEY_ALLOW_LAN, checked).apply()
                         TunnelService.logSettingChange(getString(R.string.set_allow_lan), old.toString(), checked.toString())
-                        refreshMiniLog()
+                        renderServiceLogs()
                     }
                 }
             })
         }))
 
-        // Лимит трафика
+        // Автоподключение при открытии (выкл по умолчанию)
+        p.addView(card(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(SwitchMaterial(this@MainActivity).apply {
+                setText(R.string.set_autoreconnect)
+                isChecked = prefs().getBoolean(TunnelService.KEY_AUTO_RECONNECT, false)
+                setOnCheckedChangeListener { _, checked ->
+                    val old = prefs().getBoolean(TunnelService.KEY_AUTO_RECONNECT, false)
+                    if (old != checked) {
+                        prefs().edit().putBoolean(TunnelService.KEY_AUTO_RECONNECT, checked).apply()
+                        TunnelService.logSettingChange(getString(R.string.set_autoreconnect), old.toString(), checked.toString())
+                        renderServiceLogs()
+                    }
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                setText(R.string.set_autoreconnect_hint)
+                textSize = 11f
+                setTextColor(0xFF6B7280.toInt())
+                setPadding(0, dp(2), 0, 0)
+            })
+        }))
+
+        // Лимит трафика: «лимит — король»
         val lim = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         lim.addView(TextView(this).apply {
             setText(R.string.set_limit_title)
@@ -656,6 +795,12 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF6B7280.toInt())
         })
         lim.addView(usageViews.last())
+        limitNextView = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+            setPadding(0, dp(2), 0, dp(4))
+        }
+        lim.addView(limitNextView)
         val limitSwitch = SwitchMaterial(this).apply {
             setText(R.string.set_limit_switch)
             isChecked = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L) > 0
@@ -668,6 +813,45 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
         }
         lim.addView(limitEdit)
+        // Период: сутки / месяц (UX-канон: явный выбор вместо «угадай день»)
+        lim.addView(TextView(this).apply {
+            setText(R.string.set_limit_period)
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+        })
+        val periodBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val periodDay = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            setText(R.string.set_limit_period_day)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val periodMonth = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            setText(R.string.set_limit_period_month)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { setMargins(dp(6), 0, 0, 0) }
+        }
+        periodBox.addView(periodDay)
+        periodBox.addView(periodMonth)
+        lim.addView(periodBox)
+        var selectedPeriod = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
+            ?: TunnelService.PERIOD_DAY
+        fun paintPeriod() {
+            val sel = com.google.android.material.R.attr.materialButtonFilledStyle
+            val unsel = com.google.android.material.R.attr.materialButtonOutlinedStyle
+            periodDay.context.theme.applyStyle(0, false)
+            periodDay.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                if (selectedPeriod == TunnelService.PERIOD_DAY) 0xFF2E7D32.toInt() else 0x00FFFFFF,
+            )
+            periodMonth.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                if (selectedPeriod == TunnelService.PERIOD_MONTH) 0xFF2E7D32.toInt() else 0x00FFFFFF,
+            )
+        }
+        periodDay.setOnClickListener {
+            selectedPeriod = TunnelService.PERIOD_DAY; paintPeriod()
+        }
+        periodMonth.setOnClickListener {
+            selectedPeriod = TunnelService.PERIOD_MONTH; paintPeriod()
+        }
+        paintPeriod()
         val periodEdit = EditText(this).apply {
             hint = getString(R.string.set_limit_period_hint)
             inputType = InputType.TYPE_CLASS_NUMBER
@@ -689,7 +873,7 @@ class MainActivity : AppCompatActivity() {
                             return@setOnClickListener
                         }
                         val bytes = if (on) (gb!! * 1024 * 1024 * 1024).toLong() else 0L
-                        val period = if (bytes > 0) TunnelService.PERIOD_MONTH else TunnelService.PERIOD_DAY
+                        val period = if (bytes > 0) selectedPeriod else TunnelService.PERIOD_DAY
                         val day = (periodEdit.text.toString().toIntOrNull() ?: 1).coerceIn(1, 28)
                         prefs().edit()
                             .putLong(TunnelService.KEY_TRAFFIC_LIMIT, bytes)
@@ -701,7 +885,7 @@ class MainActivity : AppCompatActivity() {
                             describeLimit(oldLimit, oldPeriod ?: TunnelService.PERIOD_DAY, oldDay),
                             describeLimit(bytes, period, day),
                         )
-                        refreshMiniLog(); refreshUsageSummary()
+                        renderServiceLogs(); refreshUsageSummary(); refreshLimitNext()
                         Toast.makeText(this@MainActivity, R.string.set_limit_applied, Toast.LENGTH_SHORT).show()
                     }
                 },
@@ -712,7 +896,7 @@ class MainActivity : AppCompatActivity() {
                             getString(R.string.set_limit_counter),
                             usageViews.firstOrNull()?.text.toString(), "0",
                         )
-                        refreshUsageSummary()
+                        renderServiceLogs(); refreshUsageSummary()
                         Toast.makeText(this@MainActivity, R.string.set_limit_reset_done, Toast.LENGTH_SHORT).show()
                     }
                 },
@@ -752,7 +936,7 @@ class MainActivity : AppCompatActivity() {
                 val norm = "$host:$port"
                 prefs().edit().putString(TunnelService.KEY_PROBE_TARGET, norm).apply()
                 TunnelService.logSettingChange(getString(R.string.set_probe_title), old, norm)
-                refreshMiniLog()
+                renderServiceLogs()
             }
         })
         p.addView(card(probe))
@@ -768,8 +952,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun describeLimit(bytes: Long, period: String, day: Int): String {
         if (bytes <= 0) return "без ограничений"
-        val p = if (period == TunnelService.PERIOD_MONTH) "месяц (сброс $day)" else "сутки"
-        return "${fmtBytes(bytes)}/$p"
+        val pr = if (period == TunnelService.PERIOD_MONTH) "месяц (сброс $day)" else "сутки"
+        return "${fmtBytes(bytes)}/$pr"
     }
 
     private fun limitGb(): String {
@@ -790,6 +974,15 @@ class MainActivity : AppCompatActivity() {
         // сохраняем нормализованную ссылку (proto= всегда явный)
         configView.setText(cfg.serialize())
         prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
+        // v0.8: лимит — король. Достигнут → НОЛЬ байт: окно предупреждения вместо старта.
+        val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
+        val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
+        if (limit > 0 && used >= limit) {
+            showLimitDialog(null)
+            TunnelService.pushLog(getString(R.string.status_limit_reached), LogKind.WARN)
+            renderServiceLogs()
+            return
+        }
         val i = Intent(this, TunnelService::class.java).setAction(TunnelService.ACTION_START)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
         setRunningUi(true)
@@ -800,15 +993,43 @@ class MainActivity : AppCompatActivity() {
         setRunningUi(false)
     }
 
+    /** Одна центральная кнопка + пульс-кольцо в активных состояниях. */
     private fun setRunningUi(running: Boolean) {
         bigButtonIsStart = !running
         if (running) {
             bigButton.setText(R.string.btn_stop_short)
             bigButton.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFC62828.toInt())
+            pulseRing.visibility = View.VISIBLE
+            startPulse()
         } else {
             bigButton.setText(R.string.btn_start_short)
             bigButton.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF2E7D32.toInt())
+            pulseRing.visibility = View.GONE
+            stopPulse()
         }
+    }
+
+    private var pulseAnimator: android.animation.ValueAnimator? = null
+    private fun startPulse() {
+        stopPulse()
+        val a = android.animation.ValueAnimator.ofFloat(0f, 1f)
+        a.duration = 1200
+        a.repeatCount = android.animation.ValueAnimator.INFINITE
+        a.addUpdateListener { anim ->
+            val t = anim.animatedValue as Float
+            pulseRing.scaleX = 1f + t * 0.08f
+            pulseRing.scaleY = 1f + t * 0.08f
+            pulseRing.alpha = 0.7f - t * 0.5f
+        }
+        a.start()
+        pulseAnimator = a
+    }
+
+    private fun stopPulse() {
+        pulseAnimator?.cancel()
+        pulseAnimator = null
+        pulseRing.scaleX = 1f
+        pulseRing.scaleY = 1f
     }
 
     private fun showProtocolPicker() {
@@ -837,60 +1058,70 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestProtoSwitch(proto: String) {
         setProtoText(getString(R.string.proto_switching, proto))
-        statusView.text = getString(R.string.status_switch_trying, proto)
-        applyStatusVisual(TunnelService.STATE_CONNECTING)
         val i = Intent(this, TunnelService::class.java)
             .setAction(TunnelService.ACTION_SWITCH_PROTO)
             .putExtra(TunnelService.EXTRA_PROTO, proto)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
     }
 
+    // ================================================================= Ссылка (авто-починка)
+
+    /** Вставили/ввели ссылку → приложение САМО чинит, сохраняет и подтверждает. */
+    private fun applyPastedConfig(content: String, announce: Boolean, silentFail: Boolean = false) {
+        try {
+            val cfg = RrpUri.parse(content) // бронепарсер чинит мусор сам
+            val canonical = cfg.serialize()
+            configView.setText(canonical)
+            configView.setSelection(canonical.length)
+            prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+            setLinkStatus(getString(R.string.link_status_ok))
+            if (announce) {
+                Toast.makeText(this, R.string.link_saved, Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            setLinkStatus(getString(R.string.link_status_bad))
+            if (announce || !silentFail) {
+                Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun setLinkStatus(okText: String?) {
+        linkStatusView.text = okText ?: ""
+        linkStatusView.setTextColor(if (okText == null) 0xFF6B7280.toInt() else 0xFF2E7D32.toInt())
+    }
+
+    /** Очистить поле — только с подтверждением (канон UX v0.8). */
+    private fun confirmClearLink() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.link_clear)
+            .setMessage(R.string.link_clear_confirm)
+            .setPositiveButton(android.R.string.yes) { _, _ ->
+                configView.setText("")
+                prefs().edit().remove(TunnelService.KEY_CONFIG).apply()
+                setLinkStatus(null)
+                Toast.makeText(this, R.string.link_clear, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     // ================================================================= Сеть/статус
 
-    private val colorGreen = 0xFF2E7D32.toInt()
-    private val colorYellow = 0xFFF9A825.toInt()
-    private val colorRed = 0xFFC62828.toInt()
-    private val colorGray = 0xFF8A8F98.toInt()
-    private var baseStatusColor = 0xFF212121.toInt()
-
-    private fun applyStatusVisual(state: String) {
-        val (icon: String?, color: Int, spinning: Boolean) = when (state) {
-            TunnelService.STATE_CONNECTED -> Triple("✓", colorGreen, false)
-            TunnelService.STATE_CONNECTING, TunnelService.STATE_RETRY -> Triple("", colorYellow, true)
-            TunnelService.STATE_ERROR -> Triple("✕", colorRed, false)
-            TunnelService.STATE_STOPPED -> Triple("✕", colorRed, false)
-            else -> Triple("●", colorGray, false)
+    private fun renderServiceLogs() {
+        val lines = TunnelService.snapshotLogs().map { l ->
+            StatusConsole.Line(
+                l.text,
+                when (l.kind) {
+                    LogKind.OK -> StatusConsole.Role.OK
+                    LogKind.WARN -> StatusConsole.Role.WARN
+                    LogKind.ERR -> StatusConsole.Role.ERR
+                    else -> StatusConsole.Role.INFO
+                },
+            )
         }
-        statusSpinner.visibility = if (spinning) View.VISIBLE else View.GONE
-        statusIcon.visibility = if (spinning) View.GONE else View.VISIBLE
-        if (icon != null) statusIcon.text = icon
-        statusIcon.setTextColor(color)
-        statusView.setTextColor(
-            when (state) {
-                TunnelService.STATE_CONNECTED -> colorGreen
-                TunnelService.STATE_ERROR, TunnelService.STATE_STOPPED -> colorRed
-                TunnelService.STATE_CONNECTING, TunnelService.STATE_RETRY -> colorYellow
-                else -> baseStatusColor
-            }
-        )
-    }
-
-    private fun currentTextColor(): Int = statusView.currentTextColor
-
-    private fun refreshMiniLog() {
-        val lines = TunnelService.snapshotLogs().take(40)
-        miniLog.text = lines.joinToString("\n").ifEmpty { getString(R.string.logs_empty) }
-    }
-
-    private fun refreshUpdateLog() {
-        updateLog.text = UpdateLogger.snapshot().joinToString("\n").ifEmpty { getString(R.string.update_log_empty) }
-    }
-
-    private fun copyUpdateLog() {
-        val text = UpdateLogger.snapshot().joinToString("\n").ifEmpty { getString(R.string.update_log_empty) }
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("ReverseRay update log", text))
-        Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
+        homeConsole.render(lines)
+        logConsole.render(lines)
     }
 
     private fun usageSummaryText(used: Long, limit: Long): String {
@@ -910,17 +1141,31 @@ class MainActivity : AppCompatActivity() {
         setUsageText(usageSummaryText(used, limit))
     }
 
-    /** Обновляет все сводные строки лимита (главная + настройки). */
     private fun setUsageText(text: String) {
         usageViews.forEach { it.text = text }
     }
 
-    /** Обновляет все строки «текущий протокол» (главная + связь). */
     private fun setProtoText(text: String) {
         protoLineViews.forEach { it.text = text }
     }
 
-    /** Внешний IP/страна/оператор + локальный IP. */
+    private fun refreshProtoLine() {
+        val current = try {
+            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
+        } catch (_: Exception) {
+            RrpProtocols.DEFAULT
+        }
+        val known = RrpProtocols.serverProtocols()
+        setProtoText(
+            if (known.isEmpty()) {
+                getString(R.string.proto_current, current)
+            } else {
+                getString(R.string.proto_current_list, current, known.joinToString(", "))
+            }
+        )
+    }
+
+    /** Внешний IP/страна/оператор + локальный IP + DNS-факты (честно). */
     private fun refreshNetInfoAsync() {
         Thread {
             val info: NetInfo? = try {
@@ -929,6 +1174,7 @@ class MainActivity : AppCompatActivity() {
                 null
             }
             val local = TunnelService.localIp()
+            val dnsServers = try { DnsProbe.systemServers() } catch (_: Throwable) { emptyList() }
             runOnUiThread {
                 if (info == null) {
                     netFlag.visibility = View.GONE
@@ -948,12 +1194,13 @@ class MainActivity : AppCompatActivity() {
                         append(getString(R.string.netinfo_ip, info.ip))
                         info.country?.let { c ->
                             append(" · ").append(c)
-                            info.countryCode?.let { cc -> append(" (").append(cc).append(")") }
+                            info.countryCode?.let { cc2 -> append(" (").append(cc2).append(")") }
                         }
                         info.isp?.let { append(" · ").append(it) }
                     }
                 }
                 localIpView.text = getString(R.string.local_ip, local ?: "—")
+                dnsLineView.text = getString(R.string.dns_servers_line, dnsServers.joinToString(", ").ifEmpty { "—" })
             }
         }.apply { isDaemon = true }.start()
     }
@@ -997,12 +1244,64 @@ class MainActivity : AppCompatActivity() {
             val text = contentResolver.openInputStream(uri)?.use { input ->
                 input.readBytes().toString(Charsets.UTF_8)
             } ?: ""
-            val cfg = RrpUri.parse(text) // чинит мусор сам
-            configView.setText(cfg.serialize())
-            prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
+            applyPastedConfig(text, announce = true)
             Toast.makeText(this, R.string.config_imported, Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // ================================================================= Поделиться приложением
+
+    private fun shareAppLink() {
+        val url = "https://github.com/stelgen/reverseray"
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+        }
+        startActivity(Intent.createChooser(send, getString(R.string.btn_share_app)))
+    }
+
+    /**
+     * Поделиться APK «в сборе»: текущий APK приложения + вшитые модули
+     * (реестр протоколов в коде). НЕ передаются: настройки, ссылка/токен,
+     * логи, счётчики и любая приватная информация — у нового пользователя
+     * всё будет в дефолтах.
+     */
+    private fun shareAppApk() {
+        if (Build.VERSION.SDK_INT >= 19 && fileIoSupported) {
+            try {
+                shareApkLauncher.launch("reverseray-${currentVersion()}.apk")
+                return
+            } catch (_: ActivityNotFoundException) {
+                // нет SAF-пикера — фоллбек на прямую шару ниже
+            }
+        }
+        try {
+            val apk = File(applicationInfo.sourceDir)
+            val copy = File(cacheDir, "reverseray-${currentVersion()}.apk")
+            apk.copyTo(copy, overwrite = true)
+            val uri = FileProvider.getUriForFile(this, "$packageName.files", copy)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/vnd.android.package-archive"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, getString(R.string.btn_share_app)))
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.share_apk_error), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun copyApkTo(uri: Uri) {
+        try {
+            contentResolver.openOutputStream(uri)?.use { out ->
+                File(applicationInfo.sourceDir).inputStream().use { it.copyTo(out, 64 * 1024) }
+                out.flush()
+            }
+            Toast.makeText(this, R.string.config_saved, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.share_apk_error), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1049,7 +1348,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    // ================================================================= Обновление
+    // ================================================================= Обновление + модули
 
     private fun currentVersion(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: ""
@@ -1067,20 +1366,110 @@ class MainActivity : AppCompatActivity() {
         versionView.text = getString(R.string.version_row, currentVersion(), code)
     }
 
-    private fun refreshProtoLine() {
-        val current = try {
-            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
-        } catch (_: Exception) {
-            RrpProtocols.DEFAULT
-        }
-        val known = RrpProtocols.serverProtocols()
-        setProtoText(
-            if (known.isEmpty()) {
-                getString(R.string.proto_current, current)
-            } else {
-                getString(R.string.proto_current_list, current, known.joinToString(", "))
-            }
+    private fun refreshModulesInfo() {
+        val v = RrpProtocols.registryVersion()
+        val protocols = RrpProtocols.displayList()
+        modulesInfoView.text = getString(
+            R.string.proto_current_list,
+            if (v.isEmpty()) getString(R.string.app_modules_builtin) else v,
+            protocols.joinToString(", "),
         )
+    }
+
+    private fun refreshUpdateConsole() {
+        val lines = UpdateLogger.snapshot().map { StatusConsole.Line(it, StatusConsole.Role.INFO) }
+        updateConsole.render(lines)
+    }
+
+    /** v0.8: применить сохранённый манифест модулей при старте. */
+    private fun loadCachedModules() {
+        try {
+            val f = File(filesDir, "modules.json")
+            if (!f.exists()) return
+            val m = Modules.parse(f.readText())
+            Modules.apply(m)
+        } catch (_: Exception) {
+            // битый кеш не применяем — работаем на встроенных
+        }
+    }
+
+    /**
+     * Синхронизация модулей (тот же modules.json, что ест сервер):
+     * качается ТОЛЬКО если версия/хеш изменились; применяется без
+     * переустановки APK. Прогресс и скорость — в консоль обновления.
+     */
+    private fun syncModulesAsync(force: Boolean) {
+        val url = Modules.DEFAULT_URL
+        UpdateLogger.add("модули: проверяю ${url.substringAfterLast('/')}")
+        Thread {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 15_000
+                conn.setRequestProperty("Accept", "application/json")
+                conn.connect()
+                if (conn.responseCode != 200) {
+                    throw Modules.ManifestException("HTTP ${conn.responseCode}")
+                }
+                val len = conn.contentLengthLong
+                var total = 0L
+                var lastPct = -10
+                val baos = java.io.ByteArrayOutputStream()
+                conn.inputStream.use { input ->
+                    val buf = ByteArray(16 * 1024)
+                    val start = System.currentTimeMillis()
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        baos.write(buf, 0, n)
+                        total += n
+                        if (len > 0) {
+                            val pct = (total * 100 / len).toInt().coerceIn(0, 100)
+                            if (pct >= lastPct + 10) {
+                                lastPct = pct
+                                val secs = ((System.currentTimeMillis() - start).coerceAtLeast(1)) / 1000.0
+                                val kbps = total / 1024.0 / secs
+                                UpdateLogger.add(getString(R.string.modules_progress, pct, String.format(Locale.US, "%.0f КБ/с", kbps)))
+                            }
+                        }
+                    }
+                }
+                conn.disconnect()
+                val body = baos.toString("UTF-8")
+                val m = Modules.parse(body)
+                // даунгрейд запрещён (как на сервере)
+                val current = RrpProtocols.registryVersion()
+                if (current.isNotEmpty() && Modules.versionCompare(m.version, current) < 0) {
+                    UpdateLogger.add("модули: у сервера старее (${m.version} < $current) — не применяю")
+                    refreshUpdateConsoleSafe()
+                    return@Thread
+                }
+                val cachedHash = prefs().getString(KEY_MODULES_HASH, "")
+                val hash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(body.toByteArray(Charsets.UTF_8))
+                    .joinToString("") { String.format(Locale.US, "%02x", it) }
+                if (!force && m.version == current && hash == cachedHash) {
+                    UpdateLogger.add(getString(R.string.modules_up_to_date))
+                    refreshUpdateConsoleSafe()
+                    return@Thread
+                }
+                Modules.apply(m)
+                File(filesDir, "modules.json").writeText(body)
+                prefs().edit().putString(KEY_MODULES_HASH, hash).apply()
+                UpdateLogger.add(getString(R.string.modules_applied, m.version, m.enabledProtocolIds().joinToString(", ")))
+                runOnUiThread {
+                    refreshModulesInfo()
+                    refreshProtoLine()
+                }
+            } catch (e: Exception) {
+                UpdateLogger.add(getString(R.string.modules_failed, e.message ?: "?"))
+            }
+            refreshUpdateConsoleSafe()
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun refreshUpdateConsoleSafe() {
+        runOnUiThread { refreshUpdateConsole() }
     }
 
     /** Автопроверка обновлений раз в 24 ч (вкл. по умолчанию, закрываемое окно). */
@@ -1094,9 +1483,26 @@ class MainActivity : AppCompatActivity() {
         checkForUpdateAsync(showIfUpToDate = false)
     }
 
+    /** v0.8: автоподключение при открытии приложения (выкл по умолчанию). */
+    private fun maybeAutoConnect() {
+        if (!prefs().getBoolean(TunnelService.KEY_AUTO_RECONNECT, false)) return
+        val cfg = prefs().getString(TunnelService.KEY_CONFIG, null) ?: return
+        if (cfg.isBlank()) return
+        val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
+        val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
+        if (limit > 0 && used >= limit) {
+            // лимит достигнут: ждём сброса (TunnelService сам ждёт даты)
+            TunnelService.pushLog(getString(R.string.status_limit_reached), LogKind.WARN)
+            showLimitDialog(null)
+            return
+        }
+        startTunnel()
+    }
+
     private fun checkForUpdateAsync(showIfUpToDate: Boolean) {
         val current = currentVersion()
         UpdateLogger.add("проверка обновлений: текущая версия $current")
+        refreshUpdateConsoleSafe()
         Thread {
             val info = UpdateChecker().check(current)
             if (info == null) {
@@ -1104,42 +1510,67 @@ class MainActivity : AppCompatActivity() {
                 if (showIfUpToDate) {
                     runOnUiThread { Toast.makeText(this, R.string.update_latest, Toast.LENGTH_SHORT).show() }
                 }
-                return@Thread
+            } else {
+                UpdateLogger.add("доступно: ${info.latestTag} → ${info.apkUrl.substringAfterLast('/')}")
+                runOnUiThread {
+                    refreshUpdateConsole()
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle(getString(R.string.update_title, info.latestTag))
+                        .setMessage(getString(R.string.update_question))
+                        .setPositiveButton(R.string.update_download) { _, _ -> downloadUpdate(info) }
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .show()
+                }
             }
-            UpdateLogger.add("доступно: ${info.latestTag} → ${info.apkUrl.substringAfterLast('/')}")
-            runOnUiThread {
-                refreshUpdateLog()
-                MaterialAlertDialogBuilder(this)
-                    .setTitle(getString(R.string.update_title, info.latestTag))
-                    .setMessage(getString(R.string.update_question))
-                    .setPositiveButton(R.string.update_download) { _, _ -> downloadUpdate(info) }
-                    .setNegativeButton(android.R.string.cancel, null) // окно закрывается
-                    .show()
-            }
+            refreshUpdateConsoleSafe()
         }.apply { isDaemon = true }.start()
     }
 
     private fun downloadUpdate(info: UpdateInfo) {
         val dir = File(cacheDir, "apk").apply { mkdirs() }
         val dest = File(dir, "update-${info.latestTag}.apk")
-        val status = Toast.makeText(this, R.string.update_downloading, Toast.LENGTH_LONG)
-        status.show()
-        val started = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        UpdateLogger.add("[$started] скачивание ${info.latestTag}…")
+        UpdateLogger.add("скачивание ${info.latestTag}…")
         Thread {
             try {
-                UpdateChecker().downloadApk(info, dest)
+                val conn = java.net.URL(info.apkUrl).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 20_000
+                conn.connect()
+                val len = conn.contentLengthLong
+                var total = 0L
+                var lastPct = -10
+                conn.inputStream.use { input ->
+                    dest.outputStream().use { out ->
+                        val buf = ByteArray(64 * 1024)
+                        val start = System.currentTimeMillis()
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            total += n
+                            if (len > 0) {
+                                val pct = (total * 100 / len).toInt().coerceIn(0, 100)
+                                if (pct >= lastPct + 10) {
+                                    lastPct = pct
+                                    val secs = ((System.currentTimeMillis() - start).coerceAtLeast(1)) / 1000.0
+                                    val speed = String.format(Locale.US, "%.0f КБ/с", total / 1024.0 / secs)
+                                    UpdateLogger.add(getString(R.string.update_progress, pct, speed))
+                                }
+                            }
+                        }
+                        out.flush()
+                    }
+                }
+                conn.disconnect()
                 UpdateLogger.add("скачано: ${dest.name} (${fmtBytes(dest.length())}) → установка")
                 runOnUiThread {
-                    status.cancel()
-                    refreshUpdateLog()
+                    refreshUpdateConsole()
                     installApk(dest)
                 }
             } catch (e: Exception) {
                 UpdateLogger.add("ошибка скачивания: ${e.message}")
                 runOnUiThread {
-                    status.cancel()
-                    refreshUpdateLog()
+                    refreshUpdateConsole()
                     Toast.makeText(this, getString(R.string.update_error, e.message ?: ""), Toast.LENGTH_LONG).show()
                 }
             }
@@ -1161,76 +1592,223 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ================================================================= Устройство
+    // ================================================================= Лимит — король
 
-    /** Панель «О системе» — как в стоковых настройках Android. */
-    private fun refreshDevicePanel() {
-        deviceInfoBox.removeAllViews()
-        fun rowOf(k: String, v: String) {
-            val l = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, dp(4), 0, dp(4))
+    /** Окно «траффик закончился» — на Старт/Реконнект и при падении туннеля. */
+    private fun showLimitDialog(statusText: String?) {
+        val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
+        val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
+        val next = nextResetDateString()
+        val msg = getString(R.string.limit_dialog_msg, fmtBytes(used), fmtBytes(limit), next)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.limit_dialog_title)
+            .setMessage(msg)
+            .setPositiveButton(R.string.limit_dialog_wait) { _, _ ->
+                // авто-реконнект включаем и отдаём ожидание сервису
+                prefs().edit().putBoolean(TunnelService.KEY_AUTO_RECONNECT, true).apply()
+                TunnelService.pushLog(getString(R.string.status_limit_wait, 0), LogKind.WARN)
+                renderServiceLogs()
             }
-            l.addView(TextView(this).apply {
-                text = k
-                textSize = 13f
-                setTextColor(0xFF6B7280.toInt())
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.45f)
-            })
-            l.addView(TextView(this).apply {
-                text = v
-                textSize = 13f
-                setTypeface(typeface, Typeface.BOLD)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.55f)
-            })
-            deviceInfoBox.addView(l)
+            .setNegativeButton(android.R.string.ok, null)
+            .show()
+        if (statusText != null) {
+            setUsageText(usageSummaryText(used, limit))
         }
-        val kernel = try { System.getProperty("os.version") ?: "—" } catch (_: Exception) { "—" }
-        val abis = try { Build.SUPPORTED_ABIS.firstOrNull() ?: "—" } catch (_: Exception) { "—" }
-        val sec = try {
-            if (Build.VERSION.SDK_INT >= 22) {
-                @Suppress("DEPRECATION")
-                Build.VERSION.SECURITY_PATCH
-            } else {
-                "—"
-            }
-        } catch (_: Throwable) {
-            "—"
+    }
+
+    private fun nextResetDateString(): String {
+        val period = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
+            ?: TunnelService.PERIOD_DAY
+        val day = prefs().getInt(TunnelService.KEY_LIMIT_RESET_DAY, 1)
+        val at = LimitReset.nextResetAtMs(period, day)
+        return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(at))
+    }
+
+    // ================================================================= Панели «О …»
+
+    private fun infoRow(parent: LinearLayout, k: String, v: String) {
+        val l = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(4))
         }
-        val m = resources.displayMetrics
-        rowOf(getString(R.string.dev_model), "${Build.MANUFACTURER} ${Build.MODEL}")
-        rowOf(getString(R.string.dev_android), "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-        rowOf(getString(R.string.dev_build), Build.DISPLAY)
-        rowOf(getString(R.string.dev_patch), sec)
-        rowOf(getString(R.string.dev_kernel), kernel)
-        rowOf(getString(R.string.dev_cpu), abis)
-        rowOf(getString(R.string.dev_screen), "${m.widthPixels}×${m.heightPixels} @${m.density}x")
+        l.addView(TextView(this).apply {
+            text = k
+            textSize = 13f
+            setTextColor(0xFF6B7280.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.45f)
+        })
+        l.addView(TextView(this).apply {
+            text = v
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.55f)
+        })
+        parent.addView(l)
+    }
+
+    /** «О приложении»: версии, модули, RAM, диск, трафик за всё время, протокол. */
+    private fun refreshAppPanel() {
+        appInfoBox.removeAllViews()
+        val code = try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionCode
+        } catch (_: Exception) { 0 }
         val rt = Runtime.getRuntime()
-        val mem = fmtBytes(rt.totalMemory() - rt.freeMemory())
-        rowOf(getString(R.string.dev_mem), "${mem} / ${fmtBytes(rt.maxMemory())}")
-        rowOf(getString(R.string.dev_version), "${currentVersion()} (${getString(R.string.app_name)})")
-        deviceInfoBox.addView(
+        val ramUsed = rt.totalMemory() - rt.freeMemory()
+        val apkLen = try { File(applicationInfo.sourceDir).length() } catch (_: Exception) { 0L }
+        val dataLen = try { dirSize(filesDir) + dirSize(cacheDir) } catch (_: Exception) { 0L }
+        val lifetime = prefs().getLong(TunnelService.KEY_TRAFFIC_LIFETIME, 0L)
+        val currentProto = try {
+            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
+        } catch (_: Exception) { RrpProtocols.DEFAULT }
+        val modulesV = RrpProtocols.registryVersion().ifEmpty { getString(R.string.app_modules_builtin) }
+        infoRow(appInfoBox, getString(R.string.app_version_row), "$currentVersion() ($code)")
+        infoRow(appInfoBox, getString(R.string.app_modules_row), "$modulesV · ${RrpProtocols.displayList().joinToString(", ")}")
+        infoRow(appInfoBox, getString(R.string.app_ram_row), fmtBytes(ramUsed))
+        infoRow(appInfoBox, getString(R.string.app_disk_row), fmtBytes(apkLen + dataLen))
+        infoRow(appInfoBox, getString(R.string.app_traffic_life_row), fmtBytes(lifetime))
+        infoRow(appInfoBox, getString(R.string.app_proto_row), currentProto)
+        appInfoBox.addView(
             Button(this).apply {
                 setText(R.string.dev_copy)
                 background = null
                 setOnClickListener {
-                    val sb = StringBuilder()
-                    for (i in 0 until deviceInfoBox.childCount) {
-                        val rowL = deviceInfoBox.getChildAt(i) as? LinearLayout ?: continue
-                        if (rowL.childCount == 2) {
-                            sb.append((rowL.getChildAt(0) as TextView).text).append(": ")
-                                .append((rowL.getChildAt(1) as TextView).text).append('\n')
-                        }
-                    }
-                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("ReverseRay device", sb.toString()))
-                    Toast.makeText(this@MainActivity, R.string.logs_copied, Toast.LENGTH_SHORT).show()
+                    copyPanel(appInfoBox, "ReverseRay app")
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply { gravity = Gravity.END }
             }
         )
+    }
+
+    /** «О устройстве» + CPU-модель, общая RAM, SDK, Java. */
+    private fun refreshDevicePanel() {
+        deviceInfoBox.removeAllViews()
+        val kernel = try { System.getProperty("os.version") ?: "—" } catch (_: Exception) { "—" }
+        val cpuModel = cpuModel()
+        val abis = try { Build.SUPPORTED_ABIS.firstOrNull() ?: "—" } catch (_: Exception) { "—" }
+        val sec = try {
+            if (Build.VERSION.SDK_INT >= 22) {
+                @Suppress("DEPRECATION")
+                Build.VERSION.SECURITY_PATCH
+            } else "—"
+        } catch (_: Throwable) { "—" }
+        val totalRam = totalRamBytes()
+        val m = resources.displayMetrics
+        infoRow(deviceInfoBox, getString(R.string.dev_model), "${Build.MANUFACTURER} ${Build.MODEL}")
+        infoRow(deviceInfoBox, getString(R.string.dev_android), "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+        infoRow(deviceInfoBox, getString(R.string.dev_sdk), "SDK ${Build.VERSION.SDK_INT}")
+        infoRow(deviceInfoBox, getString(R.string.dev_cpu_model), cpuModel.ifEmpty { abis })
+        infoRow(deviceInfoBox, getString(R.string.dev_ram_total), fmtBytes(totalRam))
+        infoRow(deviceInfoBox, getString(R.string.dev_java), javaVmInfo())
+        infoRow(deviceInfoBox, getString(R.string.dev_build), Build.DISPLAY)
+        infoRow(deviceInfoBox, getString(R.string.dev_patch), sec)
+        infoRow(deviceInfoBox, getString(R.string.dev_kernel), kernel)
+        infoRow(deviceInfoBox, getString(R.string.dev_screen), "${m.widthPixels}×${m.heightPixels} @${m.density}x")
+        infoRow(deviceInfoBox, getString(R.string.dev_version), "${currentVersion()} (${getString(R.string.app_name)})")
+        deviceInfoBox.addView(
+            Button(this).apply {
+                setText(R.string.dev_copy)
+                background = null
+                setOnClickListener { copyPanel(deviceInfoBox, "ReverseRay device") }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { gravity = Gravity.END }
+            }
+        )
+    }
+
+    /** «О сети» — честно всё, что приложение узнало (DnsProbe + NetInfo). */
+    private fun refreshNetPanel() {
+        netInfoBox.removeAllViews()
+        infoRow(netInfoBox, getString(R.string.netinfo_loading), lastExternalIp ?: "…")
+        netInfoBox.addView(TextView(this).apply {
+            setText(R.string.about_net_hint)
+            textSize = 11f
+            setTextColor(0xFF6B7280.toInt())
+            setPadding(0, dp(6), 0, dp(2))
+        })
+        Thread {
+            val dns = try { DnsProbe.collect() } catch (_: Throwable) { null }
+            val external = try { NetInfoFetcher.fetch() } catch (_: Exception) { null }
+            runOnUiThread {
+                netInfoBox.removeAllViews()
+                external?.let { e ->
+                    infoRow(netInfoBox, "Внешний IP", "${e.ip}${e.country?.let { " · $it" } ?: ""}${e.isp?.let { " · $it" } ?: ""}")
+                }
+                if (dns == null) {
+                    infoRow(netInfoBox, "DNS", "не удалось собрать факты")
+                    return@runOnUiThread
+                }
+                for ((k, v) in DnsProbe.describe(dns)) {
+                    infoRow(netInfoBox, k, v)
+                }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun copyPanel(box: LinearLayout, label: String) {
+        val sb = StringBuilder()
+        for (i in 0 until box.childCount) {
+            val rowL = box.getChildAt(i) as? LinearLayout ?: continue
+            if (rowL.childCount == 2) {
+                sb.append((rowL.getChildAt(0) as TextView).text).append(": ")
+                    .append((rowL.getChildAt(1) as TextView).text).append('\n')
+            }
+        }
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(label, sb.toString()))
+        Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun dirSize(dir: File): Long = try {
+        dir.walkBottomUp().filter { it.isFile }.map { it.length() }.sum()
+    } catch (_: Exception) {
+        0L
+    }
+
+    private fun cpuModel(): String = try {
+        File("/proc/cpuinfo").useLines { lines ->
+            lines.firstOrNull { it.startsWith("Hardware") }?.substringAfter(":")?.trim()
+                ?: lines.firstOrNull { it.startsWith("model name") }?.substringAfter(":")?.trim()
+                ?: ""
+        }
+    } catch (_: Exception) {
+        ""
+    }
+
+    private fun totalRamBytes(): Long = try {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        mi.totalMem
+    } catch (_: Exception) {
+        0L
+    }
+
+    private fun javaVmInfo(): String = try {
+        "${System.getProperty("java.vm.name") ?: "?"} ${System.getProperty("java.vm.version") ?: ""}"
+    } catch (_: Exception) {
+        "?"
+    }
+
+    // ================================================================= Лог: копировать/поделиться
+
+    private fun copyServiceLog() {
+        val text = logConsole.snapshotText().ifEmpty { getString(R.string.logs_empty) }
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("ReverseRay log", text))
+        Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun shareServiceLog() {
+        val text = logConsole.snapshotText().ifEmpty { getString(R.string.logs_empty) }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(send, getString(R.string.log_share)))
     }
 
     // ================================================================= Разное
@@ -1250,5 +1828,24 @@ class MainActivity : AppCompatActivity() {
         const val NETINFO_REFRESH_MS = 60_000L
         const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
         const val KEY_LAST_UPDATE_CHECK = "last_update_check"
+        const val KEY_MODULES_HASH = "modules_hash"
+    }
+}
+
+/** Следующая дата сброса лимита — вынесено для юнит-тестов (без android.*). */
+object LimitReset {
+
+    fun nextResetAtMs(period: String, resetDay: Int): Long {
+        if (period == TunnelService.PERIOD_MONTH) {
+            cal.add(Calendar.MONTH, 1)
+            cal.set(Calendar.DAY_OF_MONTH, resetDay.coerceIn(1, 28))
+        } else {
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
     }
 }

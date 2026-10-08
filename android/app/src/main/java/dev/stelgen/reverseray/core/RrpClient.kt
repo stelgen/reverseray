@@ -187,6 +187,12 @@ class RrpClient(
 
     @Volatile private var probeResp: RrpFrame.ProbeResp? = null
 
+    /** v0.8: крипто-контекст mtproto2 (не null после успешного DH-апгрейда). */
+    @Volatile private var mtCrypto: MtProto.SessionCrypto? = null
+
+    /** Активен ли MTProto-конверт в этой сессии (для UI/статуса). */
+    val mtProtoActive: Boolean get() = mtCrypto != null
+
     @Volatile var tunnelWindow: Long = DEFAULT_TUNNEL_WINDOW
         private set
 
@@ -383,19 +389,21 @@ class RrpClient(
             is RrpFrame.Open -> handleIncomingOpen(frame)
             is RrpFrame.OpenOk -> pendingOpens.remove(frame.streamId)?.complete(frame.errCode)
             is RrpFrame.Data -> {
-                rxBytes.addAndGet(frame.bytes.size.toLong())
+                val f = decryptPayload(frame) ?: return
+                rxBytes.addAndGet(f.bytes.size.toLong())
                 packetsRx.incrementAndGet()
-                lastPacketRxSize.set(frame.bytes.size.toLong())
+                lastPacketRxSize.set(f.bytes.size.toLong())
                 lastPacketKind = KIND_TCP
-                handleData(frame)
+                handleData(f)
             }
             is RrpFrame.UdpAssoc -> handleIncomingUdpAssoc(frame)
             is RrpFrame.UdpData -> {
-                rxBytes.addAndGet(frame.bytes.size.toLong())
+                val f = decryptUdpPayload(frame) ?: return
+                rxBytes.addAndGet(f.bytes.size.toLong())
                 packetsRx.incrementAndGet()
-                lastPacketRxSize.set(frame.bytes.size.toLong())
+                lastPacketRxSize.set(f.bytes.size.toLong())
                 lastPacketKind = KIND_UDP
-                handleUdpData(frame)
+                handleUdpData(f)
             }
             is RrpFrame.Close -> closeStream(frame.streamId, notify = false)
             is RrpFrame.Window -> streams[frame.streamId]?.sendWindow
@@ -408,6 +416,8 @@ class RrpClient(
                 probeResp = frame
             }
             is RrpFrame.ProbeReq -> log("PROBE от сервера не ожидается")
+            is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8: DH-апгрейд mtproto2
+            is RrpFrame.KeyResp -> log("KEY_RESP от сервера не ожидается")
             is RrpFrame.ErrorFrame -> {
                 log("сервер ERROR ${frame.code}: ${frame.message} (raw payload ${frame.rawHex()})")
                 for (id in pendingOpens.keys) {
@@ -420,6 +430,76 @@ class RrpClient(
                     readyLatch.countDown()
                 }
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ MTProto/2 (v0.8)
+
+    /**
+     * KEY_REQ от сервера (после READY при согласованном proto=mtproto2):
+     * валидируем p (anti-logjam — обязан равняться каноническому dh_prime
+     * Telegram) и g=3, проверяем g_a по канону guidelines, генерируем свою
+     * долю, шлём KEY_RESP и включаем MTProto-конверт на DATA/UDP_DATA.
+     */
+    private fun handleKeyReq(frame: RrpFrame.KeyReq) {
+        if (mtCrypto != null) {
+            log("KEY_REQ повторно — игнорирую (крипто уже включена)")
+            return
+        }
+        try {
+            val pBytes = MtProto.b64urlDecode(frame.p)
+            if (!pBytes.contentEquals(MtProto.P.toByteArray().let { bytes ->
+                    // BigInteger.toByteArray() может дать 257 байт с ведущим 0
+                    if (bytes.size == 257) bytes.copyOfRange(1, 257) else bytes
+                })
+            ) {
+                throw MtProto.MtProtoException("p не равен каноническому dh_prime (anti-logjam)")
+            }
+            if (frame.g != MtProto.G.toInt()) {
+                throw MtProto.MtProtoException("g = ${frame.g}, ожидали 3")
+            }
+            val gA = MtProto.publicFromBytes(MtProto.b64urlDecode(frame.gA))
+            MtProto.validatePublic(gA)
+            val dh = MtProto.ClientDh()
+            dh.generatePrivate()
+            val gB = MtProto.publicBytes(dh.public)
+            val gABytes = MtProto.b64urlDecode(frame.gA)
+            val authKey = dh.shared(gA)
+            val sid = sessionId ?: throw MtProto.MtProtoException("нет session_id")
+            mtCrypto = MtProto.SessionCrypto(
+                authKey,
+                MtProto.saltFor(sid, gABytes, gB),
+                MtProto.sessionId8(sid),
+            )
+            log("MTProto/2: ключи согласованы (DH 2048, канон Telegram; payload DATA/UDP_DATA шифруется AES-256-IGE)")
+            listener?.onState(this, State.READY) // уведомить UI о включении крипто
+            sendFrame(RrpFrame.KeyResp(MtProto.b64url(gB)))
+        } catch (e: Exception) {
+            log("MTProto/2: обмен ключами не удался: ${e.message}")
+            close()
+        }
+    }
+
+    /** Расшифровка DATA-конверта (в обычном режиме — без изменений). */
+    private fun decryptPayload(frame: RrpFrame.Data): RrpFrame.Data? {
+        val crypto = mtCrypto ?: return frame
+        return try {
+            RrpFrame.Data(frame.streamId, frame.flags, crypto.decryptUp(frame.bytes))
+        } catch (e: Exception) {
+            log("MTProto/2: битый конверт DATA (stream ${frame.streamId}): ${e.message} — поток закрыт")
+            close()
+            null
+        }
+    }
+
+    /** Расшифровка UDP_DATA-конверта. */
+    private fun decryptUdpPayload(frame: RrpFrame.UdpData): RrpFrame.UdpData? {
+        val crypto = mtCrypto ?: return frame
+        return try {
+            RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.decryptUp(frame.bytes))
+        } catch (e: Exception) {
+            log("MTProto/2: битый конверт UDP_DATA: ${e.message}")
+            null
         }
     }
 
@@ -761,23 +841,40 @@ class RrpClient(
 
     private fun sendFrame(frame: RrpFrame) {
         val out = wireOut ?: throw RrpClientException("нет соединения")
+        var wire: RrpFrame = frame
         when (frame) {
             is RrpFrame.Data -> {
                 txBytes.addAndGet(frame.bytes.size.toLong())
                 packetsTx.incrementAndGet()
                 lastPacketTxSize.set(frame.bytes.size.toLong())
                 lastPacketKind = KIND_TCP
+                val crypto = mtCrypto
+                if (crypto != null) {
+                    if (frame.bytes.size > MtProto.SessionCrypto.MAX_PLAIN_DATA) {
+                        throw RrpClientException("DATA ${frame.bytes.size} > лимита MTProto-конверта")
+                    }
+                    wire = RrpFrame.Data(frame.streamId, frame.flags, crypto.encryptDown(frame.bytes))
+                }
             }
             is RrpFrame.UdpData -> {
                 txBytes.addAndGet(frame.bytes.size.toLong())
                 packetsTx.incrementAndGet()
                 lastPacketTxSize.set(frame.bytes.size.toLong())
                 lastPacketKind = KIND_UDP
+                val crypto = mtCrypto
+                if (crypto != null) {
+                    if (frame.bytes.size > MtProto.SessionCrypto.MAX_PLAIN_DATA) {
+                        // семантика UDP: слишком большая дейтаграмма дропается
+                        log("UDP_DATA ${frame.bytes.size} > лимита конверта — дроп")
+                        return
+                    }
+                    wire = RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.encryptDown(frame.bytes))
+                }
             }
             else -> {}
         }
         synchronized(sendLock) {
-            out.write(frame.encode())
+            out.write(wire.encode())
             out.flush()
         }
     }
