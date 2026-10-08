@@ -171,19 +171,32 @@ jobs:
           arch: x86_64
           script: |
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -n dev.stelgen.reverseray/.MainActivity
-            sleep 6
+            # холодный эмулятор: отключаем анимации и ждём настоящий фокус приложения
+            adb shell settings put global window_animation_scale 0.0
+            adb shell settings put global transition_animation_scale 0.0
+            adb shell settings put global animator_duration_scale 0.0
+            adb shell am start -W -n dev.stelgen.reverseray/.MainActivity
+            ok=0
+            for i in $(seq 1 30); do
+              if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then ok=1; break; fi
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then echo "app not focused"; adb logcat -d | tail -60; exit 1; fi
+            sleep 3
             adb exec-out screencap -p > shot-raw.png
             adb shell pidof dev.stelgen.reverseray | grep -q . || (adb logcat -d | tail -50; exit 1)
-      - name: Normalize to 720x1440 and commit
+      - name: Normalize to 720x1440, sanity-check, commit
         run: |
           pip install pillow
           python3 - <<'PY'
           from PIL import Image
           img = Image.open("shot-raw.png").convert("RGB")
+          small = img.resize((64, 64))
+          colors = len(set(small.getdata()))
+          assert colors > 16, f"screenshot looks uniform/ANR ({colors} colors) — повтори"
           img = img.resize((720, 1440), Image.LANCZOS)
           img.save("assets/brand/screenshot.png", optimize=True)
-          print("screenshot normalized:", img.size)
+          print("screenshot normalized:", img.size, "colors64:", colors)
           PY
           if git diff --quiet assets/brand/screenshot.png; then
             echo "screenshot unchanged"
