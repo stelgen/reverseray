@@ -1,5 +1,6 @@
 package dev.stelgen.reverseray.net
 
+import dev.stelgen.reverseray.core.Msgs
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -43,9 +44,9 @@ object SpeedTest {
 
     /** Куда ходит спидтест (для честного статуса ДО запуска). */
     fun plan(): List<String> = listOf(
-        "HTTP-проверка интернета ← $HTTP_CHECK_URL (HTTPS)",
-        "TCP-пинг → $PING_HOST:$PING_PORT",
-        "скачивание 25 МБ ← ${URL.substringBefore('?')} (HTTPS)",
+        Msgs.ST_HTTP_CHECK.t(HTTP_CHECK_URL),
+        Msgs.ST_TCP_PING.t("$PING_HOST:$PING_PORT"),
+        Msgs.ST_DOWNLOAD.t(URL.substringBefore('?')),
     )
 
     /** Блокирующий тест (вызывать из фонового потока). Лимит — байт трафика ровно столько, сколько реально скачалось. */
@@ -56,15 +57,15 @@ object SpeedTest {
 
         // 1) HTTP-проверка наличия интернета (+ задержка)
         val http = httpCheck()
-        endpoints.add(if (http.first) "HTTP $HTTP_CHECK_URL → 200 за ${http.second} мс" else "HTTP $HTTP_CHECK_URL → недоступен")
+        endpoints.add(if (http.first) Msgs.ST_HTTP_OK.t(HTTP_CHECK_URL, http.second) else Msgs.ST_HTTP_DOWN.t(HTTP_CHECK_URL))
         // нет интернета — дальше не ходим (ноль байт бессмысленного трафика)
         if (!http.first) {
-            return Result(false, 0, 0, System.currentTimeMillis() - start, "интернета нет (HTTP-проверка не прошла)", false, http.second, 0, endpoints)
+            return Result(false, 0, 0, System.currentTimeMillis() - start, Msgs.ST_NO_INET.t(), false, http.second, 0, endpoints)
         }
 
         // 2) TCP-пинг (ICMP без root недоступен — это честный TCP-пинг)
         val ping = tcpPing()
-        endpoints.add("TCP-пинг $PING_HOST:$PING_PORT → ${if (ping > 0) "$ping мс" else "нет ответа"}")
+        endpoints.add(Msgs.ST_PING_RESULT.t("$PING_HOST:$PING_PORT", if (ping > 0) Msgs.ST_PING_MS.t(ping) else Msgs.ST_PING_NONE.t()))
 
         // 3) скачивание
         return try {
@@ -85,7 +86,7 @@ object SpeedTest {
             }
             input.close()
             conn.disconnect()
-            endpoints.add("скачивание ${URL.substringBefore('?')} → ${total} Б")
+            endpoints.add(Msgs.ST_DOWNLOAD_DONE.t(URL.substringBefore('?'), total))
             val duration = (System.currentTimeMillis() - dlStart).coerceAtLeast(1)
             Result(
                 ok = total > 0,

@@ -44,14 +44,14 @@ object RrpUri {
     /** Разбор уже очищенной строки (используется и в тестах). */
     internal fun parseSanitized(s: String): RrpUriConfig {
         if (!s.take(SCHEME.length).equals(SCHEME, ignoreCase = true)) {
-            throw RrpUriException("ожидалась схема rrp://")
+            throw RrpUriException(Msgs.URI_SCHEME.t())
         }
         val body = s.substring(SCHEME.length)
 
         val at = body.indexOf('@')
-        if (at < 0) throw RrpUriException("нет токена: rrp://token@host:ports")
+        if (at < 0) throw RrpUriException(Msgs.URI_NO_TOKEN.t())
         val token = pctDecode(body.substring(0, at))
-        if (token.isEmpty()) throw RrpUriException("пустой токен")
+        if (token.isEmpty()) throw RrpUriException(Msgs.URI_EMPTY_TOKEN.t())
 
         val rest = body.substring(at + 1)
         val qIdx = rest.indexOf('?')
@@ -63,28 +63,28 @@ object RrpUri {
         val portsStr: String
         if (hostPart.startsWith("[")) {
             val close = hostPart.indexOf(']')
-            if (close < 0) throw RrpUriException("IPv6-литерал без закрывающей ]")
+            if (close < 0) throw RrpUriException(Msgs.URI_IPV6_NOCLOSE.t())
             host = hostPart.substring(1, close).trim()
             val tail = hostPart.substring(close + 1)
-            if (!tail.startsWith(":")) throw RrpUriException("нет портов после ]")
+            if (!tail.startsWith(":")) throw RrpUriException(Msgs.URI_IPV6_NO_PORTS.t())
             portsStr = tail.substring(1)
         } else {
             val colon = hostPart.lastIndexOf(':')
-            if (colon < 0) throw RrpUriException("нет портов: host:443,8443")
+            if (colon < 0) throw RrpUriException(Msgs.URI_NO_PORTS.t())
             host = hostPart.substring(0, colon).trim()
             portsStr = hostPart.substring(colon + 1)
         }
-        if (host.isEmpty()) throw RrpUriException("пустой хост")
+        if (host.isEmpty()) throw RrpUriException(Msgs.URI_EMPTY_HOST.t())
 
         val ports = portsStr
             .split(',')
             .map { it.trim() }
             .map {
-                val n = it.toIntOrNull() ?: throw RrpUriException("некорректный порт: $it")
-                if (n !in 1..65535) throw RrpUriException("порт вне 1..65535: $n")
+                val n = it.toIntOrNull() ?: throw RrpUriException(Msgs.URI_BAD_PORT.t(it))
+                if (n !in 1..65535) throw RrpUriException(Msgs.URI_PORT_RANGE.t(n))
                 n
             }
-        if (ports.isEmpty()) throw RrpUriException("список портов пуст")
+        if (ports.isEmpty()) throw RrpUriException(Msgs.URI_EMPTY_PORTS.t())
 
         var pin: String? = null
         var name: String? = null
@@ -230,9 +230,9 @@ object RrpUri {
         while (i < s.length) {
             val c = s[i]
             if (c == '%') {
-                if (i + 2 >= s.length) throw RrpUriException("обрезанный percent-encoding")
+                if (i + 2 >= s.length) throw RrpUriException(Msgs.URI_PCT_TRUNCATED.t())
                 val b = s.substring(i + 1, i + 3).toIntOrNull(16)
-                    ?: throw RrpUriException("некорректный percent-encoding: ${s.substring(i, i + 3)}")
+                    ?: throw RrpUriException(Msgs.URI_PCT_BAD.t(s.substring(i, i + 3)))
                 out.write(b)
                 i += 3
             } else {

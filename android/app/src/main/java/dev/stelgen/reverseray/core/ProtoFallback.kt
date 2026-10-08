@@ -39,8 +39,10 @@ object ProtoFallback {
      * ЧТО делать (ждать обновления сервера/модулей).
      */
     fun fallbackReason(brokenProto: String): String {
-        return "модуль протокола ${RrpProtocols.labelWithVer(brokenProto)} не даёт подключиться " +
-            "($THRESHOLD неудачи подряд) — клиент фоллбечится на ${RrpProtocols.labelWithVer(BASE)}; " +
-            "сервер не откатываем (анти-цикл): он поднимет новый протокол, когда обновится сам"
+        return Msgs.FALLBACK_NOTICE.t(
+            RrpProtocols.labelWithVer(brokenProto),
+            THRESHOLD,
+            RrpProtocols.labelWithVer(BASE),
+        )
     }
 }

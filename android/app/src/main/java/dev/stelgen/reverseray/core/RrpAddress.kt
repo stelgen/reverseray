@@ -23,7 +23,7 @@ object RrpAddress {
 
     /** Полный payload OPEN: [u8 atyp][addr][u16be port]. */
     fun encodeOpen(host: String, port: Int): ByteArray {
-        if (port !in 1..65535) throw AddressException("порт вне 1..65535: $port")
+        if (port !in 1..65535) throw AddressException(Msgs.ADDR_PORT_RANGE.t(port))
         val a = encodeAddr(host)
         val out = ByteArray(a.bytes.size + 3)
         out[0] = a.atyp.toByte()
@@ -35,17 +35,17 @@ object RrpAddress {
     /** [u8 atyp][addr] без порта. IPv6 — только литерал, домен ≤ 255 байт. */
     fun encodeAddr(rawHost: String): AddrBytes {
         val host = normalizeHost(rawHost)
-        if (host.isEmpty()) throw AddressException("пустой адрес")
+        if (host.isEmpty()) throw AddressException(Msgs.ADDR_EMPTY.t())
         parseIpv4Octets(host)?.let {
             return AddrBytes(ATYP_IPV4, it.map { o -> o.toByte() }.toByteArray())
         }
         if (host.contains(':')) {
-            val v6 = parseIpv6Literal(host) ?: throw AddressException("некорректный IPv6-литерал: $host")
+            val v6 = parseIpv6Literal(host) ?: throw AddressException(Msgs.ADDR_IPV6_BAD.t(host))
             return AddrBytes(ATYP_IPV6, v6)
         }
         val domain = host.toByteArray(Charsets.US_ASCII)
-        if (domain.isEmpty()) throw AddressException("пустой домен")
-        if (domain.size > 255) throw AddressException("домен длиннее 255 байт")
+        if (domain.isEmpty()) throw AddressException(Msgs.ADDR_EMPTY_DOMAIN.t())
+        if (domain.size > 255) throw AddressException(Msgs.ADDR_DOMAIN_TOO_LONG.t())
         val out = ByteArray(1 + domain.size)
         out[0] = domain.size.toByte()
         domain.copyInto(out, 1)
@@ -57,52 +57,52 @@ object RrpAddress {
     /** Разбор payload OPEN с offset. Возвращает host/порт и сколько байт съедено. */
     fun parseOpen(p: ByteArray, offset: Int = 0): OpenTarget {
         var i = offset
-        if (i >= p.size) throw AddressException("OPEN: пустой payload")
+        if (i >= p.size) throw AddressException(Msgs.OPEN_EMPTY.t())
         val atyp = p[i].toInt() and 0xFF
         i++
         val host: String = when (atyp) {
             ATYP_IPV4 -> {
-                if (i + 4 > p.size) throw AddressException("OPEN: короткий IPv4")
+                if (i + 4 > p.size) throw AddressException(Msgs.OPEN_IPV4_SHORT.t())
                 val s = "${u(p[i])}.${u(p[i + 1])}.${u(p[i + 2])}.${u(p[i + 3])}"
                 i += 4
                 s
             }
             ATYP_DOMAIN -> {
-                if (i + 1 > p.size) throw AddressException("OPEN: нет длины домена")
+                if (i + 1 > p.size) throw AddressException(Msgs.OPEN_NO_HOSTLEN.t())
                 val n = u(p[i])
                 i++
-                if (i + n > p.size) throw AddressException("OPEN: домен обрезан")
+                if (i + n > p.size) throw AddressException(Msgs.OPEN_DOMAIN_TRUNCATED.t())
                 val s = String(p, i, n, Charsets.US_ASCII)
                 i += n
                 s
             }
             ATYP_IPV6 -> {
-                if (i + 16 > p.size) throw AddressException("OPEN: короткий IPv6")
+                if (i + 16 > p.size) throw AddressException(Msgs.OPEN_IPV6_SHORT.t())
                 val s = formatIpv6(p, i)
                 i += 16
                 s
             }
-            else -> throw AddressException("OPEN: неизвестный ATYP $atyp")
+            else -> throw AddressException(Msgs.OPEN_BAD_ATYP.t(atyp))
         }
-        if (i + 2 > p.size) throw AddressException("OPEN: нет порта")
+        if (i + 2 > p.size) throw AddressException(Msgs.OPEN_NO_PORT.t())
         val port = getU16(p, i)
         i += 2
-        if (port !in 1..65535) throw AddressException("OPEN: некорректный порт $port")
+        if (port !in 1..65535) throw AddressException(Msgs.OPEN_BAD_PORT.t(port))
         return OpenTarget(atyp, host, port, i - offset)
     }
 
     /** atyp + addr (из кадра Open) → человекочитаемый host. */
     fun decodeAddr(atyp: Int, addr: ByteArray): String = when (atyp) {
         ATYP_IPV4 -> {
-            if (addr.size != 4) throw AddressException("IPv4: ожидалось 4 байта")
+            if (addr.size != 4) throw AddressException(Msgs.IPV4_SIZE.t())
             "${u(addr[0])}.${u(addr[1])}.${u(addr[2])}.${u(addr[3])}"
         }
         ATYP_IPV6 -> {
-            if (addr.size != 16) throw AddressException("IPv6: ожидалось 16 байт")
+            if (addr.size != 16) throw AddressException(Msgs.IPV6_SIZE.t())
             formatIpv6(addr, 0)
         }
         ATYP_DOMAIN -> String(addr, Charsets.US_ASCII)
-        else -> throw AddressException("неизвестный ATYP $atyp")
+        else -> throw AddressException(Msgs.ATYP_UNKNOWN.t(atyp))
     }
 
     // ---------- IPv4/IPv6 литералы ----------

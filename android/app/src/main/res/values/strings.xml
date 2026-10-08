@@ -1,240 +1,279 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- RU — базовые (default) строки -->
+    <!-- EN — дефолт (канон i18n: фолбэк = английский). RU — в values-ru. -->
     <string name="app_name">ReverseRay</string>
-    <string name="status_idle">Статус: остановлен</string>
-    <string name="status_stopped">Туннель остановлен</string>
-    <string name="status_connecting">Подключение к %1$s…</string>
-    <string name="status_connected">Готов: порт %1$d</string>
-    <string name="status_retry">Порт %1$d: переподключение через %2$d с</string>
-    <string name="status_error">Порт %1$d: ошибка — %2$s</string>
-    <string name="status_no_config">Нет конфига — вставь rrp:// строку</string>
-    <string name="status_already_running">Уже работает</string>
+    <string name="status_idle">Status: stopped</string>
+    <string name="status_stopped">Tunnel stopped</string>
+    <string name="status_connecting">Connecting to %1$s…</string>
+    <string name="status_connected">Ready: port %1$d</string>
+    <string name="status_retry">Port %1$d: reconnecting in %2$d s</string>
+    <string name="status_error">Port %1$d: error — %2$s</string>
+    <string name="status_no_config">No config — paste an rrp:// line</string>
+    <string name="status_already_running">Already running</string>
     <string name="config_hint">rrp://token@host:443,8443/?pin=BASE64SPKI&amp;name=Home</string>
-    <string name="btn_start">Запустить туннель</string>
-    <string name="btn_stop">Остановить</string>
-    <string name="invalid_config">Некорректный конфиг: %1$s</string>
-    <string name="notif_title">ReverseRay — туннель</string>
-    <string name="notif_channel_name">Туннель</string>
-    <string name="notif_starting">Запуск туннеля…</string>
-    <string name="qr_scan">Сканировать QR</string>
-    <string name="qr_show">Показать QR</string>
-    <string name="qr_prompt">Наведи камеру на QR-конфиг ReverseRay</string>
-    <string name="qr_imported">Конфиг из QR загружен</string>
-    <string name="qr_error">QR недоступен</string>
-    <string name="logs_title">Журнал</string>
-    <string name="logs_empty">Журнал пуст</string>
-    <string name="logs_copy">Копировать</string>
-    <string name="logs_copied">Журнал скопирован</string>
-    <string name="update_title">Доступно обновление %1$s</string>
-    <string name="update_question">Скачать и установить последнюю версию?</string>
-    <string name="update_download">Скачать</string>
-    <string name="update_downloading">Скачивание обновления…</string>
-    <string name="update_latest">У вас последняя версия</string>
-    <string name="update_error">Ошибка обновления: %1$s</string>
-    <string name="update_check">Проверить обновления</string>
-    <string name="logs_share">Поделиться</string>
-    <string name="btn_start_short">Старт</string>
-    <string name="traffic_idle">Трафик: нет данных</string>
+    <string name="btn_start">Start tunnel</string>
+    <string name="btn_stop">Stop</string>
+    <string name="invalid_config">Invalid config: %1$s</string>
+    <string name="notif_title">ReverseRay — tunnel</string>
+    <string name="notif_channel_name">Tunnel</string>
+    <string name="notif_starting">Starting tunnel…</string>
+    <string name="qr_scan">Scan QR</string>
+    <string name="qr_show">Show QR</string>
+    <string name="qr_prompt">Point the camera at a ReverseRay config QR</string>
+    <string name="qr_imported">Config imported from QR</string>
+    <string name="qr_error">QR unavailable</string>
+    <string name="logs_title">Log</string>
+    <string name="logs_empty">Log is empty</string>
+    <string name="logs_copy">Copy</string>
+    <string name="logs_copied">Log copied</string>
+    <string name="update_title">Update available: %1$s</string>
+    <string name="update_question">Download and install the latest version?</string>
+    <string name="update_download">Download</string>
+    <string name="update_downloading">Downloading update…</string>
+    <string name="update_latest">You are on the latest version</string>
+    <string name="update_error">Update failed: %1$s</string>
+    <string name="update_check">Check for updates</string>
+    <string name="logs_share">Share</string>
+    <string name="btn_start_short">Start</string>
+    <string name="traffic_idle">Traffic: no data</string>
     <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
-    <string name="rate_b">%1$d Б/с</string>
-    <string name="rate_kb">%1$.1f КБ/с</string>
-    <string name="rate_mb">%1$.2f МБ/с</string>
-    <string name="export_config">Экспорт в файл</string>
-    <string name="import_config">Импорт из файла</string>
-    <string name="config_saved">Конфиг сохранён в файл</string>
-    <string name="config_imported">Конфиг загружен из файла</string>
-    <string name="file_error">Ошибка файла: %1$s</string>
-    <string name="file_error_no_picker">Файловый менеджер недоступен</string>
-    <string name="netinfo_loading">Определяем сеть…</string>
-    <string name="netinfo_failed">Сеть: не определено</string>
+    <string name="rate_b">%1$d B/s</string>
+    <string name="rate_kb">%1$.1f KB/s</string>
+    <string name="rate_mb">%1$.2f MB/s</string>
+    <string name="export_config">Export to file</string>
+    <string name="import_config">Import from file</string>
+    <string name="config_saved">Config saved to file</string>
+    <string name="config_imported">Config imported from file</string>
+    <string name="file_error">File error: %1$s</string>
+    <string name="file_error_no_picker">No file picker available</string>
+    <string name="netinfo_loading">Detecting network…</string>
+    <string name="netinfo_failed">Network: unknown</string>
     <string name="netinfo_ip">IP %1$s</string>
-    <string name="status_retry_last">Порт %1$d: переподключение через %2$d с — последняя ошибка: %3$s</string>
+    <string name="status_retry_last">Port %1$d: reconnecting in %2$d s — last error: %3$s</string>
 
-    <!-- v0.7.4: вкладки -->
-    <string name="tab_home">Главная</string>
-    <string name="tab_link">Связь</string>
-    <string name="tab_update">Обновление</string>
-    <string name="tab_settings">Настройки</string>
-    <string name="btn_stop_short">СТОП</string>
+    <!-- v0.7.4: tabs -->
+    <string name="tab_home">Home</string>
+    <string name="tab_link">Connection</string>
+    <string name="tab_update">Update</string>
+    <string name="tab_settings">Settings</string>
+    <string name="btn_stop_short">STOP</string>
 
-    <!-- Связь -->
-    <string name="link_tab_hint">Вставь rrp://-ссылку — парсер сам почистит мусор: невидимые символы, кавычки, текст вокруг ссылки, точки и запятые на концах.</string>
-    <string name="link_fix">Проверить и починить</string>
-    <string name="link_fixed">Ссылка валидна: %1$s</string>
+    <!-- Connection -->
+    <string name="link_tab_hint">Paste an rrp:// link — the parser cleans up junk by itself: invisible chars, quotes, surrounding text, trailing dots and commas.</string>
+    <string name="link_fix">Check &amp; fix</string>
+    <string name="link_fixed">Link is valid: %1$s</string>
 
-    <!-- Протоколы -->
-    <string name="proto_section">Протокол туннеля</string>
-    <string name="proto_unknown">Протокол: неизвестно</string>
-    <string name="proto_switch">Сменить протокол</string>
-    <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
-    <string name="proto_current">Протокол: %1$s</string>
-    <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>
-    <string name="proto_rollback_toast">Новый протокол не прошёл валидацию — вернулись на последний рабочий</string>
+    <!-- Protocols -->
+    <string name="proto_section">Tunnel protocol</string>
+    <string name="proto_unknown">Protocol: unknown</string>
+    <string name="proto_switch">Switch protocol</string>
+    <string name="proto_switching">Switching to %1$s (validating with real traffic…)</string>
+    <string name="proto_current">Protocol: %1$s</string>
+    <string name="proto_current_list">Protocol: %1$s · server supports: %2$s</string>
+    <string name="proto_rollback_toast">New protocol failed validation — rolled back to the last working one</string>
 
-    <!-- Обновление -->
-    <string name="version_row">Версия: %1$s (код %2$d)</string>
-    <string name="update_auto">Проверять обновления каждые 24 часа</string>
-    <string name="update_log_hint">Технический журнал обновления:</string>
-    <string name="update_log_empty">Журнал обновления пуст</string>
+    <!-- Update -->
+    <string name="version_row">Version: %1$s (code %2$d)</string>
+    <string name="update_auto">Check for updates every 24 hours</string>
+    <string name="update_log_hint">Technical update log:</string>
+    <string name="update_log_empty">Update log is empty</string>
 
-    <!-- Настройки -->
-    <string name="settings_device">Об устройстве</string>
-    <string name="dev_model">Модель</string>
+    <!-- Settings -->
+    <string name="settings_device">About this device</string>
+    <string name="dev_model">Model</string>
     <string name="dev_android">Android</string>
-    <string name="dev_build">Билд</string>
-    <string name="dev_patch">Патч безопасности</string>
-    <string name="dev_kernel">Ядро</string>
-    <string name="dev_cpu">Архитектура</string>
-    <string name="dev_screen">Экран</string>
-    <string name="dev_mem">Память (heap)</string>
-    <string name="dev_version">Версия ReverseRay</string>
-    <string name="dev_copy">Скопировать инфо об устройстве</string>
-    <string name="set_wifi_only">Только по Wi-Fi</string>
-    <string name="set_allow_lan">Разрешить доступ в локальную сеть</string>
-    <string name="set_auto_update">Авто-проверка обновлений</string>
-    <string name="set_limit_title">Лимит трафика</string>
-    <string name="set_limit_switch">Включить лимит</string>
-    <string name="set_limit_gb_hint">Лимит, ГБ</string>
-    <string name="set_limit_period_hint">День сброса месячного лимита, 1–28</string>
-    <string name="set_limit_apply">Применить лимит</string>
-    <string name="set_limit_reset">Сбросить счётчик</string>
-    <string name="set_limit_reset_done">Счётчик трафика сброшен</string>
-    <string name="set_limit_applied">Лимит применён</string>
-    <string name="set_limit_bad_value">Укажи лимит больше 0 ГБ</string>
-    <string name="set_limit_counter">Счётчик трафика</string>
-    <string name="set_probe_title">Цель PROBE-валидации</string>
-    <string name="set_probe_apply">Сохранить</string>
-    <string name="set_probe_bad">Ожидался вид host:port</string>
+    <string name="dev_build">Build</string>
+    <string name="dev_patch">Security patch</string>
+    <string name="dev_kernel">Kernel</string>
+    <string name="dev_cpu">Architecture</string>
+    <string name="dev_screen">Screen</string>
+    <string name="dev_mem">Memory (heap)</string>
+    <string name="dev_version">ReverseRay version</string>
+    <string name="dev_copy">Copy device info</string>
+    <string name="set_wifi_only">Wi-Fi only</string>
+    <string name="set_allow_lan">Allow LAN access</string>
+    <string name="set_auto_update">Auto update check</string>
+    <string name="set_limit_title">Traffic limit</string>
+    <string name="set_limit_switch">Enable limit</string>
+    <string name="set_limit_gb_hint">Limit, GB</string>
+    <string name="set_limit_period_hint">Monthly limit reset day, 1–28</string>
+    <string name="set_limit_apply">Apply limit</string>
+    <string name="set_limit_reset">Reset counter</string>
+    <string name="set_limit_reset_done">Traffic counter reset</string>
+    <string name="set_limit_applied">Limit applied</string>
+    <string name="set_limit_bad_value">Set a limit greater than 0 GB</string>
+    <string name="set_limit_counter">Traffic counter</string>
+    <string name="set_probe_title">PROBE target</string>
+    <string name="set_probe_apply">Save</string>
+    <string name="set_probe_bad">Expected host:port</string>
 
-    <!-- Трафик/статус v0.7.4 -->
-    <string name="packets_line">%1$s · ↑ %2$s · ↓ %3$s · пакеты ↑%4$d ↓%5$d</string>
-    <string name="local_ip">Локальный IP: %1$s</string>
-    <string name="usage_no_limit">Трафик за период: %1$s (без лимита)</string>
-    <string name="usage_with_limit">Трафик: %1$s из %2$s (%3$d%%)</string>
-    <string name="status_wait_wifi">Жду Wi-Fi (включено «только по Wi-Fi»)</string>
-    <string name="status_switch_busy">Смена протокола уже идёт</string>
-    <string name="status_switch_cooldown">Смена протокола доступна через %1$d с (защита от rate-limit)</string>
-    <string name="status_switch_same">Протокол %1$s уже активен</string>
-    <string name="status_switch_trying">Смена протокола: %1$s — проверяю реальным трафиком…</string>
-    <string name="status_switch_done">Протокол %1$s подключён и проверен (реальный трафик прошёл)</string>
-    <string name="status_switch_fail">Протокол %1$s: не прошёл — %2$s</string>
-    <string name="status_switch_rolled_back">Протокол %1$s не прошёл валидацию (%2$s) — остаёмся на %3$s, ссылка не менялась</string>
+    <!-- Traffic/status v0.7.4 -->
+    <string name="packets_line">%1$s · ↑ %2$s · ↓ %3$s · packets ↑%4$d ↓%5$d</string>
+    <string name="local_ip">Local IP: %1$s</string>
+    <string name="usage_no_limit">Traffic this period: %1$s (no limit)</string>
+    <string name="usage_with_limit">Traffic: %1$s of %2$s (%3$d%%)</string>
+    <string name="status_wait_wifi">Waiting for Wi-Fi ("Wi-Fi only" is on)</string>
+    <string name="status_switch_busy">A protocol switch is already in progress</string>
+    <string name="status_switch_cooldown">Protocol switch available in %1$d s (rate-limit protection)</string>
+    <string name="status_switch_same">Protocol %1$s is already active</string>
+    <string name="status_switch_trying">Switching protocol: %1$s — validating with real traffic…</string>
+    <string name="status_switch_done">Protocol %1$s connected and validated (real traffic passed)</string>
+    <string name="status_switch_fail">Protocol %1$s failed: %2$s</string>
+    <string name="status_switch_rolled_back">Protocol %1$s failed validation (%2$s) — staying on %3$s, link unchanged</string>
 
-    <!-- v0.8: вкладка Лог, единая консоль, модули, лимит-король, О приложении/сети -->
-    <string name="tab_log">Лог</string>
-    <string name="log_copy_all">Копировать весь лог</string>
-    <string name="log_share">Поделиться логом</string>
-    <string name="console_title_service">статус туннеля · реалтайм</string>
-    <string name="console_title_update">журнал обновления и модулей</string>
+    <!-- v0.8 -->
+    <string name="tab_log">Log</string>
+    <string name="log_copy_all">Copy whole log</string>
+    <string name="log_share">Share log</string>
+    <string name="console_title_service">tunnel status · realtime</string>
+    <string name="console_title_update">update &amp; modules journal</string>
 
-    <string name="link_clear">Очистить</string>
-    <string name="link_clear_confirm">Очистить поле ссылки?</string>
-    <string name="link_saved">Ссылка сохранена</string>
-    <string name="link_status_ok">Ссылка принята и сохранена ✓</string>
-    <string name="link_status_bad">Ссылка не распознана — вставьте rrp:// строку</string>
+    <string name="link_clear">Clear</string>
+    <string name="link_clear_confirm">Clear the link field?</string>
+    <string name="link_saved">Link saved</string>
+    <string name="link_status_ok">Link accepted and saved ✓</string>
+    <string name="link_status_bad">Link not recognized — paste an rrp:// string</string>
 
-    <string name="about_app_title">О приложении</string>
-    <string name="app_version_row">Версия</string>
-    <string name="app_modules_row">Модули</string>
-    <string name="app_modules_builtin">встроенные</string>
-    <string name="app_ram_row">Память приложения</string>
-    <string name="app_disk_row">Место (APK + данные)</string>
-    <string name="app_traffic_life_row">Трафик за всё время</string>
-    <string name="app_proto_row">Текущий протокол</string>
+    <string name="about_app_title">About the app</string>
+    <string name="app_version_row">Version</string>
+    <string name="app_modules_row">Modules</string>
+    <string name="app_modules_builtin">built-in</string>
+    <string name="app_ram_row">App memory</string>
+    <string name="app_disk_row">Storage (APK + data)</string>
+    <string name="app_traffic_life_row">Traffic all-time</string>
+    <string name="app_proto_row">Current protocol</string>
 
-    <string name="about_net_title">О сети — что приложение узнало</string>
-    <string name="about_net_hint">Мы показываем ВСЁ, что собрали и использовали. Ничего не прячем — правило канона. Список обновляется при каждом открытии вкладки.</string>
+    <string name="about_net_title">About the network — what the app learned</string>
+    <string name="about_net_hint">We show EVERYTHING we collected and used. Nothing hidden — the canon rule. The list refreshes each time you open the tab.</string>
 
-    <string name="btn_share_app">Поделиться приложением</string>
-    <string name="share_choose">Отправить ссылку или APK?</string>
-    <string name="share_link">Ссылка на GitHub</string>
-    <string name="share_apk">APK-файл</string>
-    <string name="share_apk_error">Не удалось собрать APK для отправки</string>
+    <string name="btn_share_app">Share app</string>
+    <string name="share_choose">Send a link or an APK?</string>
+    <string name="share_link">GitHub link</string>
+    <string name="share_apk">APK file</string>
+    <string name="share_apk_error">Could not package the APK for sharing</string>
 
-    <string name="set_autoreconnect">Подключаться автоматически при открытии приложения</string>
-    <string name="set_limit_next">Следующий сброс счётчика: %1$s</string>
-    <string name="set_limit_period">Период</string>
-    <string name="set_limit_period_day">Сутки</string>
-    <string name="set_limit_period_month">Месяц</string>
+    <string name="set_autoreconnect">Connect automatically when the app opens</string>
+    <string name="set_limit_next">Next counter reset: %1$s</string>
+    <string name="set_limit_period">Period</string>
+    <string name="set_limit_period_day">Day</string>
+    <string name="set_limit_period_month">Month</string>
 
-    <string name="status_limit_reached">Лимит трафика исчерпан — отправлено РОВНО 0 байт, туннель остановлен. Сброс: Настройки → Лимит.</string>
-    <string name="status_limit_wait">Лимит достигнут. Жду сброса (≈%1$d ч) — подключусь автоматически.</string>
-    <string name="limit_dialog_title">Траффик закончился</string>
-    <string name="limit_dialog_msg">Лимит трафика исчерпан: %1$s из %2$s.\n\nМы отправляем РОВНО НОЛЬ байт — правило «лимит — король».\n\nОбновление лимита: %3$s.\nСброс вручную: Настройки → Лимит трафика.</string>
-    <string name="limit_dialog_wait">Ждать сброса и подключить</string>
+    <string name="status_limit_reached">Traffic limit exhausted — sent EXACTLY 0 bytes, tunnel stopped. Reset: Settings → Limit.</string>
+    <string name="status_limit_wait">Limit reached. Waiting for reset (≈%1$d h) — will connect automatically.</string>
+    <string name="limit_dialog_title">Traffic is out</string>
+    <string name="limit_dialog_msg">Traffic limit exhausted: %1$s of %2$s.\n\nWe send EXACTLY ZERO bytes — the “limit is king” rule.\n\nLimit refresh: %3$s.\nManual reset: Settings → Traffic limit.</string>
+    <string name="limit_dialog_wait">Wait for reset and connect</string>
 
-    <string name="modules_section">Модули</string>
-    <string name="modules_check_now">Обновить модули</string>
-    <string name="modules_up_to_date">Модули актуальны</string>
-    <string name="modules_progress">Загрузка модулей: %1$d%% · %2$s</string>
-    <string name="modules_applied">Модули применены: версия %1$s, протоколы: %2$s</string>
-    <string name="modules_failed">Модули: не удалось — %1$s · работаем на встроенных</string>
+    <string name="modules_section">Modules</string>
+    <string name="modules_check_now">Update modules</string>
+    <string name="modules_up_to_date">Modules are up to date</string>
+    <string name="modules_progress">Downloading modules: %1$d%% · %2$s</string>
+    <string name="modules_applied">Modules applied: version %1$s, protocols: %2$s</string>
+    <string name="modules_failed">Modules: failed — %1$s · running on built-ins</string>
 
-    <string name="dev_cpu_model">Процессор</string>
-    <string name="dev_ram_total">Оперативная память</string>
+    <string name="dev_cpu_model">CPU</string>
+    <string name="dev_ram_total">Total RAM</string>
     <string name="dev_sdk">SDK</string>
     <string name="dev_java">Java</string>
 
-    <string name="speedtest_line">Спидтест: %1$s</string>
-    <string name="speedtest_waiting">Спидтест: после подключения (если лимит не достигнут)</string>
-    <string name="config_hint_title">Ссылка подключения</string>
-    <string name="update_progress">Загрузка: %1$d%% · %2$s</string>
+    <string name="speedtest_line">Speed test: %1$s</string>
+    <string name="speedtest_waiting">Speed test: after connect (if limit not reached)</string>
+    <string name="config_hint_title">Connection link</string>
+    <string name="update_progress">Download: %1$d%% · %2$s</string>
     <string name="dns_servers_line">DNS: %1$s</string>
 
-    <!-- v0.8.1: тема, версии протоколов, константы защиты, честные источники -->
-    <string name="set_theme_title">Тема</string>
-    <string name="set_theme_auto">Авто</string>
-    <string name="set_theme_dark">Тёмная</string>
-    <string name="set_theme_light">Светлая</string>
-    <string name="app_proto_ver_row">Версия протокола</string>
-    <string name="app_cert_row">Серт сервера действителен до</string>
-    <string name="sf_section">Защита — чем именно зашифрован и закрыт туннель</string>
-    <string name="sf_tls_min">Мин. TLS</string>
+    <!-- v0.8.1 -->
+    <string name="set_theme_title">Theme</string>
+    <string name="set_theme_auto">Auto</string>
+    <string name="set_theme_dark">Dark</string>
+    <string name="set_theme_light">Light</string>
+    <string name="app_proto_ver_row">Protocol version</string>
+    <string name="app_cert_row">Server cert valid until</string>
+    <string name="sf_section">Protection — how exactly the tunnel is encrypted and closed</string>
+    <string name="sf_tls_min">Min TLS</string>
     <string name="sf_alpn">ALPN</string>
-    <string name="sf_tls_provider">TLS-стек</string>
-    <string name="sf_cert_model">Сертификаты</string>
-    <string name="sf_pin_policy">Пин-политика</string>
+    <string name="sf_tls_provider">TLS stack</string>
+    <string name="sf_cert_model">Certificates</string>
+    <string name="sf_pin_policy">Pin policy</string>
     <string name="sf_zero_rtt">0-RTT</string>
-    <string name="sf_token_storage">Хранение токена</string>
-    <string name="sf_handshake">Хендшейк</string>
+    <string name="sf_token_storage">Token storage</string>
+    <string name="sf_handshake">Handshake</string>
     <string name="sf_nonce">Nonce</string>
-    <string name="sf_rate_limit">Rate-limit</string>
-    <string name="sf_mtproto2">Шифрование payload</string>
-    <string name="sf_frame_limits">Лимиты кадров</string>
-    <string name="sf_wan">Анти-скан (WAN)</string>
-    <string name="sf_ssrf">SSRF-гвард</string>
-    <string name="sf_modules">Манифест модулей</string>
-    <string name="sf_apk_integrity">Целостность APK</string>
-    <string name="netinfo_source">источник: %1$s</string>
-    <string name="net_sources_row">Источники данных</string>
-    <string name="net_sources_local">локально: системные DNS (LinkProperties)</string>
-    <string name="dev_sources_row">Что читаем об устройстве</string>
-    <string name="dev_sources_list">/proc/cpuinfo, Build.* (модель/SDK/патч), os.version (ядро), ActivityManager.MemoryInfo (RAM)</string>
+    <string name="sf_rate_limit">Rate limit</string>
+    <string name="sf_mtproto2">Payload encryption</string>
+    <string name="sf_frame_limits">Frame limits</string>
+    <string name="sf_wan">Anti-scan (WAN)</string>
+    <string name="sf_ssrf">SSRF guard</string>
+    <string name="sf_modules">Modules manifest</string>
+    <string name="sf_apk_integrity">APK integrity</string>
+    <string name="netinfo_source">source: %1$s</string>
+    <string name="net_sources_row">Data sources</string>
+    <string name="net_sources_local">local: system DNS (LinkProperties)</string>
+    <string name="dev_sources_row">What we read about the device</string>
+    <string name="dev_sources_list">/proc/cpuinfo, Build.* (model/SDK/patch), os.version (kernel), ActivityManager.MemoryInfo (RAM)</string>
 
-    <!-- v0.8.2: журнал обновлений — целиком на языке приложения -->
+    <!-- v0.8.2: update journal — fully in the app language -->
     <string name="console_live">↧ live</string>
-    <string name="console_to_live">↧ к live</string>
-    <string name="upd_check_start">Обновление: проверяю GitHub Releases · текущая версия %1$s</string>
-    <string name="upd_check_none">Обновление: новых релизов нет (или GitHub недоступен)</string>
-    <string name="upd_check_available">Обновление: доступен %1$s · APK: %2$s</string>
-    <string name="upd_sums_found">Обновление: в релизе есть SHA256SUMS — установка только после сверки</string>
-    <string name="upd_sums_missing">Обновление: SHA256SUMS в релизе нет — сверка невозможна</string>
-    <string name="upd_dl_start">Обновление: качаю %1$s</string>
-    <string name="upd_dl_done">Обновление: скачано %1$s (%2$s)</string>
-    <string name="upd_verify_ok">Обновление: SHA256 совпал (%1$s) — запускаю установку</string>
-    <string name="upd_verify_fail">Обновление: сверка не прошла — %1$s · установка отменена</string>
-    <string name="upd_dl_error">Обновление: ошибка скачивания — %1$s</string>
-    <string name="upd_install_no_installer">Обновление: установщик APK недоступен — установка не начата</string>
-    <string name="upd_modules_check">Модули: проверяю %1$s</string>
-    <string name="upd_modules_http">Модули: сервер ответил %1$d</string>
-    <string name="upd_modules_received">Модули: получено %1$s</string>
-    <string name="upd_modules_parsed">Модули: разобран манифест версии %1$s · протоколы: %2$s</string>
-    <string name="upd_modules_older">Модули: удалённый (%1$s) не новее текущего (%2$s) — не применяю</string>
+    <string name="console_to_live">↧ to live</string>
+    <string name="upd_check_start">Update: checking GitHub Releases · current version %1$s</string>
+    <string name="upd_check_none">Update: no new releases (or GitHub unreachable)</string>
+    <string name="upd_check_available">Update: %1$s is available · APK: %2$s</string>
+    <string name="upd_sums_found">Update: release has SHA256SUMS — install only after verification</string>
+    <string name="upd_sums_missing">Update: no SHA256SUMS in the release — verification impossible</string>
+    <string name="upd_dl_start">Update: downloading %1$s</string>
+    <string name="upd_dl_done">Update: downloaded %1$s (%2$s)</string>
+    <string name="upd_verify_ok">Update: SHA256 matches (%1$s) — starting install</string>
+    <string name="upd_verify_fail">Update: verification failed — %1$s · install cancelled</string>
+    <string name="upd_dl_error">Update: download error — %1$s</string>
+    <string name="upd_install_no_installer">Update: no APK installer available — install not started</string>
+    <string name="upd_modules_check">Modules: checking %1$s</string>
+    <string name="upd_modules_http">Modules: server responded %1$d</string>
+    <string name="upd_modules_received">Modules: received %1$s</string>
+    <string name="upd_modules_parsed">Modules: parsed manifest version %1$s · protocols: %2$s</string>
+    <string name="upd_modules_older">Modules: remote (%1$s) is not newer than current (%2$s) — not applying</string>
 
-    <!-- v0.8.2: модуль камуфляжа «API Mask» -->
-    <string name="app_camo_row">API-маскировка</string>
-    <string name="app_camo_off">выкл (манифест)</string>
-    <string name="apimask_beat">Маскировка %1$s: шум %2$d Б · за сутки %3$s из %4$s</string>
-    <string name="apimask_budget_done">Маскировка %1$s: суточный бюджет исчерпан (%2$s из %3$s) — шум затих до завтра</string>
+    <!-- v0.8.2: API Mask camouflage module -->
+    <string name="app_camo_row">API masking</string>
+    <string name="app_camo_off">off (manifest)</string>
+    <string name="apimask_beat">Masking %1$s: noise %2$d B · today %3$s of %4$s</string>
+    <string name="apimask_budget_done">Masking %1$s: daily budget used up (%2$s of %3$s) — noise paused until tomorrow</string>
+
+    <!-- v0.8.3: форматтеры и оставшиеся динамические строки -->
+    <string name="fmt_bytes_gb">%s GB</string>
+    <string name="fmt_bytes_mb">%s MB</string>
+    <string name="fmt_bytes_kb">%s KB</string>
+    <string name="fmt_bytes_b">%s B</string>
+    <string name="fmt_speed_kbps">%.0f KB/s</string>
+
+    <string name="limit_none">no limits</string>
+    <string name="limit_period_month">month (reset %1$d)</string>
+    <string name="limit_period_day">daily</string>
+
+    <string name="net_external_ip">External IP</string>
+    <string name="net_facts_failed">failed to collect facts</string>
+
+    <string name="log_mtp_keys">MTProto/2: tunnel payload is AES-256-IGE encrypted (DH-agreed keys)</string>
+    <string name="log_speedtest_skipped">speed test skipped: traffic limit reached (zero-byte rule)</string>
+    <string name="log_speedtest_plan">speed test: 3 checks — %1$s</string>
+    <string name="log_speedtest_line">speed test: %1$s</string>
+    <string name="speed_http_ok">OK (%1$d ms)</string>
+    <string name="speed_http_down">unreachable</string>
+    <string name="log_speedtest_result">speed test: %1$s MB/s · TCP ping %2$s ms · HTTP %3$s (%4$s in %5$d s)</string>
+    <string name="log_speedtest_failed">speed test failed: %1$s</string>
+    <string name="speed_no_data">no data</string>
+    <string name="log_config_parse_failed">failed to parse config: %1$s</string>
+    <string name="log_device_info">device: %1$s %2$s, Android %3$s (API %4$d), build %5$s, protocol %6$s, host %7$s:%8$s</string>
+    <string name="log_limit_removed">limit removed by user — reconnecting</string>
+    <string name="log_limit_period">limit period updated — reconnecting</string>
+    <string name="log_proto_attempt">protocol switch: attempt %1$d/%2$d failed: %3$s</string>
+    <string name="log_proto_applied">protocol applied: %1$s (link updated)</string>
+    <string name="log_netcallback_failed">NetworkCallback not registered: %1$s</string>
+    <string name="log_network_back">network is back — instant retry</string>
+
+    <!-- v0.8.3: выбор языка интерфейса (фолбэк — английский) -->
+    <string name="settings_language">Language</string>
+    <string name="lang_system">System</string>
+    <string name="lang_ru">Russian</string>
+    <string name="lang_en">English</string>
+    <string name="settings_language_saved">Language saved</string>
 </resources>

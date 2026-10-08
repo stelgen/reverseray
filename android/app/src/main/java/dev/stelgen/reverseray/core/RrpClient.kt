@@ -238,7 +238,7 @@ class RrpClient(
 
     @Throws(IOException::class)
     fun connect() {
-        check(state == State.DISCONNECTED || state == State.CLOSED) { "клиент уже активен: $state" }
+        check(state == State.DISCONNECTED || state == State.CLOSED) { Msgs.CLIENT_ACTIVE.t(state) }
         setState(State.CONNECTING)
 
         val sock = Socket()
@@ -309,14 +309,19 @@ class RrpClient(
             proto = RrpProtocols.normalize(protoId),
             protocols = RrpProtocols.displayList(),
         )
-        log("SENT HELLO agent=$agentName device=$deviceName ver=${RrpFrame.VERSION} caps=[chacha20,alpn] proto=${RrpProtocols.normalize(protoId)} (${RrpProtocols.labelWithVer(protoId)}) max_streams=$MAX_STREAMS_REQUEST (${hello.encode().size}Б)")
+        log(
+            Msgs.SENT_HELLO.t(
+                agentName, deviceName, RrpFrame.VERSION, RrpProtocols.normalize(protoId),
+                RrpProtocols.labelWithVer(protoId), MAX_STREAMS_REQUEST, hello.encode().size,
+            ),
+        )
         sendFrame(hello)
         try {
             if (!helloLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                throw RrpClientException("таймаут HELLO_OK ($host:$port)")
+                throw RrpClientException(Msgs.HELLO_OK_TIMEOUT.t("$host:$port"))
             }
             handshakeError?.let { throw it }
-            val ok = helloOkFrame ?: throw RrpClientException("HELLO_OK без данных")
+            val ok = helloOkFrame ?: throw RrpClientException(Msgs.HELLO_OK_EMPTY.t())
             sessionId = ok.sessionId
             if (ok.tunnelWindow > 0) tunnelWindow = ok.tunnelWindow
 
@@ -325,13 +330,13 @@ class RrpClient(
             // SHA256(token), не сырой токен (иначе auth всегда падает).
             log("RECV HELLO_OK session=${ok.sessionId} server_ver=${ok.serverVer} nonce=${ok.nonce.ifEmpty { "<НЕТ>" }} window=${ok.tunnelWindow}")
             if (ok.nonce.isEmpty()) {
-                throw RrpClientException("HELLO_OK без nonce (сервер не прислал одноразовый nonce)")
+                throw RrpClientException(Msgs.HELLO_OK_NO_NONCE.t())
             }
             val nonceBytes = try {
                 Base64.getUrlDecoder().decode(ok.nonce)
             } catch (e: IllegalArgumentException) {
                 try { Base64.getDecoder().decode(ok.nonce) } catch (e2: IllegalArgumentException) { null }
-            } ?: throw RrpClientException("HELLO_OK: nonce не base64 (${ok.nonce.take(32)})")
+            } ?: throw RrpClientException(Msgs.HELLO_OK_BAD_NONCE.t(ok.nonce.take(32)))
             val macInput = nonceBytes + ok.sessionId.toByteArray(Charsets.UTF_8)
             val hmacKey = MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
             // v0.7.4 ФИКС: HMAC — base64url БЕЗ паддинга (RawURLEncoding на сервере).
@@ -345,10 +350,10 @@ class RrpClient(
             )
 
             if (!readyLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                throw RrpClientException("таймаут READY ($host:$port)")
+                throw RrpClientException(Msgs.READY_TIMEOUT.t("$host:$port"))
             }
             handshakeError?.let { throw it }
-            val rd = readyFrame ?: throw RrpClientException("READY без данных")
+            val rd = readyFrame ?: throw RrpClientException(Msgs.READY_EMPTY.t())
             if (rd.tunnelWindow > 0) tunnelWindow = rd.tunnelWindow
             if (rd.maxStreams > 0) maxStreams = rd.maxStreams
             negotiatedProto = RrpProtocols.normalize(rd.proto)
@@ -363,27 +368,27 @@ class RrpClient(
             // v0.8.2: камуфляж «API Mask» — только если сервер подтвердил
             // возможность (features) и модуль включён манифестом
             if (apimaskSupported && noisePolicy != null) {
-                log("API Mask: сервер подтвердил apimask — фоновый шум включён")
+                log(Msgs.APIMASK_ENABLED.t())
                 scheduleNoise()
             }
 
             // v0.7.4: валидация «реального трафика» — PROBE до реального хоста.
             // Используется при смене протокола: коммит только после успеха.
             validateProbeTarget?.let { target ->
-                log("PROBE → $target (валидация протокола ${rd.proto})")
+                log(Msgs.PROBE_SENT.t(target, rd.proto))
                 val pr = probeOnce(target, PROBE_TIMEOUT_MS)
                 if (pr == null) {
-                    throw RrpClientException("PROBE не отвечен сервером (валидация не пройдена)")
+                    throw RrpClientException(Msgs.PROBE_NOT_ANSWERED.t())
                 }
                 if (!pr.ok) {
-                    throw RrpClientException("валидация не пройдена: ${pr.err.ifEmpty { "нет egress" }}")
+                    throw RrpClientException(Msgs.PROBE_VALIDATION_FAILED.t(pr.err.ifEmpty { Msgs.PROBE_NO_EGRESS.t() }))
                 }
-                log("PROBE OK — egress до $target подтверждён")
+                log(Msgs.PROBE_OK.t(target))
             }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             close()
-            throw RrpClientException("рукопожатие прервано", e)
+            throw RrpClientException(Msgs.HANDSHAKE_INTERRUPTED.t(), e)
         } catch (e: IOException) {
             close()
             throw e
@@ -394,15 +399,15 @@ class RrpClient(
 
     private fun readerLoop() {
         try {
-            val input = wireIn ?: throw RrpClientException("транспорт не инициализирован")
+            val input = wireIn ?: throw RrpClientException(Msgs.TRANSPORT_NOT_READY.t())
             while (running.get()) {
                 dispatch(RrpFrame.parse(input))
             }
         } catch (e: Throwable) {
             if (state != State.READY && handshakeError == null) {
-                handshakeError = RrpClientException("рукопожатие не завершено: ${e.message}", e)
+                handshakeError = RrpClientException(Msgs.HANDSHAKE_FAILED.t(e.message), e)
             } else if (running.get()) {
-                log("reader остановлен: ${e.message}")
+                log(Msgs.READER_STOPPED.t(e.message))
             }
         } finally {
             helloLatch.countDown()
@@ -424,8 +429,8 @@ class RrpClient(
                 readyFrame = frame
                 readyLatch.countDown()
             }
-            is RrpFrame.Auth -> log("AUTH от сервера не ожидается")
-            is RrpFrame.Hello -> log("HELLO от сервера не ожидается")
+            is RrpFrame.Auth -> log(Msgs.AUTH_UNEXPECTED.t())
+            is RrpFrame.Hello -> log(Msgs.HELLO_UNEXPECTED.t())
             is RrpFrame.Open -> handleIncomingOpen(frame)
             is RrpFrame.OpenOk -> pendingOpens.remove(frame.streamId)?.complete(frame.errCode)
             is RrpFrame.Data -> {
@@ -455,9 +460,9 @@ class RrpClient(
                 log("RECV PROBE ok=${frame.ok} err=${frame.err} proto=${frame.proto}")
                 probeResp = frame
             }
-            is RrpFrame.ProbeReq -> log("PROBE от сервера не ожидается")
+            is RrpFrame.ProbeReq -> log(Msgs.PROBE_UNEXPECTED.t())
             is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8: DH-апгрейд mtproto2
-            is RrpFrame.KeyResp -> log("KEY_RESP от сервера не ожидается")
+            is RrpFrame.KeyResp -> log(Msgs.KEY_RESP_UNEXPECTED.t())
             is RrpFrame.Noise -> {
                 // v0.8.2: ответ сервера на наш шум — байты считаются в общий
                 // трафик (честно: это реальные байты мобильной сети),
@@ -467,13 +472,13 @@ class RrpClient(
                 noiseRx.addAndGet(n.toLong())
             }
             is RrpFrame.ErrorFrame -> {
-                log("сервер ERROR ${frame.code}: ${frame.message} (raw payload ${frame.rawHex()})")
+                log(Msgs.SERVER_ERROR_RAW.t(frame.code, frame.message, frame.rawHex()))
                 for (id in pendingOpens.keys) {
                     pendingOpens.remove(id)?.complete(ERR_PROTOCOL)
                 }
                 if (state != State.READY && handshakeError == null) {
                     handshakeError =
-                        RrpClientException("сервер вернул ERROR ${frame.code}: ${frame.message}")
+                        RrpClientException(Msgs.SERVER_ERROR.t(frame.code, frame.message))
                     helloLatch.countDown()
                     readyLatch.countDown()
                 }
@@ -491,7 +496,7 @@ class RrpClient(
      */
     private fun handleKeyReq(frame: RrpFrame.KeyReq) {
         if (mtCrypto != null) {
-            log("KEY_REQ повторно — игнорирую (крипто уже включена)")
+            log(Msgs.KEY_REQ_IGNORED.t())
             return
         }
         try {
@@ -501,10 +506,10 @@ class RrpClient(
                     if (bytes.size == 257) bytes.copyOfRange(1, 257) else bytes
                 })
             ) {
-                throw MtProto.MtProtoException("p не равен каноническому dh_prime (anti-logjam)")
+                throw MtProto.MtProtoException(Msgs.DH_PRIME_MISMATCH.t())
             }
             if (frame.g != MtProto.G.toInt()) {
-                throw MtProto.MtProtoException("g = ${frame.g}, ожидали 3")
+                throw MtProto.MtProtoException(Msgs.DH_G_UNEXPECTED.t(frame.g))
             }
             val gA = MtProto.publicFromBytes(MtProto.b64urlDecode(frame.gA))
             MtProto.validatePublic(gA)
@@ -513,17 +518,17 @@ class RrpClient(
             val gB = MtProto.publicBytes(dh.public)
             val gABytes = MtProto.b64urlDecode(frame.gA)
             val authKey = dh.shared(gA)
-            val sid = sessionId ?: throw MtProto.MtProtoException("нет session_id")
+            val sid = sessionId ?: throw MtProto.MtProtoException(Msgs.NO_SESSION_ID.t())
             mtCrypto = MtProto.SessionCrypto(
                 authKey,
                 MtProto.saltFor(sid, gABytes, gB),
                 MtProto.sessionId8(sid),
             )
-            log("MTProto/2: ключи согласованы (DH 2048, канон Telegram; payload DATA/UDP_DATA шифруется AES-256-IGE)")
+            log(Msgs.MTPROTO_KEYS_OK.t())
             listener?.onState(this, State.READY) // уведомить UI о включении крипто
             sendFrame(RrpFrame.KeyResp(MtProto.b64url(gB)))
         } catch (e: Exception) {
-            log("MTProto/2: обмен ключами не удался: ${e.message}")
+            log(Msgs.MTPROTO_EXCHANGE_FAILED.t(e.message))
             close()
         }
     }
@@ -534,7 +539,7 @@ class RrpClient(
         return try {
             RrpFrame.Data(frame.streamId, frame.flags, crypto.decryptUp(frame.bytes))
         } catch (e: Exception) {
-            log("MTProto/2: битый конверт DATA (stream ${frame.streamId}): ${e.message} — поток закрыт")
+            log(Msgs.MTPROTO_DATA_ENVELOPE_BAD.t(frame.streamId, e.message))
             close()
             null
         }
@@ -546,7 +551,7 @@ class RrpClient(
         return try {
             RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.decryptUp(frame.bytes))
         } catch (e: Exception) {
-            log("MTProto/2: битый конверт UDP_DATA: ${e.message}")
+            log(Msgs.MTPROTO_UDP_ENVELOPE_BAD.t(e.message))
             null
         }
     }
@@ -565,7 +570,7 @@ class RrpClient(
             return future
         }
         if (SsrfGuard.isBlocked(addr, allowLan)) {
-            log("sendOpen: $addr заблокирован SSRF-guard")
+            log(Msgs.SEND_OPEN_SSRF.t(addr))
             future.complete(ERR_SSRF_BLOCKED)
             return future
         }
@@ -604,7 +609,7 @@ class RrpClient(
             return
         }
         if (SsrfGuard.isBlocked(targetHost, allowLan)) {
-            log("OPEN $targetHost:${frame.port} заблокирован SSRF-guard")
+            log(Msgs.OPEN_SSRF.t("$targetHost:${frame.port}"))
             sendOpenOk(streamId, ERR_SSRF_BLOCKED)
             return
         }
@@ -622,7 +627,7 @@ class RrpClient(
             return
         }
         if (allowedAddr == null) {
-            log("OPEN $targetHost:${frame.port}: все резолвы заблокированы SSRF-guard")
+            log(Msgs.OPEN_RESOLVES_SSRF.t("$targetHost:${frame.port}"))
             sendOpenOk(streamId, ERR_SSRF_BLOCKED)
             return
         }
@@ -666,7 +671,7 @@ class RrpClient(
                 if (n < 0) break
                 if (n == 0) continue
                 if (!st.sendWindow.tryAcquire(n, WINDOW_ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    log("stream ${st.id}: окно не наращено за ${WINDOW_ACQUIRE_TIMEOUT_MS}мс — закрываю")
+                    log(Msgs.WINDOW_NOT_GROWN.t(st.id, WINDOW_ACQUIRE_TIMEOUT_MS))
                     sendFrameQuiet(RrpFrame.Close(st.id, ERR_TIMEOUT))
                     break
                 }
@@ -737,7 +742,7 @@ class RrpClient(
         val assoc = try {
             UdpAssoc(id)
         } catch (e: Exception) {
-            log("UDP assoc: не удалось поднять сокет: ${e.message}")
+            log(Msgs.UDP_ASSOC_FAILED.t(e.message))
             sendOpenOk(id, ERR_CONNECT_FAILED)
             return
         }
@@ -776,7 +781,7 @@ class RrpClient(
         // тот же резолвер, которым телефон пользуется сам (документировано в protocol.md).
         val allow = allowLan || frame.port == 53
         if (SsrfGuard.isBlocked(targetHost, allow)) {
-            log("UDP $targetHost:${frame.port} заблокирован SSRF-guard")
+            log(Msgs.UDP_SSRF.t("$targetHost:${frame.port}"))
             return
         }
         val dst: java.net.InetAddress = when (frame.atyp) {
@@ -794,14 +799,14 @@ class RrpClient(
                     null
                 }
                 if (resolved == null) {
-                    log("UDP $targetHost:${frame.port}: резолв заблокирован SSRF-guard")
+                    log(Msgs.UDP_RESOLVE_SSRF.t("$targetHost:${frame.port}"))
                     return
                 }
                 resolved
             }
         }
         if (SsrfGuard.isBlockedAddress(dst, allow)) {
-            log("UDP $targetHost:${frame.port}: адрес заблокирован SSRF-guard")
+            log(Msgs.UDP_ADDR_SSRF.t("$targetHost:${frame.port}"))
             return
         }
         if (frame.bytes.isEmpty()) return
@@ -830,7 +835,7 @@ class RrpClient(
 
     /** OutputStream-адаптер над WsStream: один вызов write = одно binary-сообщение. */
     private class WsOutput(private val ws: WsStream) : OutputStream() {
-        override fun write(b: Int) = throw UnsupportedOperationException("WS: побайтовая запись не поддерживается")
+        override fun write(b: Int) = throw UnsupportedOperationException(Msgs.WS_WRITE_UNSUPPORTED.t())
         override fun write(b: ByteArray) {
             ws.writeMessage(b)
         }
@@ -862,7 +867,7 @@ class RrpClient(
             }
             null
         } catch (e: IOException) {
-            log("PROBE не отправлен: ${e.message}")
+            log(Msgs.PROBE_SEND_FAILED.t(e.message))
             null
         }
     }
@@ -877,7 +882,7 @@ class RrpClient(
                 try {
                     sendFrame(RrpFrame.Ping(ByteArray(NONCE_SIZE).also { rnd.nextBytes(it) }))
                 } catch (e: IOException) {
-                    log("ping не отправлен: ${e.message}")
+                    log(Msgs.PING_SEND_FAILED.t(e.message))
                 }
                 scheduleNextPing()
             }, pingIntervalMs(rnd), TimeUnit.MILLISECONDS)
@@ -888,7 +893,7 @@ class RrpClient(
     // ------------------------------------------------------------------ frame IO
 
     private fun sendFrame(frame: RrpFrame) {
-        val out = wireOut ?: throw RrpClientException("нет соединения")
+        val out = wireOut ?: throw RrpClientException(Msgs.NO_CONNECTION.t())
         var wire: RrpFrame = frame
         when (frame) {
             is RrpFrame.Data -> {
@@ -899,7 +904,7 @@ class RrpClient(
                 val crypto = mtCrypto
                 if (crypto != null) {
                     if (frame.bytes.size > MtProto.SessionCrypto.MAX_PLAIN_DATA) {
-                        throw RrpClientException("DATA ${frame.bytes.size} > лимита MTProto-конверта")
+                        throw RrpClientException(Msgs.DATA_LIMIT.t(frame.bytes.size))
                     }
                     wire = RrpFrame.Data(frame.streamId, frame.flags, crypto.encryptDown(frame.bytes))
                 }
@@ -913,7 +918,7 @@ class RrpClient(
                 if (crypto != null) {
                     if (frame.bytes.size > MtProto.SessionCrypto.MAX_PLAIN_DATA) {
                         // семантика UDP: слишком большая дейтаграмма дропается
-                        log("UDP_DATA ${frame.bytes.size} > лимита конверта — дроп")
+                        log(Msgs.UDP_DATA_LIMIT.t(frame.bytes.size))
                         return
                     }
                     wire = RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.encryptDown(frame.bytes))
@@ -950,7 +955,7 @@ class RrpClient(
                 val body = try {
                     policy.engine.nextRequest()
                 } catch (e: Exception) {
-                    log("noise: генерация не удалась: ${e.message}")
+                    log(Msgs.NOISE_GEN_FAILED.t(e.message))
                     null
                 }
                 if (body == null) {
@@ -970,7 +975,7 @@ class RrpClient(
                     policy.engine.onSent(bytes)
                     log(policy.logLine(bytes, policy.engine.usedToday(), policy.engine.cfg.maxBytesPerDay))
                 } catch (e: IOException) {
-                    log("noise не отправлен: ${e.message}")
+                    log(Msgs.NOISE_SEND_FAILED.t(e.message))
                 }
                 scheduleNoise()
             }, policy.engine.nextDelayMs(), TimeUnit.MILLISECONDS)
@@ -982,7 +987,7 @@ class RrpClient(
         try {
             sendFrame(frame)
         } catch (e: Exception) {
-            log("send не удался: ${e.message}")
+            log(Msgs.SEND_FAILED.t(e.message))
         }
     }
 
@@ -1101,8 +1106,7 @@ class RrpClient(
                         // смена CA владельцем (нужен re-enroll), либо MITM —
                         // другим сертификатам мы НЕ доверяем никогда.
                         if (!trustSelfSigned) {
-                            log("TLS: CA-pin НЕ совпал — соединение отклонено (анти-MITM). " +
-                                "Реальный pin сервера: $actualB64. Если сервер менял CA — обнови ссылку (re-enroll).")
+                            log(Msgs.TLS_PIN_MISMATCH.t(actualB64))
                             throw TlsFatalAlert(AlertDescription.bad_certificate)
                         }
                     }
@@ -1114,9 +1118,9 @@ class RrpClient(
                     // НЕ попадает: строкой выше соединение уже отклонено.
                     if ((pin == null || trustSelfSigned) && isSelfSignedChain(chain)) {
                         if (pin == null) {
-                            log("TLS: пина нет — TOFU: сервер зафиксирован, pin=$actualB64 (сохрани строку конфига)")
+                            log(Msgs.TLS_TOFU_FIRST.t(actualB64))
                         } else {
-                            log("TLS: пин не совпал, но включён явный TOFU-override — принят самоподписанный сервер, pin=$actualB64")
+                            log(Msgs.TLS_TOFU_OVERRIDE.t(actualB64))
                         }
                         acceptedPin = actualB64
                         rememberServerCert(chain)
@@ -1144,8 +1148,12 @@ class RrpClient(
                 as java.security.cert.X509Certificate
             serverCertValidUntilMs = leaf.notAfter.time
             lastServerCertNotAfterMs = leaf.notAfter.time
-            log("TLS: серверный серт действителен до ${java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(leaf.notAfter)}, " +
-                "издатель: ${leaf.issuerX500Principal.name?.take(60) ?: "?"} (pin — SPKI CA, ротация листа клиентов не ломает)")
+            log(
+                Msgs.TLS_CERT_VALID.t(
+                    java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(leaf.notAfter),
+                    leaf.issuerX500Principal.name?.take(60) ?: "?",
+                ),
+            )
         } catch (_: Exception) {
         }
     }
@@ -1195,7 +1203,7 @@ class RrpClient(
             }
         }
         if (bytes == null || bytes.size != 32) {
-            throw RrpClientException("pin: ожидался sha256 (32 байта, hex/base64)")
+            throw RrpClientException(Msgs.PIN_FORMAT.t())
         }
         return bytes
     }

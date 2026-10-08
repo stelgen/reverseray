@@ -47,7 +47,7 @@ class WsStream(
         val response = readHttpResponse()
         if (!response.startsWith("HTTP/1.1 101") && !response.startsWith("HTTP/1.0 101")) {
             throw RrpClientException(
-                "WebSocket-апгрейд отклонён: ${response.lineSequence().firstOrNull() ?: "<пусто>"}"
+                Msgs.WS_UPGRADE_REJECTED.t(response.lineSequence().firstOrNull() ?: Msgs.WS_EMPTY_RESPONSE.t())
             )
         }
         // Sec-WebSocket-Accept — защита от фальшивого 101 (MITM на пути).
@@ -60,12 +60,12 @@ class WsStream(
         val marker = "sec-websocket-accept:"
         val idx = response.lowercase().indexOf(marker)
         if (idx < 0) {
-            throw RrpClientException("WebSocket: нет Sec-WebSocket-Accept")
+            throw RrpClientException(Msgs.WS_NO_ACCEPT.t())
         }
         val actual = response.substring(idx + marker.length)
             .lineSequence().firstOrNull()?.trim().orEmpty()
         if (actual != expected) {
-            throw RrpClientException("WebSocket: некорректный Sec-WebSocket-Accept")
+            throw RrpClientException(Msgs.WS_BAD_ACCEPT.t())
         }
     }
 
@@ -74,11 +74,11 @@ class WsStream(
         val sb = StringBuilder()
         while (sb.length < MAX_HEADER) {
             val b = input.read()
-            if (b < 0) throw EOFException("WS: обрыв при чтении ответа апгрейда")
+            if (b < 0) throw EOFException(Msgs.WS_READ_INTERRUPTED.t())
             sb.append(b.toChar())
             if (sb.endsWith("\r\n\r\n")) return sb.toString()
         }
-        throw IOException("WS: слишком длинный ответ апгрейда (${sb.length} байт)")
+        throw IOException(Msgs.WS_UPGRADE_TOO_LONG.t(sb.length))
     }
 
     // ------------------ InputStream (кадры сервера) ------------------
@@ -118,7 +118,7 @@ class WsStream(
                     val ext = ByteArray(8)
                     readFully(ext)
                     val v = getU64(ext)
-                    if (v > MAX_MESSAGE) throw RrpFrameException("WS: сообщение $v > $MAX_MESSAGE")
+                    if (v > MAX_MESSAGE) throw RrpFrameException(Msgs.WS_MSG_TOO_BIG.t(v, MAX_MESSAGE))
                     len = v
                 }
             }
@@ -140,7 +140,7 @@ class WsStream(
                 }
                 0xA -> skipFully(len) // pong
                 0x8 -> return false // close
-                else -> throw RrpFrameException("WS: неподдерживаемый opcode 0x${opcode.toString(16)}")
+                else -> throw RrpFrameException(Msgs.WS_BAD_OPCODE.t(opcode.toString(16)))
             }
         }
     }
@@ -156,7 +156,7 @@ class WsStream(
         val skip = ByteArray(4096)
         while (left > 0) {
             val r = input.read(skip, 0, minOf(skip.size.toLong(), left).toInt())
-            if (r < 0) throw EOFException("WS: обрыв при пропуске кадра")
+            if (r < 0) throw EOFException(Msgs.WS_SKIP_INTERRUPTED.t())
             left -= r
         }
     }
@@ -165,7 +165,7 @@ class WsStream(
         var off = 0
         while (off < dst.size) {
             val n = input.read(dst, off, dst.size - off)
-            if (n < 0) throw EOFException("WS: обрыв потока (ожидалось ещё ${dst.size - off} байт)")
+            if (n < 0) throw EOFException(Msgs.WS_TRUNCATED.t(dst.size - off))
             off += n
         }
     }

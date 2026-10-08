@@ -162,8 +162,8 @@ object RrpProtocols {
 
     /** Человекочитаемое имя для UI-переключателя (кнопка = метка + версия). */
     fun displayName(id: String): String = when (id) {
-        DEFAULT -> labelWithVer(id) + " · стабильный"
-        MtProto.PROTO_ID -> labelWithVer(id) + " · шифрование payload"
+        DEFAULT -> labelWithVer(id) + Msgs.LABEL_STABLE.t()
+        MtProto.PROTO_ID -> labelWithVer(id) + Msgs.LABEL_PAYLOAD_ENC.t()
         else -> labelWithVer(id)
     }
 }

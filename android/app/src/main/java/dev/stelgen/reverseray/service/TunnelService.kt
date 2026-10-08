@@ -21,13 +21,16 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import dev.stelgen.reverseray.MainActivity
+import dev.stelgen.reverseray.L10nUi
 import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
+import dev.stelgen.reverseray.core.Msgs
 import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
+import dev.stelgen.reverseray.ui.Formats
 import java.net.NetworkInterface
 import dev.stelgen.reverseray.net.SpeedTest
 import java.text.SimpleDateFormat
@@ -79,6 +82,11 @@ class LogLine(val text: String, val kind: LogKind)
 
 class TunnelService : Service() {
 
+    // v0.8.3: язык сервиса/уведомлений из prefs (канон i18n)
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(L10nUi.wrap(base))
+    }
+
     private class Target(val host: String, val port: Int)
 
     @Volatile private var lifetime: AtomicLong = AtomicLong(0)
@@ -118,7 +126,7 @@ class TunnelService : Service() {
         override fun onState(client: RrpClient, state: RrpClient.State) {
             if (state == RrpClient.State.READY) {
                 if (client.mtProtoActive) {
-                    pushLog("MTProto/2: payload туннеля шифруется AES-256-IGE (ключи согласованы DH)", LogKind.OK)
+                    pushLog(getString(R.string.log_mtp_keys), LogKind.OK)
                 }
                 sendBroadcast(
                     Intent(ACTION_STATUS).setPackage(packageName)
@@ -138,21 +146,25 @@ class TunnelService : Service() {
         if (stopping) return
         val usage = accountTraffic(0)
         if (usage.limit > 0 && usage.used >= usage.limit) {
-            pushLog("спидтест пропущен: лимит трафика достигнут (правило нуля байт)", LogKind.WARN)
+            pushLog(getString(R.string.log_speedtest_skipped), LogKind.WARN)
             return
         }
         if (speedTestBusy) return
         speedTestBusy = true
-        pushLog("спидтест: идём на 3 проверки — ${SpeedTest.plan().joinToString(" · ")}")
+        pushLog(getString(R.string.log_speedtest_plan, SpeedTest.plan().joinToString(" · ")))
         Thread {
             val r = SpeedTest.run()
-            r.endpoints.forEach { pushLog("спидтест: $it") }
-            val line = if (r.ok) {
+            r.endpoints.forEach { pushLog(getString(R.string.log_speedtest_line, it)) }
+                val line = if (r.ok) {
                 val mbs = String.format(Locale.US, "%.2f", r.bytesPerSec / 1024.0 / 1024.0)
-                "спидтест: $mbs МБ/с · TCP-пинг ${r.pingMs} мс · HTTP ${if (r.httpOk) "OK (${r.httpMs} мс)" else "недоступен"} " +
-                    "(${fmtBytes(r.totalBytes)} за ${r.durationMs / 1000} с)"
+                getString(
+                    R.string.log_speedtest_result,
+                    mbs, r.pingMs,
+                    if (r.httpOk) getString(R.string.speed_http_ok, r.httpMs) else getString(R.string.speed_http_down),
+                    fmtBytes(r.totalBytes), r.durationMs / 1000,
+                )
             } else {
-                "спидтест не удался: ${r.error ?: "нет данных"}"
+                getString(R.string.log_speedtest_failed, r.error ?: getString(R.string.speed_no_data))
             }
             pushLog(line, if (r.ok) LogKind.OK else LogKind.WARN)
             sendBroadcast(
@@ -163,12 +175,8 @@ class TunnelService : Service() {
         }.apply { isDaemon = true }.start()
     }
 
-    private fun fmtBytes(b: Long): String = when {
-        b >= 1L shl 30 -> String.format(Locale.US, "%.2f ГБ", b / 1073741824.0)
-        b >= 1L shl 20 -> String.format(Locale.US, "%.1f МБ", b / 1048576.0)
-        b >= 1L shl 10 -> String.format(Locale.US, "%.1f КБ", b / 1024.0)
-        else -> "$b Б"
-    }
+    // v0.8.3: единицы из ресурсов (динамический язык) — общий Formats (дубль удалён)
+    private fun fmtBytes(b: Long): String = Formats.bytes(this, b)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -213,7 +221,7 @@ class TunnelService : Service() {
         val cfg = try {
             prefs().getString(KEY_CONFIG, null)?.let { RrpUri.parse(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "конфиг не разобран: ${e.message}")
+            Log.w(TAG, getString(R.string.log_config_parse_failed, e.message))
             null
         }
         if (cfg == null) {
@@ -255,9 +263,11 @@ class TunnelService : Service() {
     /** Информация об устройстве — в журнал простым текстом (одна строка на старт). */
     private fun logDevicePreamble(cfg: RrpUriConfig) {
         try {
-            val info = "устройство: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} " +
-                "(API ${Build.VERSION.SDK_INT}), билд ${Build.DISPLAY}, протокол ${currentProto()}, " +
-                "хост ${cfg.host}:${cfg.ports.joinToString(",")}"
+            val info = getString(
+                R.string.log_device_info,
+                Build.MANUFACTURER, Build.MODEL, Build.VERSION.RELEASE, Build.VERSION.SDK_INT,
+                Build.DISPLAY, currentProto(), cfg.host, cfg.ports.joinToString(","),
+            )
             pushLog(info)
         } catch (_: Exception) {}
     }
@@ -361,12 +371,12 @@ class TunnelService : Service() {
             while (!stopping) {
                 val usage = accountTraffic(0)
                 if (usage.limit <= 0) {
-                    pushLog("лимит снят пользователем — реконнект", LogKind.OK)
+                    pushLog(getString(R.string.log_limit_removed), LogKind.OK)
                     startTunnel()
                     return@Thread
                 }
                 if (System.currentTimeMillis() >= at) {
-                    pushLog("период лимита обновился — реконнект", LogKind.OK)
+                    pushLog(getString(R.string.log_limit_period), LogKind.OK)
                     startTunnel()
                     return@Thread
                 }
@@ -492,7 +502,7 @@ class TunnelService : Service() {
                     return
                 } catch (e: Exception) {
                     lastErr = e.message ?: "?"
-                    pushLog("смена протокола: попытка $attempt/$SWITCH_RETRIES не удалась: $lastErr")
+                    pushLog(getString(R.string.log_proto_attempt, attempt, SWITCH_RETRIES, lastErr))
                     updateStatus(STATE_ERROR, getString(R.string.status_switch_fail, newProto, lastErr))
                 } finally {
                     try { client.close() } catch (_: Exception) {}
@@ -521,7 +531,7 @@ class TunnelService : Service() {
         // обновляем ссылку: proto= должен отражать реально работающий протокол
         val updated = cfg.copy(proto = proto).serialize()
         prefs().edit().putString(KEY_CONFIG, updated).apply()
-        pushLog("протокол применён: $proto (ссылка обновлена)")
+        pushLog(getString(R.string.log_proto_applied, proto))
     }
 
     /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
@@ -738,7 +748,7 @@ class TunnelService : Service() {
                 cm.registerNetworkCallback(req, cb)
                 networkCallback = cb
             } catch (e: Exception) {
-                Log.w(TAG, "NetworkCallback не зарегистрирован: ${e.message}")
+                Log.w(TAG, getString(R.string.log_netcallback_failed, e.message))
             }
         } else {
             // Фолбэк для API 14..20: легаси-броадкаст
@@ -758,7 +768,7 @@ class TunnelService : Service() {
         val last = lastNetKick.get()
         if (now - last < NET_RETRY_COOLDOWN_MS) return
         if (!lastNetKick.compareAndSet(last, now)) return
-        Log.d(TAG, "сеть появилась — мгновенный retry")
+        Log.d(TAG, getString(R.string.log_network_back))
         // wifi-only: kick только если мы на Wi-Fi
         if (wifiOnly() && !isOnWifi()) {
             updateStatus(STATE_INFO, getString(R.string.status_wait_wifi))
@@ -976,7 +986,7 @@ class TunnelService : Service() {
          */
         fun logSettingChange(name: String, from: String, to: String) {
             if (from == to) return // не менялось — не пишем
-            val line = "настройка: $name: $from → $to"
+            val line = Msgs.LOG_SETTING_CHANGE.t(name, from, to) // companion без Context — типизированный каталог core
             pushLog(line, LogKind.WARN) // важное (тёмно-жёлтое): изменение настроек
             lastStatus = line
         }

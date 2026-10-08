@@ -1,5 +1,6 @@
 package dev.stelgen.reverseray.core
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,7 +37,15 @@ class ProtoFallbackTest {
     fun `fallback reason explains client-only rollback`() {
         val reason = ProtoFallback.fallbackReason("mtproto2")
         assertTrue("причина должна упоминать протокол", reason.contains("mtproto2") || reason.contains("MTProto"))
-        assertTrue("причина должна объяснять клиентский фоллбек", reason.contains("клиент"))
-        assertTrue("причина должна объяснять, что сервер не откатывается", reason.contains("сервер"))
+        // типизированное ожидание из каталога Msgs — ассерт не зависит от языка
+        assertEquals(
+            "причина должна быть каноничной строкой фоллбека (клиент откатывается, сервер — нет)",
+            Msgs.FALLBACK_NOTICE.t(
+                RrpProtocols.labelWithVer("mtproto2"),
+                ProtoFallback.THRESHOLD,
+                RrpProtocols.labelWithVer(ProtoFallback.BASE),
+            ),
+            reason,
+        )
     }
 }

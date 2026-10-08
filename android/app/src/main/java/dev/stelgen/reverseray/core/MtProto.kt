@@ -64,14 +64,14 @@ object MtProto {
     private fun padded256(v: BigInteger): ByteArray {
         val b = v.toByteArray() // возможен ведущий 0 на знак
         val unsigned = if (b.size == 257 && b[0].toInt() == 0) b.copyOfRange(1, 257) else b
-        if (unsigned.size > 256) throw MtProtoException("g_peer > 256 байт")
+        if (unsigned.size > 256) throw MtProtoException(Msgs.G_PEER_SIZE.t())
         val out = ByteArray(256)
         System.arraycopy(unsigned, 0, out, 256 - unsigned.size, unsigned.size)
         return out
     }
 
     fun publicFromBytes(b: ByteArray): BigInteger {
-        if (b.size != 256) throw MtProtoException("публичная доля должна быть 256 байт")
+        if (b.size != 256) throw MtProtoException(Msgs.PUBLIC_SHARE_SIZE.t())
         return BigInteger(1, b)
     }
 
@@ -102,14 +102,14 @@ object MtProto {
                     // повторить
                 }
             }
-            throw MtProtoException("не удалось сгенерировать валидную пару")
+            throw MtProtoException(Msgs.KEYPAIR_GEN_FAILED.t())
         }
 
         /** Общий ключ g_ab как 256 байт (auth_key). */
         fun shared(peerPublic: BigInteger): ByteArray {
             validatePublic(peerPublic)
             val gab = peerPublic.modPow(priv, P)
-            if (gab < BOUND_LOW || gab > BOUND_HIGH) throw MtProtoException("g_ab вне коридора")
+            if (gab < BOUND_LOW || gab > BOUND_HIGH) throw MtProtoException(Msgs.G_AB_RANGE.t())
             return padded256(gab)
         }
     }
@@ -147,7 +147,7 @@ object MtProto {
             try {
                 java.util.Base64.getDecoder().decode(v)
             } catch (e2: IllegalArgumentException) {
-                throw MtProtoException("не base64: ${v.take(32)}")
+                throw MtProtoException(Msgs.NOT_BASE64.t(v.take(32)))
             }
         }
     }
@@ -162,7 +162,7 @@ object MtProto {
         private val block = ByteArray(16)
 
         fun encrypt(data: ByteArray, iv: ByteArray): ByteArray {
-            require(data.size % 16 == 0) { "IGE: длина не кратна блоку" }
+            require(data.size % 16 == 0) { Msgs.IGE_BLOCK_ALIGN.t() }
             cipher.init(Cipher.ENCRYPT_MODE, keySpec)
             val x = iv.copyOfRange(0, 16) // c-цепочка
             val y = iv.copyOfRange(16, 32) // p-цепочка
@@ -180,7 +180,7 @@ object MtProto {
         }
 
         fun decrypt(data: ByteArray, iv: ByteArray): ByteArray {
-            require(data.size % 16 == 0) { "IGE: длина не кратна блоку" }
+            require(data.size % 16 == 0) { Msgs.IGE_BLOCK_ALIGN.t() }
             cipher.init(Cipher.DECRYPT_MODE, keySpec)
             val x = iv.copyOfRange(0, 16) // c-цепочка (c_{i-1})
             val y = iv.copyOfRange(16, 32) // p-цепочка (p_{i-1})
@@ -237,12 +237,12 @@ object MtProto {
         private var msgIdEnc: Long = 0
 
         init {
-            require(authKey.size == 256) { "auth_key должен быть 256 байт" }
-            require(salt.size == 8 && sessionId.size == 8) { "salt/session_id должны быть 8 байт" }
+            require(authKey.size == 256) { Msgs.AUTH_KEY_SIZE.t() }
+            require(salt.size == 8 && sessionId.size == 8) { Msgs.SALT_SESSION_SIZE.t() }
         }
 
         private fun encrypt(x: Int, payload: ByteArray): ByteArray {
-            if (payload.size > MAX_PLAIN_DATA) throw MtProtoException("payload превышает лимит DATA")
+            if (payload.size > MAX_PLAIN_DATA) throw MtProtoException(Msgs.MTPROTO_PAYLOAD_LIMIT.t())
             msgIdEnc++
             var msgId = msgIdEnc * 4
             if (x == X_SERVER) msgId += 1 // нечётный для сервер→клиент
@@ -274,24 +274,24 @@ object MtProto {
         }
 
         private fun decrypt(x: Int, env: ByteArray): ByteArray {
-            if (env.size < 24 + 16 || (env.size - 24) % 16 != 0) throw MtProtoException("битый конверт")
+            if (env.size < 24 + 16 || (env.size - 24) % 16 != 0) throw MtProtoException(Msgs.MTPROTO_ENVELOPE_BAD.t())
             if (!java.security.MessageDigest.isEqual(authKeyId, env.copyOfRange(0, 8))) {
-                throw MtProtoException("чужой auth_key_id")
+                throw MtProtoException(Msgs.FOREIGN_AUTH_KEY.t())
             }
             val mk = env.copyOfRange(8, 24)
             val (key, iv) = kdfParams(authKey, mk, x)
             val body = Ige(key).decrypt(env.copyOfRange(24, env.size), iv)
-            if (body.size < 32) throw MtProtoException("тело короче заголовка")
-            if (!MessageDigest.isEqual(body.copyOfRange(0, 8), salt)) throw MtProtoException("salt не совпал")
-            if (!MessageDigest.isEqual(body.copyOfRange(8, 16), sessionId)) throw MtProtoException("session_id не совпал")
+            if (body.size < 32) throw MtProtoException(Msgs.MTPROTO_BODY_SHORT.t())
+            if (!MessageDigest.isEqual(body.copyOfRange(0, 8), salt)) throw MtProtoException(Msgs.SALT_MISMATCH.t())
+            if (!MessageDigest.isEqual(body.copyOfRange(8, 16), sessionId)) throw MtProtoException(Msgs.SESSION_MISMATCH.t())
             val msgLen = ((body[28].toInt() and 0xFF) shl 24) or ((body[29].toInt() and 0xFF) shl 16) or
                 ((body[30].toInt() and 0xFF) shl 8) or (body[31].toInt() and 0xFF)
             val rest = body.size - 32
-            if (msgLen < 0 || msgLen > rest) throw MtProtoException("msg_len > тела")
+            if (msgLen < 0 || msgLen > rest) throw MtProtoException(Msgs.MSGLEN_OVERFLOW.t())
             val padLen = rest - msgLen
-            if (padLen < 12 || padLen > 1024) throw MtProtoException("паддинг $padLen вне 12..1024")
+            if (padLen < 12 || padLen > 1024) throw MtProtoException(Msgs.PADDING_RANGE.t(padLen))
             val expect = msgKey(authKey, x, body)
-            if (!MessageDigest.isEqual(expect, mk)) throw MtProtoException("msg_key не сошёлся")
+            if (!MessageDigest.isEqual(expect, mk)) throw MtProtoException(Msgs.MSG_KEY_MISMATCH.t())
             return body.copyOfRange(32, 32 + msgLen)
         }
 

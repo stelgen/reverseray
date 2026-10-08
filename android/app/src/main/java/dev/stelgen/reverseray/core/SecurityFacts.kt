@@ -8,30 +8,30 @@ package dev.stelgen.reverseray.core
 object SecurityFacts {
 
     // ---------- транспорт/туннель ----------
-    const val TLS_MIN_VERSION = "TLS 1.3 (минимум; TLS 1.2 разрешён только в compat-профиле)"
+    val TLS_MIN_VERSION = Msgs.SF_TLS_MIN.t()
     const val ALPN = "reverseray/1"
-    const val TLS_PROVIDER = "BouncyCastle BcTlsCrypto (lightweight, без платформенного JCA)"
-    const val CERT_MODEL = "self-signed CA (10 лет) → лист 3 года; пин = SHA256(SPKI CA)"
-    const val PIN_POLICY = "строгий: пин задан и не совпал → соединение отклоняется (анти-MITM); TOFU только для первой дружбы (пина нет)"
-    const val ZERO_RTT = "0-RTT/early data не используется; resumption не пропускает AUTH"
+    val TLS_PROVIDER = Msgs.SF_TLS_LIB.t()
+    val CERT_MODEL = Msgs.SF_PKI.t()
+    val PIN_POLICY = Msgs.SF_PIN.t()
+    val ZERO_RTT = Msgs.SF_NO_0RTT.t()
 
     // ---------- хендшейк/аутентификация ----------
-    const val TOKEN_STORAGE = "сервер хранит только SHA256(token); токен никогда не покидает устройство"
-    const val HANDSHAKE = "HMAC-SHA256(key=SHA256(token), msg=nonce‖session_id), сравнение constant-time"
-    const val NONCE = "одноразовый 128-бит nonce (crypto/rand), TTL 60 с, replay → отказ"
-    const val RATE_LIMIT = "≤120 рукопожатий/мин/IP; lockout только за невалидный HMAC: 5 неудач → 30с·2^n (до 10 мин)"
+    val TOKEN_STORAGE = Msgs.SF_TOKEN_HASH.t()
+    val HANDSHAKE = Msgs.SF_HMAC.t()
+    val NONCE = Msgs.SF_NONCE.t()
+    val RATE_LIMIT = Msgs.SF_LOCKOUT.t()
 
     // ---------- payload/крипто (mtproto2) ----------
-    const val MTPROTO2 = "MTProto 2.0: DH-2048 на официальном dh_prime Telegram (safe prime, anti-logjam), AES-256-IGE, msg_key SHA-256"
-    const val FRAME_LIMITS = "DATA ≤ 65535 Б; прочие кадры ≤ 4096 Б; окно стрима 512 КБ→4 МБ; бюджет сессии 16 МБ"
+    val MTPROTO2 = Msgs.SF_MTPROTO.t()
+    val FRAME_LIMITS = Msgs.SF_LIMITS.t()
 
     // ---------- WAN/анти-скан ----------
-    const val WAN_HARDENING = "первый байт ≠ TLS → tarpit + тишина (0 байт ответа); глобальный + per-IP лимиты параллельности"
-    const val SSRF_GUARD = "блэклист приватных диапазонов на клиенте (DNS-rebinding защищён пострезолвной проверкой адресов)"
+    val WAN_HARDENING = Msgs.SF_HARDENING.t()
+    val SSRF_GUARD = Msgs.SF_SSRF.t()
 
     // ---------- обновления/целостность ----------
-    const val MODULES_MANIFEST = "манифест modules.json: schema-чек, семвер, sha256, даунгрейд запрещён, мусор не применяется"
-    const val APK_INTEGRITY = "релиз подписан v1+v2+v3; SHA256SUMS релиза сверяется перед установкой APK"
+    val MODULES_MANIFEST = Msgs.SF_MANIFEST.t()
+    val APK_INTEGRITY = Msgs.SF_UPDATES.t()
 
     /** Все константы списком для «О приложении» (мэппинг заголовков — в UI-слое,
      *  core остаётся чистым Kotlin без android.*). */

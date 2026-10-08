@@ -19,7 +19,8 @@ import dev.stelgen.reverseray.service.TunnelService
  */
 class App : Application() {
     override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(base)
+        // v0.8.3: язык из prefs (ru/en) → createConfigurationContext; system — base как есть
+        super.attachBaseContext(L10nUi.wrap(base))
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             MultiDex.install(this)
         }
@@ -28,6 +29,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         applySavedTheme()
+        L10nUi.applyCore(this) // v0.8.3: язык ядра (логи) синхронно с UI-языком
     }
 
     private fun applySavedTheme() {

@@ -1,5 +1,6 @@
 package dev.stelgen.reverseray.update
 
+import dev.stelgen.reverseray.core.Msgs
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -38,7 +39,7 @@ data class UpdateInfo(
  *  - downloadApk() качает APK-ассет в кэш для установки.
  *
  * v0.7.2 ФИКС: апдейтер искал ассет с именем "app-release.apk", а релизы
- * публикуют "reverseray-<версия>.apk" (переименование из v0.4.1) — из-за
+ * публикуют Msgs.UC_APK_NAME.t() (переименование из v0.4.1) — из-за
  * этого апдейтер никогда не находил APK. Теперь берём ЛЮБОЙ *.apk-ассет
  * (предпочитая тот, что содержит "reverseray").
  *
@@ -96,7 +97,7 @@ class UpdateChecker(
                 actual.toByteArray(Charsets.US_ASCII),
             )
         ) {
-            return "SHA256 APK не совпал с SHA256SUMS релиза ($actual ≠ $expected) — установка отменена (возможна подмена)"
+            return Msgs.UC_SHA_MISMATCH.t(actual, expected)
         }
         return null
     }

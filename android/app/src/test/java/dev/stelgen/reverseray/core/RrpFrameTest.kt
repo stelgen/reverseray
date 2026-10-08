@@ -97,7 +97,10 @@ class RrpFrameTest {
             RrpFrame.Data(1L, 0, ByteArray(RrpFrame.MAX_DATA_PAYLOAD + 1)).encode()
             fail("ожидался RrpFrameException")
         } catch (e: RrpFrameException) {
-            assertTrue(e.message!!.contains("лимита"))
+            assertEquals(
+                Msgs.FRAME_PAYLOAD_LIMIT.t(RrpFrame.MAX_DATA_PAYLOAD + 1, RrpFrame.MAX_DATA_PAYLOAD, Integer.toHexString(RrpFrame.TYPE_DATA)),
+                e.message,
+            )
         }
     }
 
@@ -107,7 +110,10 @@ class RrpFrameTest {
             RrpFrame.Stats("x".repeat(RrpFrame.MAX_CONTROL_PAYLOAD + 1)).encode()
             fail("ожидался RrpFrameException")
         } catch (e: RrpFrameException) {
-            assertTrue(e.message!!.contains("лимита"))
+            assertEquals(
+                Msgs.FRAME_PAYLOAD_LIMIT.t(RrpFrame.MAX_CONTROL_PAYLOAD + 1, RrpFrame.MAX_CONTROL_PAYLOAD, Integer.toHexString(RrpFrame.TYPE_STATS)),
+                e.message,
+            )
         }
     }
 
@@ -119,7 +125,10 @@ class RrpFrameTest {
             RrpFrame.parse(h)
             fail("ожидался RrpFrameException")
         } catch (e: RrpFrameException) {
-            assertTrue(e.message!!.contains("лимита"))
+            assertEquals(
+                Msgs.FRAME_PAYLOAD_LIMIT.t(65536, RrpFrame.MAX_DATA_PAYLOAD, Integer.toHexString(RrpFrame.TYPE_DATA)),
+                e.message,
+            )
         }
     }
 
@@ -131,7 +140,10 @@ class RrpFrameTest {
             RrpFrame.parse(h)
             fail("ожидался RrpFrameException")
         } catch (e: RrpFrameException) {
-            assertTrue(e.message!!.contains("лимита"))
+            assertEquals(
+                Msgs.FRAME_PAYLOAD_LIMIT.t(4097, RrpFrame.MAX_CONTROL_PAYLOAD, Integer.toHexString(RrpFrame.TYPE_HELLO)),
+                e.message,
+            )
         }
     }
 
@@ -142,7 +154,7 @@ class RrpFrameTest {
             RrpFrame.parse(h)
             fail("ожидался RrpFrameException")
         } catch (e: RrpFrameException) {
-            assertTrue(e.message!!.contains("версия"))
+            assertEquals(Msgs.FRAME_VERSION.t(2), e.message)
         }
     }
 
@@ -153,7 +165,7 @@ class RrpFrameTest {
             RrpFrame.parse(h)
             fail("ожидался RrpFrameException")
         } catch (e: RrpFrameException) {
-            assertTrue(e.message!!.contains("неизвестный тип"))
+            assertEquals(Msgs.UNKNOWN_FRAME.t(Integer.toHexString(0xAB)), e.message)
         }
     }
 

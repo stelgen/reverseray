@@ -102,24 +102,24 @@ object Modules {
         val root = try {
             JSONObject(body)
         } catch (e: Exception) {
-            throw ManifestException("манифест не JSON: ${e.message}")
+            throw ManifestException(Msgs.MANIFEST_NOT_JSON.t(e.message))
         }
         if (root.optInt("schema", 0) != 1) {
-            throw ManifestException("schema не 1")
+            throw ManifestException(Msgs.MANIFEST_SCHEMA.t())
         }
         val version = root.optString("version", "").trim()
         if (version.isEmpty() || !version.matches(Regex("^v?[0-9]+\\.[0-9]+(\\.[0-9]+)?$"))) {
-            throw ManifestException("версия не семвер: $version")
+            throw ManifestException(Msgs.MANIFEST_VERSION.t(version))
         }
-        val arr = root.optJSONArray("protocols") ?: throw ManifestException("нет реестра протоколов")
+        val arr = root.optJSONArray("protocols") ?: throw ManifestException(Msgs.MANIFEST_NO_REGISTRY.t())
         val out = mutableListOf<ProtocolEntry>()
         val seen = mutableSetOf<String>()
         var hasRrp1 = false
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
             val id = normalizeId(o.optString("id", ""))
-            if (id.isEmpty()) throw ManifestException("мусорный id протокола")
-            if (!seen.add(id)) throw ManifestException("дубликат протокола $id")
+            if (id.isEmpty()) throw ManifestException(Msgs.MANIFEST_BAD_PROTOCOL_ID.t())
+            if (!seen.add(id)) throw ManifestException(Msgs.MANIFEST_DUPLICATE_PROTOCOL.t(id))
             val enabled = if (o.has("enabled")) o.optBoolean("enabled", true) else true
             if (id == RrpProtocols.DEFAULT) hasRrp1 = true
             out.add(
@@ -132,7 +132,7 @@ object Modules {
                 )
             )
         }
-        if (!hasRrp1) throw ManifestException("реестр без rrp1 запрещён")
+        if (!hasRrp1) throw ManifestException(Msgs.MANIFEST_NO_RRP1.t())
         val policy = root.optJSONObject("policy")
         var probe: String? = null
         val dnsNames = mutableListOf<String>()
@@ -142,7 +142,7 @@ object Modules {
                 val host = it.substringBeforeLast(':')
                 val port = it.substringAfterLast(':', "").toIntOrNull()
                 if (host.isEmpty() || port == null || port !in 1..65535) {
-                    throw ManifestException("битый probe_default_target: $it")
+                    throw ManifestException(Msgs.MANIFEST_BAD_PROBE_TARGET.t(it))
                 }
             }
             val names = policy.optJSONArray("dns_probe_names")
@@ -158,7 +158,7 @@ object Modules {
         val camoObj = root.optJSONObject("camouflage")
         if (camoObj != null) {
             val camoId = normalizeId(camoObj.optString("id", ""))
-            if (camoId.isEmpty()) throw ManifestException("мусорный id модуля camouflage")
+            if (camoId.isEmpty()) throw ManifestException(Msgs.MANIFEST_BAD_CAMO_ID.t())
             camo = Camouflage(
                 id = camoId,
                 name = camoObj.optString("name", camoId).trim().ifEmpty { camoId },

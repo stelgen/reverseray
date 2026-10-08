@@ -52,6 +52,7 @@ import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.SecurityFacts
 import dev.stelgen.reverseray.core.ThemeMode
+import dev.stelgen.reverseray.ui.Formats
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
@@ -94,6 +95,11 @@ import java.util.Locale
  * Android 4.0+ (API 14) — без java.time, без новее-API вызовов вне guard.
  */
 class MainActivity : AppCompatActivity() {
+
+    // v0.8.3: язык Activity из prefs (канон i18n; фолбэк — EN-дефолт ресурсов)
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(L10nUi.wrap(base))
+    }
 
     // ---------- вкладки ----------
     private lateinit var tabLayout: TabLayout
@@ -764,6 +770,9 @@ class MainActivity : AppCompatActivity() {
         // Тема (v0.8.1): авто (настройка телефона; на старых Android — чёрная) / тёмная / светлая
         p.addView(buildThemeCard())
 
+        // Язык (v0.8.3): system / русский / english — динамически, всё приложение и логи
+        p.addView(buildLangCard())
+
         // О приложении: версии/модули/Рам/диск/трафик за всё время/протокол + константы защиты
         p.addView(sectionTitle(R.string.about_app_title, null))
         appInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -1036,6 +1045,60 @@ class MainActivity : AppCompatActivity() {
         return box
     }
 
+    /**
+     * v0.8.3: карта «Язык» — Как в системе / Русский / English.
+     * Применяется сразу (recreate): ресурсы — через attachBaseContext,
+     * логи ядра — через L10n.lang (без перезапуска процесса).
+     */
+    private fun buildLangCard(): LinearLayout {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(TextView(this).apply {
+            setText(R.string.settings_language)
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(12), 0, dp(4))
+        })
+        val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val bSystem = outlinedLang(R.string.lang_system)
+        val bRu = outlinedLang(R.string.lang_ru)
+        val bEn = outlinedLang(R.string.lang_en)
+        bSystem.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        bRu.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { setMargins(dp(6), 0, 0, 0) }
+        bEn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { setMargins(dp(6), 0, 0, 0) }
+        rowBox.addView(bSystem); rowBox.addView(bRu); rowBox.addView(bEn)
+        box.addView(rowBox)
+        fun paint() {
+            val sel = L10nUi.saved(this@MainActivity)
+            val on = 0xFF2E7D32.toInt()
+            val off = 0x00FFFFFF
+            bSystem.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == L10nUi.LANG_SYSTEM) on else off)
+            bRu.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == L10nUi.LANG_RU) on else off)
+            bEn.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == L10nUi.LANG_EN) on else off)
+        }
+        fun pick(mode: String) {
+            val old = L10nUi.saved(this@MainActivity)
+            val norm = L10nUi.save(this@MainActivity, mode)
+            if (norm == old) return
+            TunnelService.logSettingChange(getString(R.string.settings_language), old, norm)
+            renderServiceLogs()
+            // Язык применяем перезаданием базового контекста: recreate пересоздаёт
+            // Activity → attachBaseContext возьмёт новую локаль из prefs.
+            recreate()
+        }
+        bSystem.setOnClickListener { pick(L10nUi.LANG_SYSTEM) }
+        bRu.setOnClickListener { pick(L10nUi.LANG_RU) }
+        bEn.setOnClickListener { pick(L10nUi.LANG_EN) }
+        paint()
+        return box
+    }
+
+    private fun outlinedLang(textRes: Int) =
+        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            setText(textRes)
+        }
+
     private fun outlined(textRes: Int) =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             setText(textRes)
@@ -1044,8 +1107,8 @@ class MainActivity : AppCompatActivity() {
     private fun filled(textRes: Int) = MaterialButton(this).apply { setText(textRes) }
 
     private fun describeLimit(bytes: Long, period: String, day: Int): String {
-        if (bytes <= 0) return "без ограничений"
-        val pr = if (period == TunnelService.PERIOD_MONTH) "месяц (сброс $day)" else "сутки"
+        if (bytes <= 0) return getString(R.string.limit_none)
+        val pr = if (period == TunnelService.PERIOD_MONTH) getString(R.string.limit_period_month, day) else getString(R.string.limit_period_day)
         return "${fmtBytes(bytes)}/$pr"
     }
 
@@ -1321,12 +1384,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun fmtBytes(b: Long): String = when {
-        b >= 1L shl 30 -> String.format(Locale.US, "%.2f ГБ", b / 1073741824.0)
-        b >= 1L shl 20 -> String.format(Locale.US, "%.1f МБ", b / 1048576.0)
-        b >= 1L shl 10 -> String.format(Locale.US, "%.1f КБ", b / 1024.0)
-        else -> "$b Б"
-    }
+    // v0.8.3: единицы из ресурсов (динамический язык) — общий Formats (дубль удалён)
+    private fun fmtBytes(b: Long): String = Formats.bytes(this, b)
 
     // ================================================================= Файлы
 
@@ -1546,7 +1605,7 @@ class MainActivity : AppCompatActivity() {
                                 lastPct = pct
                                 val secs = ((System.currentTimeMillis() - start).coerceAtLeast(1)) / 1000.0
                                 val kbps = total / 1024.0 / secs
-                                UpdateLogger.add(getString(R.string.modules_progress, pct, String.format(Locale.US, "%.0f КБ/с", kbps)))
+                                UpdateLogger.add(getString(R.string.modules_progress, pct, Formats.kbps(this, kbps)))
                             }
                         }
                     }
@@ -1688,7 +1747,7 @@ class MainActivity : AppCompatActivity() {
                                 if (pct >= lastPct + 10) {
                                     lastPct = pct
                                     val secs = ((System.currentTimeMillis() - start).coerceAtLeast(1)) / 1000.0
-                                    val speed = String.format(Locale.US, "%.0f КБ/с", total / 1024.0 / secs)
+                                    val speed = Formats.kbps(this, total / 1024.0 / secs)
                                     UpdateLogger.add(getString(R.string.update_progress, pct, speed))
                                 }
                             }
@@ -1939,13 +1998,13 @@ class MainActivity : AppCompatActivity() {
                 )
                 external?.let { e ->
                     infoRow(
-                        netInfoBox, "Внешний IP",
+                        netInfoBox, getString(R.string.net_external_ip),
                         "${e.ip}${e.country?.let { " · $it" } ?: ""}${e.isp?.let { " · $it" } ?: ""}" +
                             (if (e.source.isNotEmpty()) " · ${getString(R.string.netinfo_source, e.source)}" else ""),
                     )
                 }
                 if (dns == null) {
-                    infoRow(netInfoBox, "DNS", "не удалось собрать факты")
+                    infoRow(netInfoBox, "DNS", getString(R.string.net_facts_failed))
                 } else {
                     for ((k, v) in DnsProbe.describe(dns)) {
                         infoRow(netInfoBox, k, v)

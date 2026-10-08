@@ -46,11 +46,11 @@ sealed class RrpFrame(val type: Int) {
         val max = maxPayloadFor(type)
         if (payload.size > max) {
             throw RrpFrameException(
-                "payload ${payload.size} > лимита $max для типа 0x${Integer.toHexString(type)}"
+                Msgs.FRAME_PAYLOAD_LIMIT.t(payload.size, max, Integer.toHexString(type))
             )
         }
-        if (streamId !in 0..0xFFFFFFFFL) throw RrpFrameException("stream_id вне u32: $streamId")
-        if (flags !in 0..0xFFFF) throw RrpFrameException("flags вне u16: $flags")
+        if (streamId !in 0..0xFFFFFFFFL) throw RrpFrameException(Msgs.STREAM_ID_RANGE.t(streamId))
+        if (flags !in 0..0xFFFF) throw RrpFrameException(Msgs.FLAGS_RANGE.t(flags))
         val out = ByteArray(HEADER_SIZE + payload.size)
         out[0] = VERSION.toByte()
         out[1] = type.toByte()
@@ -96,7 +96,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromJson(p: ByteArray): Hello {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("HELLO: некорректный JSON")
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.HELLO_BAD_JSON.t())
                 val caps = (m["caps"] ?: "")
                     .split(',')
                     .map { it.trim().trim('"') }
@@ -139,7 +139,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromJson(p: ByteArray): HelloOk {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("HELLO_OK: некорректный JSON")
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.HELLO_OK_BAD_JSON.t())
                 return HelloOk(
                     sessionId = m["session_id"] ?: "",
                     serverVer = m["server_ver"] ?: "",
@@ -170,7 +170,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromJson(p: ByteArray): Auth {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("AUTH: некорректный JSON")
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.AUTH_BAD_JSON.t())
                 return Auth(m["mode"] ?: "", m["hmac"] ?: "", m["nonce"] ?: "")
             }
         }
@@ -199,7 +199,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromJson(p: ByteArray): Ready {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("READY: некорректный JSON")
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.READY_BAD_JSON.t())
                 return Ready(
                     tunnelId = m["tunnel_id"] ?: "",
                     role = m["role"] ?: "",
@@ -230,18 +230,18 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(streamId: Long, p: ByteArray): Open {
-                if (p.isEmpty()) throw RrpFrameException("OPEN: пустой payload")
+                if (p.isEmpty()) throw RrpFrameException(Msgs.OPEN_EMPTY.t())
                 val atyp = p[0].toInt() and 0xFF
                 val (addrOff, addrLen) = when (atyp) {
                     RrpAddress.ATYP_IPV4 -> 1 to 4
                     RrpAddress.ATYP_IPV6 -> 1 to 16
                     RrpAddress.ATYP_DOMAIN -> {
-                        if (p.size < 2) throw RrpFrameException("OPEN: нет длины домена")
+                        if (p.size < 2) throw RrpFrameException(Msgs.OPEN_NO_HOSTLEN.t())
                         2 to (p[1].toInt() and 0xFF)
                     }
-                    else -> throw RrpFrameException("OPEN: неизвестный ATYP $atyp")
+                    else -> throw RrpFrameException(Msgs.OPEN_BAD_ATYP.t(atyp))
                 }
-                if (p.size < addrOff + addrLen + 2) throw RrpFrameException("OPEN: короткий payload")
+                if (p.size < addrOff + addrLen + 2) throw RrpFrameException(Msgs.OPEN_SHORT.t())
                 val addr = p.copyOfRange(addrOff, addrOff + addrLen)
                 return Open(streamId, atyp, addr, getU16(p, addrOff + addrLen))
             }
@@ -257,7 +257,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(streamId: Long, p: ByteArray): OpenOk {
-                if (p.size != 1) throw RrpFrameException("OPEN_OK: ожидался 1 байт, получено ${p.size}")
+                if (p.size != 1) throw RrpFrameException(Msgs.OPEN_OK_SIZE.t(p.size))
                 return OpenOk(streamId, p[0].toInt() and 0xFF)
             }
         }
@@ -281,7 +281,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(streamId: Long, p: ByteArray): Close {
-                if (p.size != 1) throw RrpFrameException("CLOSE: ожидался 1 байт, получено ${p.size}")
+                if (p.size != 1) throw RrpFrameException(Msgs.CLOSE_SIZE.t(p.size))
                 return Close(streamId, p[0].toInt() and 0xFF)
             }
         }
@@ -296,7 +296,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(streamId: Long, p: ByteArray): Window {
-                if (p.size != 4) throw RrpFrameException("WINDOW: ожидалось 4 байта, получено ${p.size}")
+                if (p.size != 4) throw RrpFrameException(Msgs.WINDOW_SIZE.t(p.size))
                 return Window(streamId, getU32(p, 0))
             }
         }
@@ -308,7 +308,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(p: ByteArray): Ping {
-                if (p.size != 8) throw RrpFrameException("PING: ожидался 8-байтовый nonce, получено ${p.size}")
+                if (p.size != 8) throw RrpFrameException(Msgs.PING_SIZE.t(p.size))
                 return Ping(p.copyOf())
             }
         }
@@ -320,7 +320,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(p: ByteArray): Pong {
-                if (p.size != 8) throw RrpFrameException("PONG: ожидался 8-байтовый nonce, получено ${p.size}")
+                if (p.size != 8) throw RrpFrameException(Msgs.PONG_SIZE.t(p.size))
                 return Pong(p.copyOf())
             }
         }
@@ -354,18 +354,18 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(streamId: Long, p: ByteArray): UdpData {
-                if (p.isEmpty()) throw RrpFrameException("UDP_DATA: пустой payload")
+                if (p.isEmpty()) throw RrpFrameException(Msgs.UDP_EMPTY.t())
                 val atyp = p[0].toInt() and 0xFF
                 val (addrOff, addrLen) = when (atyp) {
                     RrpAddress.ATYP_IPV4 -> 1 to 4
                     RrpAddress.ATYP_IPV6 -> 1 to 16
                     RrpAddress.ATYP_DOMAIN -> {
-                        if (p.size < 2) throw RrpFrameException("UDP_DATA: нет длины домена")
+                        if (p.size < 2) throw RrpFrameException(Msgs.UDP_NO_HOSTLEN.t())
                         2 to (p[1].toInt() and 0xFF)
                     }
-                    else -> throw RrpFrameException("UDP_DATA: неизвестный ATYP $atyp")
+                    else -> throw RrpFrameException(Msgs.UDP_BAD_ATYP.t(atyp))
                 }
-                if (p.size < addrOff + addrLen + 2) throw RrpFrameException("UDP_DATA: короткий payload")
+                if (p.size < addrOff + addrLen + 2) throw RrpFrameException(Msgs.UDP_SHORT.t())
                 val port = getU16(p, addrOff + addrLen)
                 val dataOff = addrOff + addrLen + 2
                 return UdpData(streamId, atyp, p.copyOfRange(addrOff, addrOff + addrLen), port,
@@ -400,7 +400,7 @@ sealed class RrpFrame(val type: Int) {
         companion object {
             internal fun fromPayload(p: ByteArray): ProbeResp {
                 val m = MiniJson.parseFlat(p)
-                    ?: throw RrpFrameException("PROBE: некорректный JSON")
+                    ?: throw RrpFrameException(Msgs.PROBE_BAD_JSON.t())
                 return ProbeResp(
                     ok = (m["ok"] ?: "false") == "true",
                     err = m["err"] ?: "",
@@ -423,7 +423,7 @@ sealed class RrpFrame(val type: Int) {
             internal fun fromPayload(p: ByteArray): Noise {
                 val s = String(p, Charsets.UTF_8).trim()
                 if (s.isEmpty() || s[0] != '{' || s[s.length - 1] != '}') {
-                    throw RrpFrameException("NOISE: ожидался JSON-объект")
+                    throw RrpFrameException(Msgs.NOISE_NOT_JSON.t())
                 }
                 // ВАЖНО: тела NOISE содержат ВЛОЖЕННЫЕ объекты/массивы —
                 // MiniJson.parseFlat умеет только плоские, поэтому здесь
@@ -431,7 +431,7 @@ sealed class RrpFrame(val type: Int) {
                 // битый кадр = мусор шума, а не повод рвать туннель... но канал
                 // декодирования кадров строгий: мусор отсекается здесь.
                 if (!balancedJson(s)) {
-                    throw RrpFrameException("NOISE: некорректный JSON")
+                    throw RrpFrameException(Msgs.NOISE_BAD_JSON.t())
                 }
                 return Noise(s)
             }
@@ -484,7 +484,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(p: ByteArray): KeyReq {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("KEY_REQ: некорректный JSON")
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_REQ_BAD_JSON.t())
                 return KeyReq(m["p"] ?: "", m["g"]?.toIntOrNull() ?: 0, m["g_a"] ?: "")
             }
         }
@@ -498,7 +498,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(p: ByteArray): KeyResp {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException("KEY_RESP: некорректный JSON")
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_RESP_BAD_JSON.t())
                 return KeyResp(m["g_b"] ?: "")
             }
         }
@@ -518,7 +518,7 @@ sealed class RrpFrame(val type: Int) {
         override fun buildPayload(): ByteArray {
             val msg = message.toByteArray(Charsets.UTF_8)
             if (msg.size > MAX_CONTROL_PAYLOAD - 2) {
-                throw RrpFrameException("ERROR: сообщение длиннее лимита контрольного кадра")
+                throw RrpFrameException(Msgs.ERROR_TOO_LONG.t())
             }
             val p = ByteArray(2 + msg.size)
             putU16(p, 0, code)
@@ -528,7 +528,7 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(p: ByteArray): ErrorFrame {
-                if (p.size < 2) throw RrpFrameException("ERROR: короткий payload")
+                if (p.size < 2) throw RrpFrameException(Msgs.ERROR_SHORT.t())
                 return ErrorFrame(getU16(p, 0), String(p, 2, p.size - 2, Charsets.UTF_8))
             }
         }
@@ -571,7 +571,7 @@ sealed class RrpFrame(val type: Int) {
             val header = ByteArray(HEADER_SIZE)
             readFully(source, header)
             val ver = header[0].toInt() and 0xFF
-            if (ver != VERSION) throw RrpFrameException("неподдерживаемая версия кадра: $ver")
+            if (ver != VERSION) throw RrpFrameException(Msgs.FRAME_VERSION.t(ver))
             val type = header[1].toInt() and 0xFF
             val flags = getU16(header, 2)
             val streamId = getU32(header, 4)
@@ -579,7 +579,7 @@ sealed class RrpFrame(val type: Int) {
             val max = maxPayloadFor(type)
             if (len > max) {
                 throw RrpFrameException(
-                    "payload $len > лимита $max для типа 0x${Integer.toHexString(type)}"
+                    Msgs.FRAME_PAYLOAD_LIMIT.t(len, max, Integer.toHexString(type))
                 )
             }
             val payload = ByteArray(len.toInt())
@@ -610,14 +610,14 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_NOISE -> Noise.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)
-                else -> throw RrpFrameException("неизвестный тип кадра 0x${Integer.toHexString(type)}")
+                else -> throw RrpFrameException(Msgs.UNKNOWN_FRAME.t(Integer.toHexString(type)))
             }
 
         private fun readFully(input: InputStream, buf: ByteArray) {
             var off = 0
             while (off < buf.size) {
                 val n = input.read(buf, off, buf.size - off)
-                if (n < 0) throw EOFException("RRP: обрыв потока (ожидалось ещё ${buf.size - off} байт)")
+                if (n < 0) throw EOFException(Msgs.STREAM_TRUNCATED.t(buf.size - off))
                 off += n
             }
         }

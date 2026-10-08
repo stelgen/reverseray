@@ -3,6 +3,7 @@ package dev.stelgen.reverseray.net
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import dev.stelgen.reverseray.core.Msgs
 import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -82,7 +83,7 @@ object DnsProbe {
             val m = at.getMethod("currentApplication")
             m.invoke(null) as android.content.Context
         } catch (_: Throwable) {
-            throw IllegalStateException("нет контекста приложения")
+            throw IllegalStateException(Msgs.DP_NO_CONTEXT.t())
         }
     }
 
@@ -282,7 +283,7 @@ object DnsProbe {
             dotReachable = dot,
             dohReachable = doh,
             ecsSentByApp = false,
-            sniEncryption = "не поддерживается уровнем ОС (SNI уходит открытым внутри TLS-соединений приложений)",
+            sniEncryption = Msgs.DP_SNI_OS.t(),
             checkedAtMs = System.currentTimeMillis(),
         )
         last = info
@@ -295,30 +296,30 @@ object DnsProbe {
     /** Человекочитаемые строки для вкладки «О сети». */
     fun describe(info: DnsInfo): List<Pair<String, String>> {
         val out = mutableListOf<Pair<String, String>>()
-        out.add("DNS-серверы системы" to (info.servers.joinToString(", ").ifEmpty { "не определены" }))
+        out.add(Msgs.DP_SYSTEM_DNS.t() to (info.servers.joinToString(", ").ifEmpty { Msgs.DP_NOT_DETERMINED.t() }))
         out.add(
-            "Кто реально резолвит" to (info.realResolver?.let {
-                val tag = if (info.realResolverIsRouter == true) " (это ваш системный DNS — роутер)" else " (верхний резолв, не роутер)"
+            Msgs.DP_REAL_RESOLVER.t() to (info.realResolver?.let {
+                val tag = if (info.realResolverIsRouter == true) Msgs.DP_ROUTER_SUFFIX.t() else Msgs.DP_UPPER_SUFFIX.t()
                 it + tag
-            } ?: "не удалось определить"),
+            } ?: Msgs.DP_UNDEFINED.t()),
         )
-        out.add("DNSSEC (AD на подписанной зоне)" to when (info.dnssecOk) {
-            true -> "да — резолвер валидирует"
-            false -> "нет — AD не ставится"
-            null -> "не удалось проверить"
+        out.add(Msgs.DP_DNSSEC.t() to when (info.dnssecOk) {
+            true -> Msgs.DP_DNSSEC_YES.t()
+            false -> Msgs.DP_DNSSEC_NO.t()
+            null -> Msgs.DP_DNSSEC_FAIL.t()
         })
         out.add("DoT (TCP 853)" to when (info.dotReachable) {
-            true -> "доступен"
-            false -> "недоступен"
-            null -> "не проверен"
+            true -> Msgs.DP_DOT_AVAILABLE.t()
+            false -> Msgs.DP_DOT_UNAVAILABLE.t()
+            null -> Msgs.DP_NOT_CHECKED.t()
         })
         out.add("DoH (dns-query HTTPS)" to when (info.dohReachable) {
-            true -> "доступен в этой сети"
-            false -> "недоступен (заблокирован/нет выхода)"
-            null -> "не проверен"
+            true -> Msgs.DP_ECS_AVAILABLE.t()
+            false -> Msgs.DP_ECS_UNAVAILABLE.t()
+            null -> Msgs.DP_NOT_CHECKED.t()
         })
-        out.add("ECS (Client Subnet)" to if (info.ecsSentByApp) "шлётся" else "не шлётся приложением (мы не отправляем)")
-        out.add("Шифрование SNI (ECH)" to info.sniEncryption)
+        out.add("ECS (Client Subnet)" to if (info.ecsSentByApp) Msgs.DP_ECC_SENT.t() else Msgs.DP_ECC_NOT_SENT.t())
+        out.add(Msgs.DP_ECH.t() to info.sniEncryption)
         return out
     }
 }
