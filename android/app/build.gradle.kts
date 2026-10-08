@@ -31,12 +31,23 @@ android {
 
     // Universal APK: splits/abiFilters намеренно не объявлены — один APK на все ABI.
 
-    // BouncyCastle jars тянут OSGI-манифесты в META-INF/versions/9 — дубли в пакете
+    // BouncyCastle jars тянут OSGI-манифесты в META-INF/versions (1.80 → /9, 1.86+ → /17,
+    // дублируются в bcprov и bctls) — в APK не нужны, wildcard на любую Java-версию
     packaging {
         resources {
             excludes += setOf(
-                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "META-INF/versions/*/OSGI-INF/MANIFEST.MF",
                 "META-INF/OSGI-INF/MANIFEST.MF",
+                // BC 1.86+: лицензионные файлы дублируются в каждом jar (bcprov/bctls/bcutil)
+                "META-INF/LICENSE.md",
+                "META-INF/LICENSE.html",
+                "META-INF/NOTICE.md",
+                "META-INF/NOTICE.txt",
+                "META-INF/DEPENDENCIES",
+                // подписи jar в APK не нужны
+                "META-INF/*.RSA",
+                "META-INF/*.SF",
+                "META-INF/*.DSA",
                 "META-INF/{AL2.0,LGPL2.1}",
             )
         }
@@ -126,8 +137,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.bouncycastle.bcpkix) // генерация self-signed сертификата в evil-server тестах
-    testImplementation("org.robolectric:robolectric:4.14.1")
-    testImplementation("androidx.test:core-ktx:1.7.0")
+    testImplementation("org.robolectric:robolectric:4.14.1") // пин: 4.15+ теряет SDK 21 (MainActivityApi21Test) — бампить только координированно
+    testImplementation("androidx.test:core-ktx:1.7.0") // 1.7.0 (minSdk 21) ок: test-only + tools:overrideLibrary в манифесте (см. AndroidManifest.xml)
 }
 
 // Kotlin 2.4+: jvmTarget через compilerOptions (DSL kotlinOptions удалён);

@@ -1,4 +1,6 @@
 [versions]
+# AGP пин 8.7.3: 8.13+ мержит манифесты тест-зависимостей (processDebugUnitTestManifest)
+# и игнорирует tools:overrideLibrary — несовместимо с minSdk 14. Только координированный апгрейд (PR #18 отклонён).
 agp = "8.7.3"
 kotlin = "2.4.20"
 

@@ -26,8 +26,15 @@ updates:
       # material новее 1.9.0 тоже уходит с minSdk 14
       - dependency-name: "com.google.android.material:material"
         versions: [">=1.10"]
+      # robolectric 4.15+ теряет SDK 21 — а это наш тест Android 4+ совместимости
+      - dependency-name: "org.robolectric:robolectric"
+        versions: [">=4.15"]
+      # androidx.test:core-ktx (minSdk 19/21) разрешён любым — test-only, в APK не попадает
+      # и под AGP 8.7.3 unit-test манифест-мерж его не трогает
+      # AGP любой версии — только координированный апгрейд руками: 8.13+ ломает minSdk 14
+      # (unit-test манифест-мерж без overrideLibrary), патчи тоже через политику
       - dependency-name: "com.android.application"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
       - dependency-name: "gradle-wrapper"
         update-types: ["version-update:semver-major"]
       - dependency-name: "org.jetbrains.kotlin.android"

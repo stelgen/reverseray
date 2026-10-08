@@ -10,11 +10,16 @@
   (#11, согласованный сет из 4 артефактов), Gradle wrapper **8.9 → 8.14.5** (#13),
   `androidx.test:core-ktx` 1.6.1 → 1.7.0 (#14), группа github-actions — 9 actions
   (#16: setup-go v7, setup-java v6, codeql v4, artifact v6, gitleaks v3, docker v4).
-- Политика пинов: `androidx.core:core-ktx >=1.10` и `material >=1.10`
-  добавлены в `ignore` Dependabot — новее уходят с minSdk 14, PR #15 закрыт
-  по политике (Android 4+ остаётся заявленной поддержкой).
+- Политика пинов ( Dependabot `ignore`): `androidx.core:core-ktx >=1.10`,
+  `material >=1.10`, `robolectric >=4.15` (теряет SDK 21 — наш тест Android 4+),
+  AGP **любой** версии (только координированный апгрейд): PR #15, #17, #18
+  закрыты по политике — Android 4+ остаётся заявленной поддержкой.
+- `androidx.test:core-ktx` 1.7.0 (#14): test-only, в APK не попадает, под AGP 8.7.3
+  совместим — оставлен; `assets/brand/requirements.txt` создан (pip-экосистема
+  Dependabot получала ошибку из-за отсутствия манифеста).
 - Проверено локально: `go vet + test` (63, зелёные), полная пересборка
-  `compileDebugKotlin + testDebugUnitTest` (101, зелёные) на Kotlin 2.4.20.
+  `compileDebugKotlin + testDebugUnitTest + assembleDebug` (101, зелёные)
+  на Kotlin 2.4.20 + Gradle 8.14.5.
 
 ## [0.7.4] — 2026-10-08
 

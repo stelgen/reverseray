@@ -1,0 +1,3 @@
+# Генерация бренд-ассетов (generate.py): иконки, фавиконы, мокапы, скриншоты.
+# Обновляется Dependabot (ecosystem: pip, directory: /assets/brand).
+Pillow==12.3.0
