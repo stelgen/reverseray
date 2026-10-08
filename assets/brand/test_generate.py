@@ -30,7 +30,7 @@ class OgImageTest(unittest.TestCase):
         self.img = generate.og_image()
 
     def test_dimensions(self):
-        self.assertEqual(self.img.size, (1280, 640))
+        self.assertEqual(self.img.size, (1600, 640))
 
     def test_background_is_black(self):
         # corners must be pure black (minimal dark background)
@@ -39,14 +39,14 @@ class OgImageTest(unittest.TestCase):
 
     def test_wordmark_rendered(self):
         # text zone: bright (white) pixels must exist where the wordmark is drawn
-        zone = self.img.crop((420, 200, 1240, 420)).convert("L")
+        zone = self.img.crop((576, 170, 1240, 340)).convert("L")
         bright = sum(1 for v in zone.getdata() if v > 220)
         self.assertGreater(bright, 2000, "wordmark pixels not found — font missing or moved")
 
     def test_accent_line_present(self):
         # accent ray line: saturated accent pixels must exist under the wordmark
-        # geometry: line at y = h//2 - 40 + 74 = 354, x from tx=340, width 560
-        zone = self.img.crop((340, 344, 1000, 364)).convert("RGB")
+        # geometry: line at y=366, x from tx=576, width 544
+        zone = self.img.crop((576, 360, 1120, 374)).convert("RGB")
         accent = sum(
             1 for r, g, b in zone.getdata()
             if b > 150 and b > r + 40 and g > r
@@ -56,8 +56,8 @@ class OgImageTest(unittest.TestCase):
     def test_tagline_fits_inside_canvas(self):
         # regression: tagline must never be clipped at the right edge
         tagline = "ANDROID EGRESS   ·   TLS 1.3   ·   SOCKS5/HTTP"
-        f = generate.fit_font(tagline, 1280 - 340 - 48, 38)
-        self.assertLessEqual(f.getlength(tagline), 1280 - 340 - 48)
+        f = generate.fit_font(tagline, 1600 - 576 - 60, 40)
+        self.assertLessEqual(f.getlength(tagline), 1600 - 576 - 60)
 
     def test_deterministic_bytes(self):
         a = generate.og_image()
@@ -73,14 +73,24 @@ class LogoTest(unittest.TestCase):
             img = generate.logo_png(size)
             self.assertEqual(img.size, (size, size))
 
-    def test_logo_has_sphere_and_accent(self):
+    def test_logo_emblem_arrow_through_wall(self):
+        """Эмблема: белая стрелка по центру, accent-точка выхода справа."""
         img = generate.logo_png(256).convert("RGB")
-        # sphere body color present
-        self.assertIn((30, 90, 160), [img.getpixel(xy) for xy in [(128, 100), (128, 115), (110, 110)]])
-        # accent ray pixel present near bottom-right
-        accent = sum(1 for xy in [(230, 230), (235, 235), (225, 235)]
-                     if img.getpixel(xy) == generate.ACCENT)
-        self.assertGreater(accent, 0, "accent ray not found")
+        cy = 128
+        self.assertEqual(img.getpixel((110, cy)), (255, 255, 255), "arrow body missing")
+        self.assertEqual(img.getpixel((256 // 2, cy)), (255, 255, 255), "arrow must cross the wall")
+        # exit-dot: accent присутствует около правого края на оси стрелки
+        accent = [img.getpixel((x, cy)) for x in range(200, 250)]
+        self.assertTrue(any(p == generate.ACCENT or (p[2] > 200 and p[0] < 100) for p in accent),
+                        "accent exit dot not found")
+
+    def test_logo_gradient_background(self):
+        """Иконка: диагональный градиент бренда (тёмно-синий -> голубой)."""
+        img = generate.logo_png(256).convert("RGB")
+        tl = img.getpixel((8, 8))
+        br = img.getpixel((247, 247))
+        self.assertLess(sum(tl), sum(br), "gradient must darken to top-left")
+        self.assertGreater(sum(br), sum(tl), "gradient must lighten to bottom-right")
 
 
 class CommittedAssetsTest(unittest.TestCase):

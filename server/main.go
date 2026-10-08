@@ -114,13 +114,15 @@ func cmdEnroll(args []string) error {
 		*stateDir = "/var/lib/reverseray"
 	}
 
-	// Внешний IP: автоопределение, если -host не задан вручную.
+	// Порядок: -host вручную -> RR_PUBLIC_HOST (домен/DDNS) -> автоопределение IP.
 	if *host == "" {
-		ip, err := detectExternalIP()
-		if err != nil {
+		if env := os.Getenv("RR_PUBLIC_HOST"); env != "" {
+			*host = env
+		} else if ip, err := detectExternalIP(); err != nil {
 			return fmt.Errorf("enroll: не удалось определить внешний IP (%v); задай -host вручную", err)
+		} else {
+			*host = ip
 		}
-		*host = ip
 	}
 
 	// Генерация токена.
@@ -132,11 +134,9 @@ func cmdEnroll(args []string) error {
 	sum := sha256.Sum256([]byte(token))
 	hashB64 := base64.RawURLEncoding.EncodeToString(sum[:])
 
-	// Токен сразу пишется в tokens.json: ручное редактирование не требуется.
-	// Сервер подхватывает изменения файла автоматически (poll mtime, до 3 с).
-	if err := upsertToken(*stateDir, *name, hashB64); err != nil {
-		return fmt.Errorf("enroll: записать токен: %v", err)
-	}
+	// Токен пишется в tokens.json автоматически. Если запись невозможна
+	// (права/RO-файловая система) — НЕ фейлим: печатаем токен и инструкцию.
+	writeErr := upsertToken(*stateDir, *name, hashB64)
 
 	pin := ""
 	pinPath := filepath.Join(*stateDir, "ca.pem")
@@ -144,9 +144,16 @@ func cmdEnroll(args []string) error {
 		pin = caPinFromPEM(b)
 	}
 
-	fmt.Printf("Устройство %q добавлено. Конфигурационная строка для приложения:\n\n", *name)
+	if writeErr != nil {
+		fmt.Printf("# НЕ удалось записать %s (%v).\n", filepath.Join(*stateDir, "tokens.json"), writeErr)
+		fmt.Printf("# Добавь запись в \"devices\" вручную и перечитай токены (SIGHUP):\n")
+		inst, _ := json.MarshalIndent(map[string]string{"device": *name, "sha256_b64url": hashB64}, "", "  ")
+		fmt.Printf("%s\n\n", inst)
+	} else {
+		fmt.Printf("Устройство %q добавлено. Сервер подхватит токен автоматически (до 3 с).\n\n", *name)
+	}
+	fmt.Printf("Конфигурационная строка для приложения:\n\n")
 	fmt.Printf("rrp://%s@%s:%s/?pin=%s&name=%s\n\n", token, *host, *port, pin, *name)
-	fmt.Printf("Сервер подхватит токен автоматически (до 3 с). Вставь строку в приложение\nили отсканируй QR-код из меню приложения.\n")
 	return nil
 }
 

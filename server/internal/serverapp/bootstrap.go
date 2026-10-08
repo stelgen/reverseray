@@ -98,11 +98,16 @@ func ensureDefaultDevice(cfg *config.Config, log *slog.Logger) {
 // logConnectInfo: асинхронно (не блокируя старт) определяет публичный IP и
 // печатает в лог готовую конфигурационную строку для приложения.
 func (a *App) logConnectInfo(ctx context.Context) {
-	ip, err := DetectExternalIP(5 * time.Second)
-	if err != nil {
-		a.log.Info("connect info: внешний IP не определён автоматически — используйте enroll -host HOST",
-			"ca_pin", a.bundle.CAPin, "err", err.Error())
-		return
+	// Приоритет: RR_PUBLIC_HOST (домен/DDNS) -> автоопределённый внешний IP.
+	host := a.cfg.PublicHost
+	if host == "" {
+		ip, err := DetectExternalIP(5 * time.Second)
+		if err != nil {
+			a.log.Info("connect info: внешний IP не определён автоматически — используйте enroll -host HOST",
+				"ca_pin", a.bundle.CAPin, "err", err.Error())
+			return
+		}
+		host = ip
 	}
 	// Первый токен из хранилища (bootstrap создаёт phone-1; enroll добавляет свои).
 	if a.cfg.TokensFile == "" {
@@ -110,7 +115,7 @@ func (a *App) logConnectInfo(ctx context.Context) {
 	}
 	a.log.Info("connect info",
 		"ca_pin", a.bundle.CAPin,
-		"public_ip", ip,
+		"host", host,
 		"tunnel_port", "4433",
 		"next_step", "docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name DEVICE  ->  печатает полную rrp:// строку для приложения",
 	)

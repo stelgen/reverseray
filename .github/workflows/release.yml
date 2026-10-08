@@ -89,7 +89,7 @@ jobs:
           java-version: "17"
       - name: Build release APK
         env:
-          # подпишется, если секреты заданы; иначе unsigned артефакт
+          # подпись: секреты владельца при наличии, иначе репозиторный ключ
           RR_KEYSTORE: ${{ secrets.RR_KEYSTORE }}
           RR_KEYSTORE_PASSWORD: ${{ secrets.RR_KEYSTORE_PASSWORD }}
           RR_KEY_ALIAS: ${{ secrets.RR_KEY_ALIAS }}
@@ -97,10 +97,12 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease --no-daemon
+          # имя артефакта: reverseray-<версия>.apk (не «app-release»)
+          mv app/build/outputs/apk/release/app-release.apk              app/build/outputs/apk/release/reverseray-${GITHUB_REF_NAME#v}.apk
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: android/app/build/outputs/apk/release/reverseray-*.apk
           if-no-files-found: error
 
   github-release:

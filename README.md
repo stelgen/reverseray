@@ -67,16 +67,20 @@ sequenceDiagram
 ### Быстрый старт
 
 ```bash
+# пример для Portainer-машины: каталог /portainer/Files/AppData/Config/reverseray
+sudo mkdir -p /portainer/Files/AppData/Config/reverseray
+cd /portainer/Files/AppData/Config/reverseray
+
 sudo git clone https://github.com/stelgen/reverseray.git
 cd reverseray
 
-sudo mkdir -p state && sudo chown 65532:65532 state
-docker compose up -d
-sudo docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1
+sudo docker compose up -d          # сервер сам создаст state/tokens.json (device phone-1)
+sudo docker compose logs reverseray | grep connect   # CA-pin + публичный IP + подсказка enroll
 ```
 
 `enroll` сам определит внешний IP сервера, сам добавит токен в
-`state/tokens.json` и напечатает готовую строку вида:
+`state/tokens.json` и напечатает готовую строку вида (каталог и права
+создаются автоматически — ручных действий нет):
 
 ```
 rrp://<token>@81.25.59.194:4433/?pin=<CA_PIN>&name=phone-1
@@ -94,9 +98,11 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 ### Обновление
 
 ```bash
-docker compose pull && docker compose up -d
-docker compose exec reverseray /reverseray reset-state -state-dir /var/lib/reverseray
-docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1
+cd /portainer/Files/AppData/Config/reverseray/reverseray
+sudo git pull
+sudo docker compose pull && sudo docker compose up -d
+sudo docker compose exec reverseray /reverseray reset-state -state-dir /var/lib/reverseray
+sudo docker compose exec reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1
 ```
 
 `reset-state` сбрасывает токены («чистый лист» при редеплое); приложение

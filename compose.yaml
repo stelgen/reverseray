@@ -9,6 +9,7 @@ services:
       - "127.0.0.1:${RR_METRICS_PORT:-9090}:9090" # admin/metrics только с localhost
     environment:
       RR_STATE_DIR: /var/lib/reverseray
+      # RR_PUBLIC_HOST: my-home.example.com   # DDNS-домен: используется в конфиг-строках вместо IP
       RR_LISTEN_TUNNELS: ":4433"
       RR_LISTEN_MIXED: ":1080"
       RR_LISTEN_ADMIN_TCP: ":9090"
@@ -16,7 +17,10 @@ services:
     volumes:
       - ./state:/var/lib/reverseray
       # - ./config.json:/etc/reverseray/config.json:ro
-    user: "65532:65532"
+    # user закомментирован сознательно: контейнер пишет в volume под root,
+    # права на host-каталоге не важны (sudo chown не требуется).
+    # Для hardening: раскомментируй и выполни chown 65532:65532 state на хосте.
+    # user: "65532:65532"
     read_only: true
     tmpfs:
       - /tmp

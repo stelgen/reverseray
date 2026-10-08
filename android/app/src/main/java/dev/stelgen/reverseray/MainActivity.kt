@@ -167,6 +167,7 @@ class MainActivity : AppCompatActivity() {
         configView = TextInputEditText(this@MainActivity).apply {
             setText(prefs().getString(TunnelService.KEY_CONFIG, ""))
             minLines = 2
+            minHeight = dp(72) // фиксированная высота поля: кнопки не двигаются
         }
         layout.addView(configView)
         root.addView(layout)
@@ -238,7 +239,7 @@ class MainActivity : AppCompatActivity() {
             background = null
         })
 
-        setContentView(root)
+        setContentView(android.widget.ScrollView(this).apply { addView(root); setFillViewport(true) })
     }
 
     // ---------- статусная визуализация ----------

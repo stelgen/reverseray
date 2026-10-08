@@ -13,6 +13,10 @@ import (
 
 // Config is the full server configuration.
 type Config struct {
+	// PublicHost — доменное имя/хост для конфигурационных строк (DDNS).
+	// Пусто — используется автоопределённый внешний IP.
+	PublicHost string `json:"public_host"`
+
 	Listen struct {
 		Tunnels   string   `json:"tunnels"`   // TLS listener for phones
 		Mixed     string   `json:"mixed"`     // SOCKS5+HTTP autodetect
@@ -55,6 +59,7 @@ type Config struct {
 func Default() *Config {
 	var c Config
 	c.Listen.Tunnels = ":4433"
+	c.PublicHost = ""
 	c.Listen.Mixed = ":1080"
 	c.Listen.AdminTCP = "127.0.0.1:9090"
 	c.Listen.TLSHosts = []string{"localhost"}
@@ -98,6 +103,7 @@ func (c *Config) applyEnv() {
 			*dst = v
 		}
 	}
+	setStr(&c.PublicHost, "RR_PUBLIC_HOST")
 	setStr(&c.Listen.Tunnels, "RR_LISTEN_TUNNELS")
 	setStr(&c.Listen.Mixed, "RR_LISTEN_MIXED")
 	setStr(&c.Listen.Socks, "RR_LISTEN_SOCKS")
