@@ -10,6 +10,8 @@ data class NetInfo(
     val country: String?,
     val countryCode: String?,
     val isp: String?,
+    // v0.8.1: какой источник ответил (канон честности — показываем в UI)
+    val source: String = "",
 ) {
     /** Флаг-эмодзи по ISO-коду страны (regional indicators). */
     fun flagEmoji(): String {
@@ -30,8 +32,15 @@ data class NetInfo(
  *   1. https://ipwho.is/   (ip, country, country_code, flag.emoji, connection.isp)
  *   2. https://ipapi.co/json/ (ip, country_name, country_code, org)
  *   3. https://api.ipify.org (только ip)
+ *
+ * v0.8.1: каждый ответ помечается источником (NetInfo.source) — пользователь
+ * всегда видит, КУДА именно мы ходили за данными (статус + «О сети»).
  */
 object NetInfoFetcher {
+
+    /** Все внешние источники, к которым приложение может ходить за IP/страной
+     *  (v0.8.1: показываем пользователю в «О сети» — канон честности). */
+    val SOURCES = listOf("https://ipwho.is/", "https://ipapi.co/json/", "https://api.ipify.org")
 
     fun fetch(timeoutMs: Int = 8_000): NetInfo? {
         fetchIpWhoIs(timeoutMs)?.let { return it }
@@ -68,6 +77,7 @@ object NetInfoFetcher {
                 j.optString("country", "").ifEmpty { null },
                 cc,
                 isp,
+                "ipwho.is",
             )
         } catch (_: Exception) {
             null
@@ -86,6 +96,7 @@ object NetInfoFetcher {
                 j.optString("country_name", "").ifEmpty { null },
                 cc,
                 j.optString("org", "").ifEmpty { null },
+                "ipapi.co",
             )
         } catch (_: Exception) {
             null
@@ -94,7 +105,7 @@ object NetInfoFetcher {
 
     private fun fetchIpifyOnly(timeoutMs: Int): NetInfo? {
         val ip = get("https://api.ipify.org", timeoutMs)?.trim().orEmpty()
-        return if (ip.isNotEmpty()) NetInfo(ip, null, null, null) else null
+        return if (ip.isNotEmpty()) NetInfo(ip, null, null, null, "api.ipify.org") else null
     }
 
     // ---------- утилиты ----------

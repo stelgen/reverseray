@@ -12,7 +12,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-102%20Go%20%2B%20118%20JVM-2E7D32">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-113%20Go%20%2B%20145%20JVM-2E7D32">
   <img alt="Security" src="https://img.shields.io/badge/WAN--hardening-antiscan%20%2B%20tarpit-8B0000">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
   <a href="https://github.com/stelgen/reverseray/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/stelgen/reverseray?style=social"></a>
@@ -24,6 +24,9 @@
   ваш телефон: резидентный IP, NAT/CGNAT не мешают, VPS-провайдер не нужен.
   v0.8: WAN-hardening (анти-скан), модульная система APK↔сервер, MTProto/2,
   лимит трафика «король», дисциплина SSD/RAM.
+  v0.8.1: версии протоколов во всём стеке (GUI/логи/статусы/кнопки), строгий
+  SPKI-pin (анти-MITM), серты на 3 года, верификация APK по SHA256SUMS,
+  тема авто/тёмная/светлая, клиентский фоллбек модулей протоколов.
 </b></p>
 
 <p align="center">
@@ -92,6 +95,10 @@ sequenceDiagram
   Автоподключение (выкл по умолчанию) умеет ждать даты сброса.
 - **Спидтест 5 секунд (v0.8)** после подключения — только если лимит
   не достигнут; результат в окне статуса главной.
+  **v0.8.1**: спидтест честно показывает ВСЁ: HTTP-проверку интернета,
+  TCP-пинг, каждый внешний хост (IP-сервис, DNS-проба, спидтест) — в
+  консоли и на «О сети»; о чтении файлов устройства тоже честно пишем
+  (что именно читаем — в «Об устройстве»).
 - **Единое консольное окно (v0.8)**: тот же лог/формат на Главной, в
   Обновлении и на вкладке Лог: листается, кнопка «↧ live» внутри бара,
   положение сохраняется; строки: 🟢 туннель поднялся, 🔴 упал,
@@ -163,7 +170,10 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 
 1. Вкладка «Лог»: весь журнал, кнопки «Копировать весь лог» и «Поделиться».
 2. Порт **4433/tcp** и **1080/udp** должны быть открыты в файрволе облака.
-3. TOFU: после перегенерации CA туннель поднимется сам, новый pin — в журнале.
+3. Строгий пин (v0.8.1): если CA перегенерировали — туннель НЕ поднимется
+   с внятной ошибкой и реальным pin сервера в журнале; обновите ссылку
+   (re-enroll). Это анти-MITM: чужим сертификатам клиент не доверяет.
+   TOFU работает только при первом знакомстве (когда пина нет в ссылке).
 4. `sudo bash rr.sh --reset` — чистое состояние за минуту.
 5. Сканеры в логах сервера видны как метрики `reverseray_hardening_*` —
    это нормально: порт молчит по дизайну.
@@ -179,7 +189,8 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 
 ### Безопасность (v0.8)
 
-Кратко: TLS 1.3 + ALPN + SPKI-pin (TOFU для самоподписанных); токены
+Кратко: TLS 1.3 + ALPN + SPKI-pin (TOFU только при первой дружбе — пина
+нет; несовпадение заданного пина = отказ, анти-MITM); токены
 только как SHA-256; HMAC с одноразовым nonce; anti-SSRF на байтах адресов;
 **WAN-hardening: анти-скан с tarpit и нулём ответных байтов, лимиты
 параллельности, security-заголовки и без-деталей 500-е**; mtproto2 —
@@ -229,8 +240,8 @@ assets/brand/              Брендинг + РЕАЛЬНЫЙ скриншот 
 
 | Робот | Что делает |
 |---|---|
-| `go` | gofmt/vet/test-race/coverage — 102 теста |
-| `android` | сборка + 118 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto) |
+| `go` | gofmt/vet/test-race/coverage — 113 теста |
+| `android` | сборка + 145 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS) |
 | `modules` | канон-чек манифеста + парсеры обеих сторон согласны |
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |

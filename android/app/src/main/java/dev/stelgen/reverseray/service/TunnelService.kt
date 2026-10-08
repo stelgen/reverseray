@@ -22,6 +22,7 @@ import android.os.PowerManager
 import android.util.Log
 import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.R
+import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
@@ -129,7 +130,9 @@ class TunnelService : Service() {
         }
     }
 
-    /** Спидтест 5 с — ровно один раз на сессию, ТОЛЬКО если лимит не достигнут. */
+    /** Спидтест 5 с — ровно один раз на сессию, ТОЛЬКО если лимит не достигнут.
+     *  v0.8.1: честно показываем ВСЕ внешние хосты (HTTP-проверка, TCP-пинг,
+     *  скачивание) — канон «куда пошли — обо всём признаёмся». */
     private fun maybeRunSpeedTest() {
         if (stopping) return
         val usage = accountTraffic(0)
@@ -139,12 +142,14 @@ class TunnelService : Service() {
         }
         if (speedTestBusy) return
         speedTestBusy = true
-        pushLog("спидтест: 5 секунд, ${SpeedTest.URL.substringBefore('?')}…")
+        pushLog("спидтест: идём на 3 проверки — ${SpeedTest.plan().joinToString(" · ")}")
         Thread {
             val r = SpeedTest.run()
+            r.endpoints.forEach { pushLog("спидтест: $it") }
             val line = if (r.ok) {
                 val mbs = String.format(Locale.US, "%.2f", r.bytesPerSec / 1024.0 / 1024.0)
-                "спидтест: $mbs МБ/с (${fmtBytes(r.totalBytes)} за ${r.durationMs / 1000} с)"
+                "спидтест: $mbs МБ/с · TCP-пинг ${r.pingMs} мс · HTTP ${if (r.httpOk) "OK (${r.httpMs} мс)" else "недоступен"} " +
+                    "(${fmtBytes(r.totalBytes)} за ${r.durationMs / 1000} с)"
             } else {
                 "спидтест не удался: ${r.error ?: "нет данных"}"
             }
@@ -558,8 +563,15 @@ class TunnelService : Service() {
     private fun runLoop(r: Runner, proto: String) {
         var attempt = 0
         var lastError = "?"
+        // v0.8.1: подряд идущие неудачи на ТЕКУЩЕМ протоколе (для фоллбека)
+        var failStreak = 0
         while (!stopping) {
             val cfg = config ?: break
+            // протокол перечитываем КАЖДУЮ итерацию: так подхватывается
+            // и смена протокола, и фоллбек, и заморозка обновлений (без пересоздания)
+            val useProto = RrpProtocols.normalize(
+                prefs().getString(KEY_PROTO, null) ?: RrpProtocols.DEFAULT,
+            )
             val client = RrpClient(
                 host = r.target.host,
                 port = r.target.port,
@@ -570,11 +582,12 @@ class TunnelService : Service() {
                 deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
                 transport = cfg.transport,
                 agentName = "ReverseRay-Android/" + appVersion(),
-                protoId = proto,
+                protoId = useProto,
             )
             r.client = client
             try {
                 client.connect()
+                failStreak = 0
                 attempt = 0
                 updateStatus(STATE_CONNECTED, getString(R.string.status_connected, r.target.port))
                 while (!stopping && client.state == RrpClient.State.READY) {
@@ -586,7 +599,17 @@ class TunnelService : Service() {
                 }
             } catch (e: Exception) {
                 lastError = e.message ?: "?"
+                failStreak++
                 updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, lastError))
+                // v0.8.1 КАНОН ФОЛЛБЕКА: новый модуль протокола сломал клиент →
+                // откатываемся на предыдущий рабочий (rrp1). Сервер НЕ откатываем
+                // (анти-цикл: обновления рассинхронизированы, авто-обновление
+                // может быть отключено — модули заморожены, это не должно ломать).
+                if (ProtoFallback.shouldFallback(useProto, failStreak)) {
+                    pushLog(ProtoFallback.fallbackReason(useProto), LogKind.WARN)
+                    applyProtoFallback(useProto)
+                    return
+                }
             } finally {
                 try { client.close() } catch (_: Exception) {}
             }
@@ -600,6 +623,32 @@ class TunnelService : Service() {
             if (stopping) break
             updateStatus(STATE_RETRY, getString(R.string.status_retry_last, r.target.port, delay / 1000, lastError))
             sleepWithKick(r, delay)
+        }
+    }
+
+    /**
+     * v0.8.1: клиентский фоллбек на фундамент (rrp1) — сохраняем протокол и
+     * ссылку (proto= отражает реально работающий), перезапускаем коннекты.
+     * UI получает STATE_PROTO_ROLLBACK и обновляет строку протокола.
+     */
+    private fun applyProtoFallback(brokenProto: String) {
+        val p = prefs()
+        p.edit().putString(KEY_PROTO, RrpProtocols.DEFAULT).apply()
+        try {
+            val cfg = RrpUri.parse(p.getString(KEY_CONFIG, "") ?: "")
+            if (cfg.proto != RrpProtocols.DEFAULT) {
+                p.edit().putString(KEY_CONFIG, cfg.copy(proto = RrpProtocols.DEFAULT).serialize()).apply()
+            }
+        } catch (_: Exception) {
+        }
+        sendBroadcast(
+            Intent(ACTION_STATUS).setPackage(packageName)
+                .putExtra(EXTRA_STATE, STATE_PROTO_ROLLBACK)
+                .putExtra(EXTRA_STATUS, ProtoFallback.fallbackReason(brokenProto))
+                .putExtra(EXTRA_PROTO, RrpProtocols.DEFAULT)
+        )
+        if (!stopping) {
+            restartRunnersQuietly()
         }
     }
 
@@ -830,6 +879,7 @@ class TunnelService : Service() {
         const val KEY_WIFI_ONLY = "wifi_only"
         const val KEY_PROBE_TARGET = "probe_target"
         const val KEY_AUTO_UPDATE = "auto_update"          // проверка обновлений раз в 24 ч
+        const val KEY_THEME = "theme"                      // v0.8.1: auto|dark|light
         // v0.8:
         const val KEY_AUTO_RECONNECT = "auto_reconnect"    // автоподключение при открытии + ожидание сброса лимита (выкл по умолчанию)
         const val KEY_TRAFFIC_LIFETIME = "traffic_lifetime" // суммарный трафик за всё время

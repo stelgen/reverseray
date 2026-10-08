@@ -292,6 +292,48 @@ class EvilServerTest {
         }
     }
 
+    /**
+     * v0.8.1: коннект по DNS-имени сервера равноправен коннекту по IP.
+     * Имя берём настоящее (hostname этого хоста) — клиент обязан сам
+     * резолвить его и подключаться, а честный лог должен пометить «DNS-имя».
+     */
+    @Test
+    fun `connect via DNS name reaches READY`() {
+        val dnsName = java.net.InetAddress.getLocalHost().hostName
+        val server = EvilServer { conn, inp, out ->
+            serverHandshake(conn, inp, out)
+            Thread.sleep(300)
+        }
+        try {
+            val c = RrpClient(
+                host = dnsName, port = server.port, token = server.token,
+                pin = server.pin, allowLan = false, listener = null,
+            )
+            c.connect()
+            assertEquals(RrpClient.State.READY, c.state)
+            c.close()
+        } finally {
+            server.stop()
+        }
+    }
+
+    /** v0.8.1: серверный серт — срок действия фиксируется для «О приложении». */
+    @Test
+    fun `server cert validity captured on happy path`() {
+        val server = EvilServer { conn, inp, out ->
+            serverHandshake(conn, inp, out)
+            Thread.sleep(200)
+        }
+        try {
+            val c = newClient(server)
+            c.connect()
+            assertTrue("срок серта сервера должен быть известен", c.serverCertValidUntilMs > System.currentTimeMillis())
+            c.close()
+        } finally {
+            server.stop()
+        }
+    }
+
 }
 
 /** Верхний уровень: доступен и EvilServerTest, и TofuTest. */
@@ -307,9 +349,12 @@ fun serverHandshake(conn: Socket, inp: DataInputStream, out: Sender) {
 
 /**
  * v0.7.2 TOFU-регрессия: сервер перегенерировал самоподписанный CA → пин из
- * конфига не совпадает. По умолчанию клиент ПРИНИМАЕТ валидную self-signed
- * цепочку (туннель оживает без re-enroll); строгий режим
- * (trustSelfSigned=false) по-прежнему отвечает bad_certificate.
+ * конфига не совпадает.
+ *
+ * v0.8.1 КАНОН (анти-MITM): по умолчанию клиент СТРОГИЙ — пин задан и не
+ * совпал → соединение отклоняется (другим сертификатам не доверяем).
+ * TOFU-приём самоподписанной цепочки остаётся только для первой «дружбы»
+ * (пина нет в ссылке) или явного trustSelfSigned=true (override).
  */
 class TofuTest {
 
@@ -353,6 +398,55 @@ class TofuTest {
             } finally {
                 c.close()
             }
+        } finally {
+            server.stop()
+        }
+    }
+
+    /** v0.8.1: ДЕФОЛТ теперь строгий — чужой сертификат при заданном пине = отказ. */
+    @Test
+    fun `default is strict - wrong pin rejected without override`() {
+        val server = EvilServer { conn, inp, out -> serverHandshake(conn, inp, out) }
+        try {
+            val c = RrpClient(
+                host = "127.0.0.1", port = server.port, token = server.token,
+                pin = wrongPin(), allowLan = false, listener = null,
+                transport = RrpClient.TRANSPORT_TCP,
+                // trustSelfSigned НЕ передаём — проверяем дефолт (false)
+            )
+            try {
+                c.connect()
+                throw AssertionError("default must reject wrong pin (anti-MITM)")
+            } catch (e: java.io.IOException) {
+                assertTrue(e.message!!.contains("TLS"))
+            } finally {
+                c.close()
+            }
+        } finally {
+            server.stop()
+        }
+    }
+
+    /** v0.8.1: первая «дружба» (пина нет в ссылке) — TOFU работает и фиксирует пин. */
+    @Test
+    fun `no pin - TOFU accepts self-signed and reports pin`() {
+        val server = EvilServer { conn, inp, out -> serverHandshake(conn, inp, out) }
+        try {
+            val gotPin = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val c = RrpClient(
+                host = "127.0.0.1", port = server.port, token = server.token,
+                pin = null, allowLan = false,
+                listener = object : RrpClient.Listener {
+                    override fun onPinAccepted(client: RrpClient, newPin: String) {
+                        gotPin.set(newPin)
+                    }
+                },
+            )
+            c.connect()
+            assertEquals(RrpClient.State.READY, c.state)
+            assertTrue("TOFU должен сообщить новый пин", gotPin.get() != null)
+            assertTrue("срок серта должен быть зафиксирован", c.serverCertValidUntilMs > 0)
+            c.close()
         } finally {
             server.stop()
         }

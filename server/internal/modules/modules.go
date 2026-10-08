@@ -48,8 +48,12 @@ type Manifest struct {
 
 // ProtocolEntry — запись реестра протоколов. Enabled=null → включён.
 type ProtocolEntry struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Ver — публичная версия протокола (v0.8.1: "1", "2.0"). Если публичной
+	// версии нет в природе — пусто: ни GUI, ни логи ничего не показывают.
+	// Мусорная версия чистится SanitizeVer → "" (не ошибка).
+	Ver     string `json:"ver,omitempty"`
 	Default bool   `json:"default,omitempty"`
 	// Enabled: false — протокол выключен манифестом (клиент его не предложит,
 	// сервер не согласует). Отсутствие поля = включён.
@@ -89,7 +93,7 @@ func (m *Manifest) ProtocolRegistry() []rrp.Protocol {
 		if id == "" {
 			continue
 		}
-		out = append(out, rrp.Protocol{ID: id, Name: p.Name, Default: p.Default})
+		out = append(out, rrp.Protocol{ID: id, Name: p.Name, Ver: rrp.SanitizeVer(p.Ver), Default: p.Default})
 	}
 	return out
 }

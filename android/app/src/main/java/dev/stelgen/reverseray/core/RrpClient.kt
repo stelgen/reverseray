@@ -103,13 +103,13 @@ class RrpClient(
     /** Транспорт: "tcp" (сырой RRP/1) или "ws" (WebSocket-апгрейд /rrp). */
     private val transport: String = TRANSPORT_TCP,
     /**
-     * v0.7.2 TOFU: доверять самоподписанным сертификатам сервера, даже если
-     * CA-pin из конфига не совпал (сервер перегенерировал CA). Пин остаётся
-     * мягкой проверкой: совпал — строгий режим; не совпал — принимаем валидную
-     * self-signed цепочку и сообщаем новый пин через Listener.onPinAccepted.
-     * false — строгий режим (для тестов evil-server и параноидальных юзеров).
+     * v0.7.2 TOFU: принимать валидный самоподписанный сервер, если пин из
+     * конфига не задан (первый enroll: «подружили клиент-сервер, зафиксировали
+     * сертификат»). v0.8.1 КАНОН БЕЗОПАСНОСТИ: если пин ЗАДАН и НЕ совпал —
+     * соединение ОТКЛОНЯЕТСЯ (признак MITM/подмены сервера), по умолчанию
+     * strict (false). true оставлен только для явного.override и тестов.
      */
-    val trustSelfSigned: Boolean = true,
+    val trustSelfSigned: Boolean = false,
 ) {
 
     interface Listener {
@@ -168,6 +168,10 @@ class RrpClient(
     @Volatile var acceptedPin: String? = null
         private set
 
+    /** v0.8.1: срок действия серверного TLS-сертификата (epoch мс; 0 — неизвестен). */
+    @Volatile var serverCertValidUntilMs: Long = 0
+        private set
+
     /** UDP-ассоциации: stream_id → локальный relay (DatagramSocket). */
     private val udpAssocs = ConcurrentHashMap<Long, UdpAssoc>()
 
@@ -224,8 +228,22 @@ class RrpClient(
 
         val sock = Socket()
         try {
-            sock.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            // v0.8.1: коннект РАВНОПРАВЕН по IP и по DNS-имени; честно показываем,
+            // во что резолвится имя (канал «ничего не прячем»).
+            val resolved = try {
+                java.net.InetAddress.getAllByName(host).firstOrNull { !it.isLoopbackAddress || host.contains(':') || host == "localhost" }
+                    ?: java.net.InetAddress.getAllByName(host).first()
+            } catch (e: Exception) {
+                throw RrpClientException("DNS $host: ${e.message}", e)
+            }
+            val byName = host.firstOrNull { !it.isDigit() && it != '.' && it != ':' } != null
+            log("TCP $host:$port → $resolved (${if (byName) "DNS-имя" else "IP"})")
+            sock.connect(InetSocketAddress(resolved, port), CONNECT_TIMEOUT_MS)
             sock.tcpNoDelay = true
+        } catch (e: RrpClientException) {
+            closeQuietly(sock)
+            setState(State.CLOSED)
+            throw e
         } catch (e: IOException) {
             closeQuietly(sock)
             setState(State.CLOSED)
@@ -276,7 +294,7 @@ class RrpClient(
             proto = RrpProtocols.normalize(protoId),
             protocols = RrpProtocols.displayList(),
         )
-        log("SENT HELLO agent=$agentName device=$deviceName ver=${RrpFrame.VERSION} caps=[chacha20,alpn] proto=${RrpProtocols.normalize(protoId)} max_streams=$MAX_STREAMS_REQUEST (${hello.encode().size}Б)")
+        log("SENT HELLO agent=$agentName device=$deviceName ver=${RrpFrame.VERSION} caps=[chacha20,alpn] proto=${RrpProtocols.normalize(protoId)} (${RrpProtocols.labelWithVer(protoId)}) max_streams=$MAX_STREAMS_REQUEST (${hello.encode().size}Б)")
         sendFrame(hello)
         try {
             if (!helloLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
@@ -325,7 +343,7 @@ class RrpClient(
             setState(State.READY)
             lastPongMs.set(System.currentTimeMillis())
             scheduleNextPing()
-            log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} proto=${rd.proto} protocols=${rd.protocols} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
+            log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} proto=${rd.proto} (${RrpProtocols.labelWithVer(rd.proto)}) protocols=${rd.protocols.joinToString(",") { RrpProtocols.labelWithVer(it) }} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
 
             // v0.7.4: валидация «реального трафика» — PROBE до реального хоста.
             // Используется при смене протокола: коммит только после успеха.
@@ -992,16 +1010,32 @@ class RrpClient(
                         val expected = decodePin(pin)
                         if (MessageDigest.isEqual(actual, expected)) {
                             acceptedPin = actualB64
+                            rememberServerCert(chain)
                             return
                         }
+                        // v0.8.1 КАНОН: пин задан и не совпал → ОТКАЗ. Это либо
+                        // смена CA владельцем (нужен re-enroll), либо MITM —
+                        // другим сертификатам мы НЕ доверяем никогда.
+                        if (!trustSelfSigned) {
+                            log("TLS: CA-pin НЕ совпал — соединение отклонено (анти-MITM). " +
+                                "Реальный pin сервера: $actualB64. Если сервер менял CA — обнови ссылку (re-enroll).")
+                            throw TlsFatalAlert(AlertDescription.bad_certificate)
+                        }
                     }
-                    // TOFU (v0.7.2): пин не совпал/не задан — принимаем валидную
-                    // самоподписанную цепочку (leaf подписан последним сертификатом
-                    // цепочки, последний — self-signed CA). Это возвращает туннель
-                    // к жизни после перегенерации CA на сервере без re-enroll.
-                    if (trustSelfSigned && isSelfSignedChain(chain)) {
-                        log("TLS: CA-pin не совпал — принят самоподписанный сервер (TOFU); новый pin=$actualB64 (обнови строку конфига)")
+                    // TOFU: (а) пина нет — первая «дружба» клиент↔сервер: принимаем
+                    // валидную самоподписанную цепочку и ФИКСИРУЕМ пин — дальше
+                    // шифруемся только с ним; (б) явный trustSelfSigned=true
+                    // (override для тестов/параноидального режима).
+                    // При заданном пине (дефолт) чужой самоподписанный сервер сюда
+                    // НЕ попадает: строкой выше соединение уже отклонено.
+                    if ((pin == null || trustSelfSigned) && isSelfSignedChain(chain)) {
+                        if (pin == null) {
+                            log("TLS: пина нет — TOFU: сервер зафиксирован, pin=$actualB64 (сохрани строку конфига)")
+                        } else {
+                            log("TLS: пин не совпал, но включён явный TOFU-override — принят самоподписанный сервер, pin=$actualB64")
+                        }
                         acceptedPin = actualB64
+                        rememberServerCert(chain)
                         listener?.onPinAccepted(this@RrpClient, actualB64)
                         return
                     }
@@ -1011,6 +1045,24 @@ class RrpClient(
                 override fun getClientCredentials(certificateRequest: CertificateRequest): TlsCredentials? =
                     null
             }
+        }
+    }
+
+    /**
+     * Запоминает срок действия серверного сертификата из цепочки — честно
+     * показываем пользователю (лог + «О приложении»): кем подписан и до какого
+     * числа действителен.
+     */
+    private fun rememberServerCert(chain: Array<org.bouncycastle.tls.crypto.TlsCertificate>) {
+        try {
+            val cf = java.security.cert.CertificateFactory.getInstance("X.509")
+            val leaf = cf.generateCertificate(java.io.ByteArrayInputStream(chain[0].getEncoded()))
+                as java.security.cert.X509Certificate
+            serverCertValidUntilMs = leaf.notAfter.time
+            lastServerCertNotAfterMs = leaf.notAfter.time
+            log("TLS: серверный серт действителен до ${java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(leaf.notAfter)}, " +
+                "издатель: ${leaf.issuerX500Principal.name?.take(60) ?: "?"} (pin — SPKI CA, ротация листа клиентов не ломает)")
+        } catch (_: Exception) {
         }
     }
 
@@ -1065,7 +1117,11 @@ class RrpClient(
     }
 
     companion object {
-        const val DEFAULT_AGENT = "ReverseRay-Android/0.7.4"
+        const val DEFAULT_AGENT = "ReverseRay-Android/0.8.1"
+
+        /** Последний увиденный срок действия серта сервера (для «О приложении», epoch мс). */
+        @Volatile var lastServerCertNotAfterMs: Long = 0
+            private set
 
         const val KIND_TCP = "TCP"
         const val KIND_UDP = "UDP"

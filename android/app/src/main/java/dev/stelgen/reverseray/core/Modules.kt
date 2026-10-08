@@ -29,6 +29,9 @@ object Modules {
     data class ProtocolEntry(
         val id: String,
         val name: String,
+        // v0.8.1: публичная версия протокола ("1", "2.0"). Пусто = версии нет:
+        // нигде не показываем. Мусор чистится sanitizeVer (не ошибка).
+        val ver: String,
         val enabled: Boolean,
         val default: Boolean,
     )
@@ -40,6 +43,25 @@ object Modules {
         val dnsProbeNames: List<String>,
     ) {
         fun enabledProtocolIds(): List<String> = protocols.filter { it.enabled }.map { it.id }
+
+        /** id → метка (v0.8.1, для статусов/кнопок; метка несёт версию). */
+        fun protocolLabels(): Map<String, String> =
+            protocols.associate { it.id to it.name }.filterKeys { it.isNotEmpty() }
+
+        /** id → публичная версия (v0.8.1; пусто = версии нет). */
+        fun protocolVers(): Map<String, String> =
+            protocols.associate { it.id to sanitizeVer(it.ver) }
+    }
+
+    /** Версия протокола: печатные символы без пробелов, ≤16; мусор → "". */
+    fun sanitizeVer(raw: String?): String {
+        val s = raw?.trim().orEmpty()
+        if (s.isEmpty() || s.length > 16) return ""
+        return if (s.all { c ->
+                c in '0'..'9' || c in 'a'..'z' || c in 'A'..'Z' ||
+                    c == '.' || c == '-' || c == '_' || c == '+' || c == '/'
+            }
+        ) s else ""
     }
 
     /** [a-z0-9]{1,16} — зеркало rrp.NormalizeID. */
@@ -87,7 +109,15 @@ object Modules {
             if (!seen.add(id)) throw ManifestException("дубликат протокола $id")
             val enabled = if (o.has("enabled")) o.optBoolean("enabled", true) else true
             if (id == RrpProtocols.DEFAULT) hasRrp1 = true
-            out.add(ProtocolEntry(id, o.optString("name", id), enabled, o.optBoolean("default", false)))
+            out.add(
+                ProtocolEntry(
+                    id,
+                    o.optString("name", id).trim().ifEmpty { id },
+                    sanitizeVer(o.optString("ver", "")),
+                    enabled,
+                    o.optBoolean("default", false),
+                )
+            )
         }
         if (!hasRrp1) throw ManifestException("реестр без rrp1 запрещён")
         val policy = root.optJSONObject("policy")
@@ -113,9 +143,13 @@ object Modules {
         return Manifest(version, out, probe, dnsNames)
     }
 
-    /** Применяет реестр протоколов манифеста (включённые → RrpProtocols). */
+    /**
+     * Применяет реестр протоколов манифеста (включённые → RrpProtocols).
+     * v0.8.1: метки и публичные версии едут вместе с реестром — статусы,
+     * кнопки и логи показывают то же, что сервер (один манифест).
+     */
     fun apply(m: Manifest) {
         val ids = m.enabledProtocolIds()
-        RrpProtocols.applyRegistry(ids, m.version)
+        RrpProtocols.applyRegistryFull(ids, m.version, m.protocolLabels(), m.protocolVers())
     }
 }

@@ -15,17 +15,23 @@ import (
 // ---- /status: сводка для веб-морды (/ui) и скриптов ----
 
 type StatusReport struct {
-	OK           bool             `json:"ok"`
-	Version      string           `json:"version"`
-	EgressIP     string           `json:"egress_ip,omitempty"`
-	TunnelsUp    int64            `json:"tunnels_up"`
-	StreamsOpen  int64            `json:"streams_open"`
-	Devices      int              `json:"devices"`
-	AuthOK       int64            `json:"auth_ok_total"`
-	AuthFail     int64            `json:"auth_failures_total"`
-	InboundConns int64            `json:"inbound_conns_total"`
-	DefaultProto string           `json:"default_proto"`
-	Protocols    []string         `json:"protocols"`
+	OK           bool     `json:"ok"`
+	Version      string   `json:"version"`
+	EgressIP     string   `json:"egress_ip,omitempty"`
+	TunnelsUp    int64    `json:"tunnels_up"`
+	StreamsOpen  int64    `json:"streams_open"`
+	Devices      int      `json:"devices"`
+	AuthOK       int64    `json:"auth_ok_total"`
+	AuthFail     int64    `json:"auth_failures_total"`
+	InboundConns int64    `json:"inbound_conns_total"`
+	DefaultProto string   `json:"default_proto"`
+	Protocols    []string `json:"protocols"`
+	// v0.8.1: версии протоколов по всему стеку — метки и публичные версии
+	// (id → "RRP/1" / "1"; пустая версия = «версии нет», показываем пусто).
+	ProtoLabels map[string]string `json:"protocol_labels,omitempty"`
+	ProtoVers   map[string]string `json:"protocol_vers,omitempty"`
+	// v0.8.1: срок действия TLS-сертификата сервера (честно и наружу).
+	CertNotAfter string           `json:"cert_not_after,omitempty"`
 	Sessions     []map[string]any `json:"sessions"`
 	// v0.8: WAN-защита и модули — та же открытость, что и в APK:
 	// пользователь/админ видит, что защищает сервер и что он обновил.
@@ -78,6 +84,9 @@ func (a *App) statusJSON() []byte {
 		InboundConns:     a.met.InboundConns.Load(),
 		DefaultProto:     rrp.NormalizeProto(a.cfg.DefaultProtocol),
 		Protocols:        rrp.SupportedIDs(),
+		ProtoLabels:      rrp.Labels(),
+		ProtoVers:        rrp.Vers(),
+		CertNotAfter:     a.bundle.Leaf.Leaf.NotAfter.UTC().Format(time.RFC3339),
 		Sessions:         a.hub.Snapshot(),
 		HardeningProfile: a.gate.Describe(),
 		HardeningScans:   a.hardSt.Scans.Load(),
@@ -139,10 +148,11 @@ code{background:var(--line);padding:1px 6px;border-radius:6px;font-size:12px}
 <footer>авто-обновление 3 с · ReverseRay web UI · только чтение</footer>
 <script>
 function fmt(b){if(b==null||b===undefined)return"—";const u=["Б","КБ","МБ","ГБ"];let i=0,x=Number(b);while(x>=1024&&i<3){x/=1024;i++}return x.toFixed(i?1:0)+" "+u[i]}
+function protoLabel(id,s){const l=(s.protocol_labels||{})[id]||id;const v=(s.protocol_vers||{})[id];return v?(l+' (v'+v+')'):l}
 async function tick(){
  try{
   const r=await fetch('/status',{cache:'no-store'});const s=await r.json();
-  document.getElementById('sub').textContent='сервер v'+s.version+' · протокол по умолчанию: '+s.default_proto+' · egress IP: '+(s.egress_ip||'—');
+  document.getElementById('sub').textContent='сервер v'+s.version+' · протокол по умолчанию: '+protoLabel(s.default_proto,s)+' · egress IP: '+(s.egress_ip||'—')+(s.cert_not_after?(' · серт TLS до '+s.cert_not_after.slice(0,10)):'');
   const c=[
    ['Туннели',s.tunnels_up,s.tunnels_up>0?'ok':'warn'],
    ['Открытых стримов',s.streams_open,''],
@@ -158,7 +168,7 @@ async function tick(){
    '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('')+hard+mods;
   const rows=(s.sessions||[]).map(x=>
    '<tr><td>'+(x.device||'?')+'</td><td><code>'+String(x.session||'').slice(0,10)+'…</code></td>'+
-   '<td>'+(x.proto||'—')+'</td><td>'+(x.rtt_ms!=null?x.rtt_ms+' мс':'—')+'</td>'+
+   '<td>'+protoLabel(x.proto||'rrp1',s)+'</td><td>'+(x.rtt_ms!=null?x.rtt_ms+' мс':'—')+'</td>'+
    '<td class="ok">'+fmt(x.bytes_in)+'</td><td>'+fmt(x.bytes_out)+'</td>'+
    '<td>'+fmt(x.outstanding)+'</td></tr>').join('');
   document.getElementById('rows').innerHTML=rows||'<tr><td colspan="7" style="color:var(--mut)">нет активных сессий</td></tr>';

@@ -183,4 +183,35 @@
     <string name="config_hint_title">Connection link</string>
     <string name="update_progress">Download: %1$d%% · %2$s</string>
     <string name="dns_servers_line">DNS: %1$s</string>
+
+    <!-- v0.8.1 -->
+    <string name="set_theme_title">Theme</string>
+    <string name="set_theme_hint">Auto follows the phone setting. On old Android versions without a system dark theme, auto = black.</string>
+    <string name="set_theme_auto">Auto</string>
+    <string name="set_theme_dark">Dark</string>
+    <string name="set_theme_light">Light</string>
+    <string name="app_proto_ver_row">Protocol version</string>
+    <string name="app_cert_row">Server cert valid until</string>
+    <string name="sf_section">Protection — how exactly the tunnel is encrypted and closed</string>
+    <string name="sf_tls_min">Min TLS</string>
+    <string name="sf_alpn">ALPN</string>
+    <string name="sf_tls_provider">TLS stack</string>
+    <string name="sf_cert_model">Certificates</string>
+    <string name="sf_pin_policy">Pin policy</string>
+    <string name="sf_zero_rtt">0-RTT</string>
+    <string name="sf_token_storage">Token storage</string>
+    <string name="sf_handshake">Handshake</string>
+    <string name="sf_nonce">Nonce</string>
+    <string name="sf_rate_limit">Rate limit</string>
+    <string name="sf_mtproto2">Payload encryption</string>
+    <string name="sf_frame_limits">Frame limits</string>
+    <string name="sf_wan">Anti-scan (WAN)</string>
+    <string name="sf_ssrf">SSRF guard</string>
+    <string name="sf_modules">Modules manifest</string>
+    <string name="sf_apk_integrity">APK integrity</string>
+    <string name="netinfo_source">source: %1$s</string>
+    <string name="net_sources_row">Data sources</string>
+    <string name="net_sources_local">local: system DNS (LinkProperties)</string>
+    <string name="dev_sources_row">What we read about the device</string>
+    <string name="dev_sources_list">/proc/cpuinfo, Build.* (model/SDK/patch), os.version (kernel), ActivityManager.MemoryInfo (RAM)</string>
 </resources>

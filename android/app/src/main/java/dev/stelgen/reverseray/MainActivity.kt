@@ -46,8 +46,12 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
+import dev.stelgen.reverseray.core.ProtoFallback
+import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
+import dev.stelgen.reverseray.core.SecurityFacts
+import dev.stelgen.reverseray.core.ThemeMode
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
@@ -213,13 +217,13 @@ class MainActivity : AppCompatActivity() {
                     when (state) {
                         TunnelService.STATE_CONNECTED, TunnelService.STATE_RETRY -> {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { p ->
-                                setProtoText(getString(R.string.proto_current, p))
+                                setProtoText(getString(R.string.proto_current, RrpProtocols.labelWithVer(p)))
                             }
                             setRunningUi(true)
                         }
                         TunnelService.STATE_PROTO_ROLLBACK -> {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { old ->
-                                setProtoText(getString(R.string.proto_current, old))
+                                setProtoText(getString(R.string.proto_current, RrpProtocols.labelWithVer(old)))
                                 Toast.makeText(
                                     this@MainActivity,
                                     R.string.proto_rollback_toast,
@@ -709,7 +713,10 @@ class MainActivity : AppCompatActivity() {
     private fun buildSettingsPage(): LinearLayout {
         val p = page()
 
-        // О приложении: версии/модули/Рам/диск/трафик за всё время/протокол
+        // Тема (v0.8.1): авто (настройка телефона; на старых Android — чёрная) / тёмная / светлая
+        p.addView(buildThemeCard())
+
+        // О приложении: версии/модули/Рам/диск/трафик за всё время/протокол + константы защиты
         p.addView(sectionTitle(R.string.about_app_title, null))
         appInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         p.addView(card(appInfoBox))
@@ -939,6 +946,66 @@ class MainActivity : AppCompatActivity() {
         return p
     }
 
+    /**
+     * v0.8.1: карта «Тема» — авто (настройка телефона; на старых Android,
+     * где системной тёмной темы нет, авто = чёрная) / тёмная / светлая.
+     */
+    private fun buildThemeCard(): LinearLayout {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(TextView(this).apply {
+            setText(R.string.set_theme_title)
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        box.addView(TextView(this).apply {
+            setText(R.string.set_theme_hint)
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+            setPadding(0, dp(2), 0, dp(4))
+        })
+        val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val bAuto = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            setText(R.string.set_theme_auto)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val bDark = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            setText(R.string.set_theme_dark)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { setMargins(dp(6), 0, 0, 0) }
+        }
+        val bLight = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            setText(R.string.set_theme_light)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { setMargins(dp(6), 0, 0, 0) }
+        }
+        rowBox.addView(bAuto); rowBox.addView(bDark); rowBox.addView(bLight)
+        box.addView(rowBox)
+        fun paint() {
+            val sel = ThemeMode.normalize(prefs().getString(TunnelService.KEY_THEME, ThemeMode.AUTO))
+            val on = 0xFF2E7D32.toInt()
+            val off = 0x00FFFFFF
+            bAuto.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == ThemeMode.AUTO) on else off)
+            bDark.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == ThemeMode.DARK) on else off)
+            bLight.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == ThemeMode.LIGHT) on else off)
+        }
+        fun pick(mode: String) {
+            val old = ThemeMode.normalize(prefs().getString(TunnelService.KEY_THEME, ThemeMode.AUTO))
+            prefs().edit().putString(TunnelService.KEY_THEME, mode).apply()
+            TunnelService.logSettingChange(getString(R.string.set_theme_title), old, mode)
+            renderServiceLogs()
+            paint()
+            // применяем сразу, без перезапуска приложения
+            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                ThemeMode.resolveNightMode(mode, Build.VERSION.SDK_INT),
+            )
+        }
+        bAuto.setOnClickListener { pick(ThemeMode.AUTO) }
+        bDark.setOnClickListener { pick(ThemeMode.DARK) }
+        bLight.setOnClickListener { pick(ThemeMode.LIGHT) }
+        paint()
+        return box
+    }
+
     private fun outlined(textRes: Int) =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             setText(textRes)
@@ -1053,7 +1120,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestProtoSwitch(proto: String) {
-        setProtoText(getString(R.string.proto_switching, proto))
+        setProtoText(getString(R.string.proto_switching, RrpProtocols.labelWithVer(proto)))
         val i = Intent(this, TunnelService::class.java)
             .setAction(TunnelService.ACTION_SWITCH_PROTO)
             .putExtra(TunnelService.EXTRA_PROTO, proto)
@@ -1154,9 +1221,13 @@ class MainActivity : AppCompatActivity() {
         val known = RrpProtocols.serverProtocols()
         setProtoText(
             if (known.isEmpty()) {
-                getString(R.string.proto_current, current)
+                getString(R.string.proto_current, RrpProtocols.labelWithVer(current))
             } else {
-                getString(R.string.proto_current_list, current, known.joinToString(", "))
+                getString(
+                    R.string.proto_current_list,
+                    RrpProtocols.labelWithVer(current),
+                    known.joinToString(", ") { RrpProtocols.labelWithVer(it) },
+                )
             }
         )
     }
@@ -1193,6 +1264,8 @@ class MainActivity : AppCompatActivity() {
                             info.countryCode?.let { cc2 -> append(" (").append(cc2).append(")") }
                         }
                         info.isp?.let { append(" · ").append(it) }
+                        // v0.8.1: честный источник (куда ходили за IP)
+                        if (info.source.isNotEmpty()) append(" · ").append(getString(R.string.netinfo_source, info.source))
                     }
                 }
                 localIpView.text = getString(R.string.local_ip, local ?: "—")
@@ -1452,7 +1525,7 @@ class MainActivity : AppCompatActivity() {
                 Modules.apply(m)
                 File(filesDir, "modules.json").writeText(body)
                 prefs().edit().putString(KEY_MODULES_HASH, hash).apply()
-                UpdateLogger.add(getString(R.string.modules_applied, m.version, m.enabledProtocolIds().joinToString(", ")))
+                UpdateLogger.add(getString(R.string.modules_applied, m.version, m.enabledProtocolIds().joinToString(", ") { RrpProtocols.labelWithVer(it) }))
                 runOnUiThread {
                     refreshModulesInfo()
                     refreshProtoLine()
@@ -1558,6 +1631,20 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 conn.disconnect()
+                // v0.8.1 (анти-подмена): сверяем APK с SHA256SUMS релиза до установки
+                val checker = UpdateChecker()
+                val sums = checker.downloadSums(info.sumsUrl)
+                val verifyErr = checker.verifyApk(dest, sums)
+                if (verifyErr != null) {
+                    dest.delete()
+                    UpdateLogger.add("верификация: $verifyErr")
+                    runOnUiThread {
+                        refreshUpdateConsole()
+                        Toast.makeText(this, getString(R.string.update_error, "SHA256 mismatch"), Toast.LENGTH_LONG).show()
+                    }
+                    return@Thread
+                }
+                UpdateLogger.add("верификация: SHA256 совпал (${fmtBytes(dest.length())}) → установка")
                 UpdateLogger.add("скачано: ${dest.name} (${fmtBytes(dest.length())}) → установка")
                 runOnUiThread {
                     refreshUpdateConsole()
@@ -1654,7 +1741,8 @@ class MainActivity : AppCompatActivity() {
         parent.addView(l)
     }
 
-    /** «О приложении»: версии, модули, RAM, диск, трафик за всё время, протокол. */
+    /** «О приложении»: версии, модули, RAM, диск, трафик за всё время, протокол
+     *  + v0.8.1: константы/переменные защиты и честные факты (серт, источники). */
     private fun refreshAppPanel() {
         appInfoBox.removeAllViews()
         val code = try {
@@ -1671,11 +1759,19 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { RrpProtocols.DEFAULT }
         val modulesV = RrpProtocols.registryVersion().ifEmpty { getString(R.string.app_modules_builtin) }
         infoRow(appInfoBox, getString(R.string.app_version_row), "${currentVersion()} ($code)")
-        infoRow(appInfoBox, getString(R.string.app_modules_row), "$modulesV · ${RrpProtocols.displayList().joinToString(", ")}")
+        infoRow(appInfoBox, getString(R.string.app_modules_row), "$modulesV · ${RrpProtocols.displayList().joinToString(", ") { RrpProtocols.labelWithVer(it) }}")
         infoRow(appInfoBox, getString(R.string.app_ram_row), fmtBytes(ramUsed))
         infoRow(appInfoBox, getString(R.string.app_disk_row), fmtBytes(apkLen + dataLen))
         infoRow(appInfoBox, getString(R.string.app_traffic_life_row), fmtBytes(lifetime))
-        infoRow(appInfoBox, getString(R.string.app_proto_row), currentProto)
+        infoRow(appInfoBox, getString(R.string.app_proto_row), RrpProtocols.labelWithVer(currentProto))
+        // v0.8.1: версия текущего протокола (или пусто, если версии нет — канон)
+        val pver = RrpProtocols.ver(currentProto)
+        infoRow(appInfoBox, getString(R.string.app_proto_ver_row), pver.ifEmpty { "—" })
+        // v0.8.1: срок действия серверного TLS-сертификата (если видели рукопожатие)
+        val certMs = RrpClient.lastServerCertNotAfterMs
+        if (certMs > 0) {
+            infoRow(appInfoBox, getString(R.string.app_cert_row), SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(certMs)))
+        }
         appInfoBox.addView(
             Button(this).apply {
                 setText(R.string.dev_copy)
@@ -1688,6 +1784,24 @@ class MainActivity : AppCompatActivity() {
                 ).apply { gravity = Gravity.END }
             }
         )
+
+        // Константы защиты — отдельная честная секция (канал «ничего не прячем»)
+        appInfoBox.addView(TextView(this).apply {
+            setText(R.string.sf_section)
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(10), 0, dp(2))
+        })
+        val sfTitles = listOf(
+            R.string.sf_tls_min, R.string.sf_alpn, R.string.sf_tls_provider,
+            R.string.sf_cert_model, R.string.sf_pin_policy, R.string.sf_zero_rtt,
+            R.string.sf_token_storage, R.string.sf_handshake, R.string.sf_nonce,
+            R.string.sf_rate_limit, R.string.sf_mtproto2, R.string.sf_frame_limits,
+            R.string.sf_wan, R.string.sf_ssrf, R.string.sf_modules, R.string.sf_apk_integrity,
+        )
+        for ((titleRes, value) in sfTitles.zip(SecurityFacts.values())) {
+            infoRow(appInfoBox, getString(titleRes), value)
+        }
     }
 
     /** «О устройстве» + CPU-модель, общая RAM, SDK, Java. */
@@ -1715,6 +1829,8 @@ class MainActivity : AppCompatActivity() {
         infoRow(deviceInfoBox, getString(R.string.dev_kernel), kernel)
         infoRow(deviceInfoBox, getString(R.string.dev_screen), "${m.widthPixels}×${m.heightPixels} @${m.density}x")
         infoRow(deviceInfoBox, getString(R.string.dev_version), "${currentVersion()} (${getString(R.string.app_name)})")
+        // v0.8.1: честно показываем, ЧТО именно читаем об устройстве (канал прозрачности)
+        infoRow(deviceInfoBox, getString(R.string.dev_sources_row), getString(R.string.dev_sources_list))
         deviceInfoBox.addView(
             Button(this).apply {
                 setText(R.string.dev_copy)
@@ -1727,7 +1843,8 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** «О сети» — честно всё, что приложение узнало (DnsProbe + NetInfo). */
+    /** «О сети» — честно всё, что приложение узнало (DnsProbe + NetInfo)
+     *  + v0.8.1: ЧЕМ и ГДЕ мы это узнали (источники — канон прозрачности). */
     private fun refreshNetPanel() {
         netInfoBox.removeAllViews()
         infoRow(netInfoBox, getString(R.string.netinfo_loading), lastExternalIp ?: "…")
@@ -1742,15 +1859,25 @@ class MainActivity : AppCompatActivity() {
             val external = try { NetInfoFetcher.fetch() } catch (_: Exception) { null }
             runOnUiThread {
                 netInfoBox.removeAllViews()
+                // Честные источники: куда ходили и что читали локально
+                infoRow(
+                    netInfoBox, getString(R.string.net_sources_row),
+                    NetInfoFetcher.SOURCES.joinToString(", ") + " · " +
+                        getString(R.string.net_sources_local),
+                )
                 external?.let { e ->
-                    infoRow(netInfoBox, "Внешний IP", "${e.ip}${e.country?.let { " · $it" } ?: ""}${e.isp?.let { " · $it" } ?: ""}")
+                    infoRow(
+                        netInfoBox, "Внешний IP",
+                        "${e.ip}${e.country?.let { " · $it" } ?: ""}${e.isp?.let { " · $it" } ?: ""}" +
+                            (if (e.source.isNotEmpty()) " · ${getString(R.string.netinfo_source, e.source)}" else ""),
+                    )
                 }
                 if (dns == null) {
                     infoRow(netInfoBox, "DNS", "не удалось собрать факты")
-                    return@runOnUiThread
-                }
-                for ((k, v) in DnsProbe.describe(dns)) {
-                    infoRow(netInfoBox, k, v)
+                } else {
+                    for ((k, v) in DnsProbe.describe(dns)) {
+                        infoRow(netInfoBox, k, v)
+                    }
                 }
             }
         }.apply { isDaemon = true }.start()

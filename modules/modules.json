@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "version": "0.8.0",
+  "version": "0.8.1",
   "updated": "2026-10-08",
   "protocols": [
-    { "id": "rrp1", "name": "RRP/1", "default": true },
-    { "id": "mtproto2", "name": "MTProto/2" }
+    { "id": "rrp1", "name": "RRP/1", "ver": "1", "default": true },
+    { "id": "mtproto2", "name": "MTProto/2", "ver": "2.0" }
   ],
   "policy": {
     "probe_default_target": "1.1.1.1:443",

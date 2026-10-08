@@ -24,8 +24,12 @@ import (
 )
 
 const (
-	leafLifetime = 90 * 24 * time.Hour
-	caLifetime   = 10 * 365 * 24 * time.Hour
+	// v0.8.1: лист живёт 3 года (канон «серты живут годами»), перевыпуск —
+	// ЗАРАНЕЕ за 90 дней до конца срока. CA — 10 лет; ротация листа не ломает
+	// клиентов (пин — SPKI CA, он не меняется).
+	leafLifetime    = 3 * 365 * 24 * time.Hour
+	leafRenewBefore = 90 * 24 * time.Hour
+	caLifetime      = 10 * 365 * 24 * time.Hour
 )
 
 // Bundle is the server PKI material.
@@ -152,7 +156,11 @@ func loadOrCreateLeaf(dir string, ca *x509.Certificate, caKey ed25519.PrivateKey
 		cert, err := parseCertPEM(certPEM)
 		if err == nil {
 			key, kerr := parseKeyPEM(keyPEM)
-			if kerr == nil && time.Until(cert.NotAfter) > 30*24*time.Hour && cert.CheckSignatureFrom(ca) == nil {
+			if kerr == nil && cert.CheckSignatureFrom(ca) == nil &&
+				time.Until(cert.NotAfter) > leafRenewBefore &&
+				// v0.8.1: листы старого короткого формата (90 дн.) мигрируют
+				// на длинный при первом рестарте — заранее, без простоя.
+				cert.NotAfter.Sub(cert.NotBefore) >= leafLifetime-24*time.Hour {
 				return &tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key, Leaf: cert}, false, nil
 			}
 		}

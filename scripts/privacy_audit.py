@@ -66,6 +66,28 @@ def check_line(path: str, line_no: int, line: str) -> list:
         return problems  # сам сканер содержит список маркеров — не самопал
     if TELEMETRY_MARKERS.search(line):
         problems.append(f"маркер телеметрии: {TELEMETRY_MARKERS.search(line).group(0)!r}")
+    for m in re.finditer(r"http://([A-Za-z0-9.\-_]+)", line):
+        # v0.8.1: plaintext http:// разрешён ТОЛЬКО в loopback/интрасеть
+        # (healthcheck, admin-инбокс, примеры LAN). Всё остальное — https://.
+        host = m.group(1).lower()
+        if host in {"127", "0", "localhost", "<lan_ip>", "lan_ip", "*", "unix"}:
+            continue
+        if host.startswith("127.") or host.startswith("0.0.0.0") or host.startswith("10."):
+            continue
+        if host in {"example", "host", "server", "server_ip", "localhost_ip", "admin", "proxyaddr"}:
+            continue
+        if re.match(r"^example", host) or host.endswith(".example") or host.endswith(".example.com"):
+            continue
+        if "<" in line and ">" in line:  # <LAN_IP> и прочие шаблонные примеры
+            continue
+        if re.search(r"\b(LAN_IP|SERVER|HOST|ADDR|IP)\b", line, re.IGNORECASE) and "_" in m.group(0):
+            continue
+        if "." not in host:  # одноэтапные хосты — шаблоны/инбоксы (t, unix…)
+            continue
+        if host in ALLOWED_HOSTS or host.endswith("schemas.android.com"):
+            # XML-неймспейсы/документационные хосты — не сетевые обращения
+            continue
+        problems.append(f"plaintext http:// вне loopback (используй https://): {m.group(0)!r}")
     for m in re.finditer(r"https?://([A-Za-z0-9.-]+)", line):
         host = m.group(1).lower()
         base = host.split("/")[0].strip(".")

@@ -8,6 +8,8 @@ import sys
 
 ALLOWED_ID = re.compile(r"^[a-z0-9]{1,16}$")
 VERSION_RE = re.compile(r"^v?[0-9]+\.[0-9]+(\.[0-9]+)?$")
+# v0.8.1: публичная версия протокола — опциональна; мусор = версии нет
+PROTO_VER_RE = re.compile(r"^[A-Za-z0-9._+/-]{1,16}$")
 
 
 def fail(msg: str) -> None:
@@ -44,6 +46,11 @@ def main() -> int:
         seen.add(pid)
         if pid == "rrp1":
             has_rrp1 = True
+        # v0.8.1: ver — публичная версия протокола ("1", "2.0"). Пусто/нет —
+        # валидно («версии нет — показываем пусто»); мусор — отказ CI.
+        ver = str(p.get("ver", "") or "").strip()
+        if ver and not PROTO_VER_RE.match(ver):
+            fail(f"мусорная ver у протокола {pid}: {ver!r}")
         enabled = p.get("enabled")
         if enabled is not None and not isinstance(enabled, bool):
             fail(f"enabled не bool у {pid}")
@@ -60,6 +67,8 @@ def main() -> int:
         if names is not None and not isinstance(names, list):
             fail("dns_probe_names не список")
     print(f"OK modules: {path} — schema 1, версия {version}, протоколы: {', '.join(sorted(seen))}")
+    vers = {str(p.get("id")): str(p.get("ver", "") or "") for p in protocols}
+    print(f"OK modules: версии протоколов (v0.8.1): " + ", ".join(f"{k}={v or '—'}" for k, v in sorted(vers.items())))
     return 0
 
 

@@ -127,14 +127,20 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 			bootstrapToken = tok
 		}
 	}
-	bundle, err := tlscert.LoadOrCreate(cfg.StateDir, cfg.Listen.TLSHosts)
+	// v0.8.1: SAN лист-сертификата — TLSHosts + PublicHost (DDNS-имя):
+	// коннект по DNS-имени и по IP равноправны, оба адреса в сертификате.
+	tlsHosts := dedupNonEmpty(append([]string{}, cfg.Listen.TLSHosts...), cfg.PublicHost)
+	bundle, err := tlscert.LoadOrCreate(cfg.StateDir, tlsHosts)
 	if err != nil {
 		return nil, fmt.Errorf("pki: %w", err)
 	}
 	if bundle.Ephemeral {
 		log.Warn("PKI is EPHEMERAL: state dir not writable — CA pin changes on every restart (clients need re-enroll); fix: compose user 0:0 or chown state dir to 65532")
 	}
-	log.Info("PKI ready", "ca_pin", bundle.CAPin)
+	log.Info("PKI ready",
+		"ca_pin", bundle.CAPin,
+		"leaf_not_after", bundle.Leaf.Leaf.NotAfter.UTC().Format(time.RFC3339),
+		"tls_hosts", tlsHosts)
 	hardSt := &hardening.Stats{}
 	gate := hardening.NewGate(cfg.Hardening.Enabled, cfg.Hardening.TarpitSec,
 		cfg.Hardening.MaxConns, cfg.Hardening.PerIPConns, hardSt)
@@ -163,6 +169,21 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		gate:           gate,
 		modSync:        modSync,
 	}, nil
+}
+
+// dedupNonEmpty — уникальные непустые строки (SAN: TLSHosts + PublicHost).
+func dedupNonEmpty(in []string, extra ...string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in)+len(extra))
+	for _, s := range append(in, extra...) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // CAPin exposes the CA SPKI pin for `enroll`.
@@ -537,7 +558,8 @@ func (a *App) handleTunnel(conn net.Conn) {
 	}
 	a.met.TunnelsUp.Add(1)
 	a.met.Reconnects.Add(1)
-	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport, "proto", proto)
+	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport,
+		"proto", proto, "proto_label", rrp.Label(proto), "proto_ver", rrp.Ver(proto))
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)

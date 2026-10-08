@@ -22,21 +22,26 @@ import (
 type Protocol struct {
 	// ID — канонический идентификатор в ссылке и в рукопожатии ("rrp1").
 	ID string
-	// Name — человекочитаемое имя для GUI/логов.
+	// Name — человекочитаемое имя для GUI/логов (содержит публичную версию:
+	// "RRP/1", "MTProto/2"). Новые протоколы обязаны нести версию в Name.
 	Name string
+	// Ver — публичная версия протокола ("1", "2.0"). v0.8.1: пробрасывается
+	// во весь стек (GUI/логи/статусы). Если публичной версии в природе нет —
+	// пустая строка: тогда нигде ничего не показываем (канон «пусто»).
+	Ver string
 	// Default — true для одного стабильного протокола по умолчанию.
 	Default bool
 }
 
 // ProtocolRRP1 — текущий стабильный протокол: RRP/1 кадры поверх TLS
 // (сырой TCP или WebSocket-апгрейд /rrp).
-var ProtocolRRP1 = Protocol{ID: "rrp1", Name: "RRP/1", Default: true}
+var ProtocolRRP1 = Protocol{ID: "rrp1", Name: "RRP/1", Ver: "1", Default: true}
 
 // ProtocolMTProto2 — MTProto 2.0-конверт payload'ов DATA/UDP_DATA поверх
 // RRP/1 (v0.8, модуль protocol.mtproto2): после приватного хендшейка
 // (TLS+HMAC) ключи перегенерируются DH-обменом, телом сообщения становится
 // AES-256-IGE конверт MTProto 2.0 (auth_key_id/msg_key/IGE).
-var ProtocolMTProto2 = Protocol{ID: "mtproto2", Name: "MTProto/2", Default: false}
+var ProtocolMTProto2 = Protocol{ID: "mtproto2", Name: "MTProto/2", Ver: "2.0", Default: false}
 
 // regMu защищает реестр: модули (modules.Syncer) применяют манифест
 // на горячую, параллельно идут хендшейки (v0.8).
@@ -74,6 +79,7 @@ func SetRegistry(ps []Protocol, version string) bool {
 		if p.ID == "" {
 			continue
 		}
+		p.Ver = SanitizeVer(p.Ver)
 		if p.ID == DefaultProtocolID {
 			hasDefault = true
 			p.Default = true
@@ -143,6 +149,78 @@ func NormalizeID(id string) string {
 		}
 	}
 	return s
+}
+
+// SanitizeVer чистит версию протокола: печатные символы без пробелов/кавычек,
+// максимум 16 — иначе "" (мусорная версия = «версии нет», не ошибка; канон:
+// мусор никогда не ломает стек).
+func SanitizeVer(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" || len(s) > 16 {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c == '.' || c == '-' || c == '_' || c == '+' || c == '/'
+		if !ok {
+			return ""
+		}
+	}
+	return s
+}
+
+// Label возвращает человекочитаемое имя протокола с версией ("RRP/1",
+// "MTProto/2") из реестра. Имя приходит из манифеста модулей (общего для
+// APK и сервера), поэтому обе стороны показывают ОДИННАКОВЫЕ метки.
+// Неизвестный id → сам id (версии нет — ничего не приписываем).
+func Label(id string) string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	for _, p := range supportedProtocols {
+		if p.ID == id {
+			if p.Name != "" {
+				return p.Name
+			}
+			return p.ID
+		}
+	}
+	return id
+}
+
+// Ver возвращает публичную версию протокола ("1", "2.0") или "" —
+// «версии нет, нигде не показываем» (канон v0.8.1).
+func Ver(id string) string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	for _, p := range supportedProtocols {
+		if p.ID == id {
+			return p.Ver
+		}
+	}
+	return ""
+}
+
+// Labels — метки всех протоколов реестра (id → имя), для /status и /ui.
+func Labels() map[string]string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	out := make(map[string]string, len(supportedProtocols))
+	for _, p := range supportedProtocols {
+		out[p.ID] = p.Name
+	}
+	return out
+}
+
+// Vers — публичные версии всех протоколов реестра (id → ver, "" = нет).
+func Vers() map[string]string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	out := make(map[string]string, len(supportedProtocols))
+	for _, p := range supportedProtocols {
+		out[p.ID] = p.Ver
+	}
+	return out
 }
 
 // NormalizeProto canonicalizes any user/env/link value to a registry ID.

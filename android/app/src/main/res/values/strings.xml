@@ -183,4 +183,35 @@
     <string name="config_hint_title">Ссылка подключения</string>
     <string name="update_progress">Загрузка: %1$d%% · %2$s</string>
     <string name="dns_servers_line">DNS: %1$s</string>
+
+    <!-- v0.8.1: тема, версии протоколов, константы защиты, честные источники -->
+    <string name="set_theme_title">Тема</string>
+    <string name="set_theme_hint">Авто берёт настройку телефона. На старых Android, где системной тёмной темы нет, авто = чёрная.</string>
+    <string name="set_theme_auto">Авто</string>
+    <string name="set_theme_dark">Тёмная</string>
+    <string name="set_theme_light">Светлая</string>
+    <string name="app_proto_ver_row">Версия протокола</string>
+    <string name="app_cert_row">Серт сервера действителен до</string>
+    <string name="sf_section">Защита — чем именно зашифрован и закрыт туннель</string>
+    <string name="sf_tls_min">Мин. TLS</string>
+    <string name="sf_alpn">ALPN</string>
+    <string name="sf_tls_provider">TLS-стек</string>
+    <string name="sf_cert_model">Сертификаты</string>
+    <string name="sf_pin_policy">Пин-политика</string>
+    <string name="sf_zero_rtt">0-RTT</string>
+    <string name="sf_token_storage">Хранение токена</string>
+    <string name="sf_handshake">Хендшейк</string>
+    <string name="sf_nonce">Nonce</string>
+    <string name="sf_rate_limit">Rate-limit</string>
+    <string name="sf_mtproto2">Шифрование payload</string>
+    <string name="sf_frame_limits">Лимиты кадров</string>
+    <string name="sf_wan">Анти-скан (WAN)</string>
+    <string name="sf_ssrf">SSRF-гвард</string>
+    <string name="sf_modules">Манифест модулей</string>
+    <string name="sf_apk_integrity">Целостность APK</string>
+    <string name="netinfo_source">источник: %1$s</string>
+    <string name="net_sources_row">Источники данных</string>
+    <string name="net_sources_local">локально: системные DNS (LinkProperties)</string>
+    <string name="dev_sources_row">Что читаем об устройстве</string>
+    <string name="dev_sources_list">/proc/cpuinfo, Build.* (модель/SDK/патч), os.version (ядро), ActivityManager.MemoryInfo (RAM)</string>
 </resources>

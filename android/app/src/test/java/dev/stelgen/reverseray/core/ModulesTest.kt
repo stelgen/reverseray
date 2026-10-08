@@ -46,7 +46,8 @@ class ModulesTest {
         assertTrue(RrpProtocols.displayList().contains("rrp1"))
         assertTrue(RrpProtocols.displayList().contains("mtproto2"))
         assertEquals("mtproto2", RrpProtocols.normalize("mtproto2"))
-        assertEquals("MTProto/2 · шифрование payload", RrpProtocols.displayName("mtproto2"))
+        // v0.8.1: версии протоколов видны в кнопках/статусах
+        assertEquals("MTProto/2 (v2.0) · шифрование payload", RrpProtocols.displayName("mtproto2"))
     }
 
     @Test
