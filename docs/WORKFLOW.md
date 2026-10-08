@@ -22,6 +22,8 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | Docker smoke | сборка образа, healthcheck-бинарь |
 | Android build | assembleDebug + unit-тесты (Robolectric 21/31, JVM-изоляция) |
 | Brand assets | перегенерация + сверка с закоммиченным |
+| Gitleaks | скан секретов (каждый push/PR) |
+| Dependency review | гейт уязвимых зависимостей на PR |
 
 ## Релизы
 
@@ -34,7 +36,10 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 4. **Деплой-эквивалент прод-машины**: путь
    `/portainer/Files/AppData/Config/reverseray/reverseray`.
 5. Откат: предыдущий digest из `deploy/digests.yaml`.
-6. Автообновление контейнера запрещено; обновления — только ручные/скриптом.
+6. Автообновление контейнера запрещено; обновления — только ручные/скриптом
+   (`deploy/install.sh` — создаёт `./reverseray/` относительно текущего каталога).
+7. Скорость релиза (v0.7): паблиш берёт артефакты `build-binaries` (без
+   пересборки), Go-тест+coverage одним прогоном, кэш Gradle в CI.
 
 ## Тестовые матрицы
 

@@ -1,7 +1,7 @@
 # ReverseRay
 
 <p align="center">
-  <img src="assets/brand/og-image.png" alt="ReverseRay" width="100%"/>
+  <img src="assets/brand/logo-512.png" alt="ReverseRay" width="140"/>
 </p>
 
 <p align="center">
@@ -50,6 +50,10 @@ sequenceDiagram
 
 - **Протокол RRP/1**: мультиплексирование потоков, flow-control, лимиты кадров,
   keep-alive. Спецификация: [`docs/protocol.md`](docs/protocol.md).
+- **TCP и UDP через туннель** (v0.7): SOCKS5 CONNECT + UDP ASSOCIATE — DNS+,
+  QUIC/HTTP3 и игры идут через телефон.
+- **WebSocket-транспорт** (`transport=ws`, v0.7): туннель по пути `/rrp` того же
+  TLS-порта — обход DPI-ограничений портов (443/80/CDN).
 - **Сервер** (Go, ноль зависимостей): mixed-инбокс SOCKS5/HTTP на одном порту,
   TLS 1.3 с SPKI-пином на CA, HMAC-токены с одноразовым nonce, admin API,
   метрики Prometheus, авто-подхват токенов.
@@ -76,6 +80,14 @@ cd reverseray
 
 sudo docker compose up -d          # сервер сам создаст state/tokens.json (device phone-1)
 sudo docker compose logs reverseray | grep connect   # CA-pin + публичный IP + подсказка enroll
+```
+
+Либо деплой одной командой из любого каталога (v0.7): появится подпапка
+`reverseray/` со всем нужным — compose, state, .env, инструкция:
+
+```bash
+bash deploy/install.sh        # из корня репо; RR_IMAGE_TAG=vX.Y.Z — выбор версии
+cd reverseray && sudo docker compose up -d
 ```
 
 `enroll` сам определит внешний IP сервера, сам добавит токен в
