@@ -49,4 +49,5 @@
     <string name="netinfo_loading">Detecting network…</string>
     <string name="netinfo_failed">Network: unknown</string>
     <string name="netinfo_ip">IP %1$s</string>
+    <string name="status_retry_last">Port %1$d: reconnecting in %2$d s — last error: %3$s</string>
 </resources>

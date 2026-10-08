@@ -67,6 +67,7 @@ sealed class RrpFrame(val type: Int) {
     class Hello(
         val agent: String,
         val protocolVersion: Int,
+        val device: String,
         val caps: List<String>,
         val maxStreams: Int,
     ) : RrpFrame(TYPE_HELLO) {
@@ -75,6 +76,7 @@ sealed class RrpFrame(val type: Int) {
             val json = MiniJson.obj(
                 "agent" to MiniJson.q(agent),
                 "ver" to protocolVersion.toString(),
+                "device" to MiniJson.q(device),
                 "caps" to "[$capsJson]",
                 "max_streams" to maxStreams.toString(),
             )
@@ -91,6 +93,7 @@ sealed class RrpFrame(val type: Int) {
                 return Hello(
                     agent = m["agent"] ?: "",
                     protocolVersion = m["ver"]?.toIntOrNull() ?: VERSION,
+                    device = m["device"] ?: "",
                     caps = caps,
                     maxStreams = m["max_streams"]?.toIntOrNull() ?: 0,
                 )
@@ -98,15 +101,17 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
-    /** 0x02 S→C: JSON {session_id, server_ver, tunnel_window} */
+    /** 0x02 S→C: JSON {session_id, server_ver, nonce, tunnel_window}. nonce — base64url, одноразовый. */
     class HelloOk(
         val sessionId: String,
         val serverVer: String,
+        val nonce: String,
         val tunnelWindow: Long,
     ) : RrpFrame(TYPE_HELLO_OK) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "session_id" to MiniJson.q(sessionId),
             "server_ver" to MiniJson.q(serverVer),
+            "nonce" to MiniJson.q(nonce),
             "tunnel_window" to tunnelWindow.toString(),
         ).toByteArray(Charsets.UTF_8)
 
@@ -116,6 +121,7 @@ sealed class RrpFrame(val type: Int) {
                 return HelloOk(
                     sessionId = m["session_id"] ?: "",
                     serverVer = m["server_ver"] ?: "",
+                    nonce = m["nonce"] ?: "",
                     tunnelWindow = m["tunnel_window"]?.toLongOrNull() ?: 0L,
                 )
             }

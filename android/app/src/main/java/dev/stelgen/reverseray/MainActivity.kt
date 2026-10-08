@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var configView: TextInputEditText
     private lateinit var trafficGraph: TrafficGraphView
     private lateinit var trafficLabel: TextView
-    private lateinit var netFlag: TextView
+    private lateinit var netFlag: ImageView
     private lateinit var netInfoView: TextView
     private val uiHandler = Handler(Looper.getMainLooper())
     private val netInfoRunnable = object : Runnable {
@@ -272,9 +272,9 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(6), 0, 0)
         }
-        netFlag = TextView(this@MainActivity).apply {
-            textSize = 13f
-            setPadding(0, 0, dp(6), 0)
+        netFlag = ImageView(this@MainActivity).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(22), dp(15)).apply { setMargins(0, 0, dp(6), 0) }
+            scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = android.view.View.GONE
         }
         netRow.addView(netFlag)
@@ -425,12 +425,16 @@ class MainActivity : AppCompatActivity() {
                     netInfoView.setText(R.string.netinfo_failed)
                     return@runOnUiThread
                 }
-                val flag = info.flagEmoji() ?: NetInfoFetcher.emojiOf(info.countryCode)
-                if (flag.isNullOrEmpty()) {
-                    netFlag.visibility = android.view.View.GONE
-                } else {
-                    netFlag.text = flag
+                // Флаг — бандл-PNG из APK (res/drawable-nodpi/flag_xx.png);
+                // фолбэк — эмодзи в тексте, если ассета для страны нет.
+                val cc = info.countryCode
+                val drawableId = if (cc != null && cc.length == 2)
+                    resources.getIdentifier("flag_" + cc.lowercase(), "drawable", packageName) else 0
+                if (drawableId != 0) {
+                    netFlag.setImageResource(drawableId)
                     netFlag.visibility = android.view.View.VISIBLE
+                } else {
+                    netFlag.visibility = android.view.View.GONE
                 }
                 netInfoView.text = buildString {
                     append(getString(R.string.netinfo_ip, info.ip))

@@ -299,7 +299,7 @@ fun serverHandshake(conn: Socket, inp: DataInputStream, out: Sender) {
     val s = readFrame(inp) ?: return
     check(s.first == RrpFrame.TYPE_HELLO.toByte()) { "expected HELLO" }
     out(RrpFrame.TYPE_HELLO_OK.toByte(), 0,
-        """{"session_id":"s1","server_ver":"0.2.1","tunnel_window":524288}""".toByteArray())
+        """{"session_id":"s1","server_ver":"0.2.1","nonce":"AAAAAAAAAAAAAAAAAAAAAA","tunnel_window":524288}""".toByteArray())
     readFrame(inp) // AUTH
     out(RrpFrame.TYPE_READY.toByte(), 0,
         """{"tunnel_id":"t1","role":"active","max_streams":64,"tunnel_window":524288}""".toByteArray())

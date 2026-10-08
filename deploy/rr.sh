@@ -15,7 +15,7 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v0.7.2"
+DEFAULT_TAG="v0.7.3"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
 TAG=""
@@ -114,8 +114,13 @@ fi
 # --- строка подключения ---
 LINE=""
 if [ -f /tmp/rr-enroll.out ]; then
-  LINE=$(grep -o '^rrp://[^[:space:]]*' /tmp/rr-enroll.out | head -1 || true)
+  # v0.7.3: строка БЕЗ ведущих пробелов/переносов — новичок копирует как есть
+  LINE=$(grep -o '^rrp://[^[:space:]]*' /tmp/rr-enroll.out | head -1 | tr -d '[:space:]' || true)
 fi
+# LAN-IP хоста (роутер/машина с докером), не IP докер-бриджа — для Xray-аутбаунда
+LAN_IP=$(ip -4 route get 1.0.0.0 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' | head -1)
+[ -n "$LAN_IP" ] || LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+[ -n "$LAN_IP" ] || LAN_IP="<LAN_IP_ХОСТА>"
 if [ -z "$LINE" ]; then
   # повторный enroll печатает строку, даже если маркер стоит (без записи токена в state не выйдет —
   # тогда просим enroll вручную)
@@ -126,9 +131,15 @@ fi
 
 echo
 echo "=============================================================="
-echo " ГОТОВО. Строка подключения (вставь в приложение / QR):"
+echo " ГОТОВО."
 echo
-echo " $LINE"
+echo " 1) СТРОКА ПОДКЛЮЧЕНИЯ ДЛЯ APK (скопируй ЦЕЛИКОМ, начиная с rrp://):"
+echo "$LINE"
+echo
+echo " 2) OUTBOUND ДЛЯ XRAY (вставь в config.json -> outbounds;"
+echo "    address = LAN-IP хоста ${LAN_IP} — как машину видит роутер/локалка,"
+echo "    не IP докер-бриджа; если Xray на той же машине — оставь как есть):"
+echo '{ "tag": "reverseray-out", "protocol": "socks", "settings": { "servers": [ { "address": "'"${LAN_IP}"'", "port": 1080 } ] } }'
 echo
 echo " Проверка прокси:  curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me"
 echo " Обновление позже: sudo bash rr.sh            (версия возьмётся с GitHub)"

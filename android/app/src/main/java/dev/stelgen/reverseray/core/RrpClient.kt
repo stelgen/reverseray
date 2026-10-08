@@ -92,6 +92,8 @@ class RrpClient(
     private val agentName: String = DEFAULT_AGENT,
     private val allowLan: Boolean = false,
     private val listener: Listener? = null,
+    /** Имя устройства (поле device в HELLO; сервер требует непустое ≤64). */
+    private val deviceName: String = "phone-1",
     /** Транспорт: "tcp" (сырой RRP/1) или "ws" (WebSocket-апгрейд /rrp). */
     private val transport: String = TRANSPORT_TCP,
     /**
@@ -226,7 +228,9 @@ class RrpClient(
         setState(State.HANDSHAKE)
         Thread({ readerLoop() }, "rrp-reader-$port").apply { isDaemon = true }.start()
 
-        sendFrame(RrpFrame.Hello(agentName, RrpFrame.VERSION, listOf("chacha20", "alpn"), MAX_STREAMS_REQUEST))
+        val hello = RrpFrame.Hello(agentName, RrpFrame.VERSION, deviceName, listOf("chacha20", "alpn"), MAX_STREAMS_REQUEST)
+        log("SENT HELLO agent=$agentName device=$deviceName ver=${RrpFrame.VERSION} caps=[chacha20,alpn] max_streams=$MAX_STREAMS_REQUEST (${hello.encode().size}Б)")
+        sendFrame(hello)
         try {
             if (!helloLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 throw RrpClientException("таймаут HELLO_OK ($host:$port)")
@@ -236,13 +240,25 @@ class RrpClient(
             sessionId = ok.sessionId
             if (ok.tunnelWindow > 0) tunnelWindow = ok.tunnelWindow
 
-            // AUTH: hmac = base64(HMAC-SHA256(token, nonce || session_id))
-            val nonce = ByteArray(NONCE_SIZE).also { rnd.nextBytes(it) }
-            val macInput = nonce + ok.sessionId.toByteArray(Charsets.UTF_8)
+            // v0.7.3 ФИКСЫ: (1) nonce — СЕРВЕРНЫЙ из HELLO_OK (клиент раньше
+            // генерировал свой — сервер сверяет HMAC со своим); (2) ключ HMAC =
+            // SHA256(token), не сырой токен (иначе auth всегда падает).
+            log("RECV HELLO_OK session=${ok.sessionId} server_ver=${ok.serverVer} nonce=${ok.nonce.ifEmpty { "<НЕТ>" }} window=${ok.tunnelWindow}")
+            if (ok.nonce.isEmpty()) {
+                throw RrpClientException("HELLO_OK без nonce (сервер не прислал одноразовый nonce)")
+            }
+            val nonceBytes = try {
+                Base64.getUrlDecoder().decode(ok.nonce)
+            } catch (e: IllegalArgumentException) {
+                try { Base64.getDecoder().decode(ok.nonce) } catch (e2: IllegalArgumentException) { null }
+            } ?: throw RrpClientException("HELLO_OK: nonce не base64 (${ok.nonce.take(32)})")
+            val macInput = nonceBytes + ok.sessionId.toByteArray(Charsets.UTF_8)
+            val hmacKey = MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
             val hmac = Base64.getEncoder()
-                .encodeToString(hmacSha256(token.toByteArray(Charsets.UTF_8), macInput))
+                .encodeToString(hmacSha256(hmacKey, macInput))
+            log("SENT AUTH mode=$MODE_TOKEN_HMAC nonce=${ok.nonce} hmac=${hmac.take(12)}… sessionId=$sessionId")
             sendFrame(
-                RrpFrame.Auth(MODE_TOKEN_HMAC, hmac, Base64.getEncoder().encodeToString(nonce))
+                RrpFrame.Auth(MODE_TOKEN_HMAC, hmac, ok.nonce)
             )
 
             if (!readyLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
@@ -256,7 +272,7 @@ class RrpClient(
             setState(State.READY)
             lastPongMs.set(System.currentTimeMillis())
             scheduleNextPing()
-            log("READY tunnel=${rd.tunnelId} role=${rd.role} window=$tunnelWindow maxStreams=$maxStreams")
+            log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             close()
@@ -318,7 +334,7 @@ class RrpClient(
             is RrpFrame.Pong -> lastPongMs.set(System.currentTimeMillis())
             is RrpFrame.Stats -> log("STATS: ${frame.json}")
             is RrpFrame.ErrorFrame -> {
-                log("сервер ERROR ${frame.code}: ${frame.message}")
+                log("сервер ERROR ${frame.code}: ${frame.message} (raw payload ${frame.rawHex()})")
                 for (id in pendingOpens.keys) {
                     pendingOpens.remove(id)?.complete(ERR_PROTOCOL)
                 }
@@ -705,6 +721,13 @@ class RrpClient(
 
     private fun log(message: String) {
         listener?.onLog(this, message)
+    }
+
+    /** Hex-дамп первых 64 байт (для анализа raw-данных в журнале приложения). */
+    private fun RrpFrame.rawHex(): String {
+        val p = try { encode().copyOfRange(RrpFrame.HEADER_SIZE, encode().size) } catch (e: Exception) { ByteArray(0) }
+        val n = minOf(64, p.size)
+        return p.take(n).joinToString(" ") { String.format("%02x", it) } + if (p.size > n) "…" else ""
     }
 
     private fun closeQuietly(c: Socket?) {

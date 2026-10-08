@@ -20,6 +20,7 @@
 | v0.7.0 | WebSocket-транспорт, UDP через туннель (DNS+/QUIC), график трафика, экспорт/импорт конфига файлом, BcTlsCrypto (фикс SHA-512 на всех Android), деплой-скрипт install.sh, ускоренный CI |
 | v0.7.1 | Фикс crash-loop «permission denied» (compose user 0:0, in-memory bootstrap, self-heal state) |
 | v0.7.2 | TOFU-доверие самоподписанным CA, автопилот деплоя rr.sh, IP/страна/оператор в статусе, фикс апдейтера APK, versionCode из семвера |
+| v0.7.3 | Фикс подключения (device в HELLO, AUTH по серверному nonce, anti-replay), бандл флагов 200 стран, Xray-outbound в rr.sh/enroll/логе, прокси без пароля по умолчанию, расширенные логи |
 
 ## 📋 v0.7 — устойчивость и UX (выполнено)
 

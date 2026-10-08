@@ -35,7 +35,7 @@ class RrpFrameTest {
 
     @Test
     fun `roundtrip hello json frame`() {
-        val f = RrpFrame.Hello("агент/1 \"тест\"", 1, listOf("chacha20", "alpn"), 64)
+        val f = RrpFrame.Hello("агент/1 \"тест\"", 1, "phone-1", listOf("chacha20", "alpn"), 64)
         val parsed = RrpFrame.parse(f.encode()) as RrpFrame.Hello
         assertEquals("агент/1 \"тест\"", parsed.agent)
         assertEquals(1, parsed.protocolVersion)

@@ -1,7 +1,7 @@
 services:
   reverseray:
     # Прод: пин по digest (см. deploy/digests.yaml). Автообновления запрещены.
-    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.2}
+    image: ghcr.io/stelgen/reverseray:${RR_IMAGE_TAG:-v0.7.3}
     container_name: reverseray
     ports:
       - "${RR_SOCKS_PORT:-1080}:1080"
@@ -15,10 +15,14 @@ services:
       RR_LISTEN_MIXED: ":1080"
       RR_LISTEN_ADMIN_TCP: ":9090"
       RR_LOG_LEVEL: "info"
+      # Inbound-прокси по умолчанию БЕЗ авторизации (HTTP+SOCKS5).
+      # Захотел пароль — раскомментируй (и обнови Xray-аутбаунд: socks+user/pass):
+      # RR_AUTH_USERNAME: myuser
+      # RR_AUTH_PASSWORD: mypassword
     volumes:
       - ./state:/var/lib/reverseray
       # - ./config.json:/etc/reverseray/config.json:ro
-    # v0.7.2 ФИКС "permission denied": Dockerfile-пользователь 65532 (nonroot)
+    # v0.7.3 ФИКС "permission denied": Dockerfile-пользователь 65532 (nonroot)
     # не мог писать в root-owned bind-mount ./state (Portainer/хост) →
     # crash-loop "bootstrap: write tokens: permission denied".
     # Теперь контейнер работает под root БЕЗ capabilities (cap_drop: ALL):

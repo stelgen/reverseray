@@ -158,6 +158,7 @@ class TunnelService : Service() {
 
     private fun runLoop(r: Runner) {
         var attempt = 0
+        var lastError = "?"
         while (!stopping) {
             val cfg = config ?: break
             val client = RrpClient(
@@ -167,6 +168,7 @@ class TunnelService : Service() {
                 pin = cfg.pin,
                 allowLan = allowLan(),
                 listener = clientListener,
+                deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
                 transport = cfg.transport,
             )
             r.client = client
@@ -182,7 +184,8 @@ class TunnelService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, e.message ?: "?"))
+                lastError = e.message ?: "?"
+                updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, lastError))
             } finally {
                 try { client.close() } catch (_: Exception) {}
             }
@@ -190,7 +193,12 @@ class TunnelService : Service() {
             if (stopping) break
             attempt++
             val delay = RrpClient.backoffDelayMs(attempt - 1, rnd)
-            updateStatus(STATE_RETRY, getString(R.string.status_retry, r.target.port, delay / 1000))
+            // v0.7.3: ERROR держится на экране минимум HOLD_ERROR_MS, чтобы юзер
+            // успел прочитать причину, а не мигал «реконнект»; текст ошибки
+            // остаётся виден и в статусе RETRY.
+            try { Thread.sleep(ERROR_HOLD_MS) } catch (_: InterruptedException) {}
+            if (stopping) break
+            updateStatus(STATE_RETRY, getString(R.string.status_retry_last, r.target.port, delay / 1000, lastError))
             sleepWithKick(r, delay)
         }
     }
@@ -406,6 +414,7 @@ class TunnelService : Service() {
         const val EXTRA_TX_TOTAL = "tx_total"
         const val EXTRA_RX_TOTAL = "rx_total"
         private const val STATS_INTERVAL_MS = 500L
+        private const val ERROR_HOLD_MS = 1_500L
 
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIF_ID = 1
