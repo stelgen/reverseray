@@ -9,12 +9,18 @@ name: Screenshot
 #  - коммитит assets/brand/screenshot.png (README уже встраивает этот
 #    файл — картинка на главной обновляется сама; если блок в README
 #    удалён, бот вернёт его);
-#  - упал — упал один этот воркфлоу: CI/Release остаются зелёными.
+#  - упал — упал один этот воркфлоу: CI/Release остаются зелёными;
+#  - ЛЮБОЙ фейл оставляет артефакт-диагностику (логи джоб без токена
+#    нечитаемы — урок 08.10): логи эмулятора, logcat, кадры попыток.
+#
+# v0.8.3.1: android-emulator-runner заменён на РУЧНУЮ загрузку эмулятора
+# (два прогона падали ДО первого кадра — внутри чёрного ящика не видно
+# причины; теперь бут под нашим контролем с retry ×3 и логами).
 
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "30 2 * * 1" # еженедельно, ночной UTC — свежий кадр без всяких пушей
+    - cron: "30 2 * * 1" # еженедельно, ночной UTC
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -35,9 +41,6 @@ jobs:
           github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: android
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -50,75 +53,97 @@ jobs:
       - name: Install Pillow (sanity-check кадра)
         run: pip install pillow
       - name: Build debug APK
+        working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon
-      - name: Screenshot on emulator (boot-wait, hidden ANR dialogs, 8 attempts)
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          arch: x86_64
-          script: |
-            set -e
-            # Ждём ПОЛНУЮ загрузку системы (не просто наличие adb)
-            adb shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done'
+      - name: Boot emulator (3 attempts, logs kept)
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "SDK=$SDK; kvm: $(ls -l /dev/kvm 2>/dev/null || echo ABSENT)"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" \
+            "system-images;android-30;google_apis;x86_64" | tail -2 || true
+          echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n ci -k "system-images;android-30;google_apis;x86_64" -d pixel || true
+          boot=0
+          for b in 1 2 3; do
+            echo "boot attempt $b"
+            "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
+              -no-audio -no-boot-anim -accel auto > "emulator-$b.log" 2>&1 &
+            EPID=$!
+            for i in $(seq 1 100); do
+              if adb shell getprop sys.boot_completed 2>/dev/null | grep -q 1; then boot=1; break; fi
+              sleep 3
+            done
+            if [ "$boot" = "1" ]; then echo "emulator booted (attempt $b)"; break; fi
+            echo "boot attempt $b failed — killing and retrying"
+            kill "$EPID" 2>/dev/null || true
+            adb kill-server >/dev/null 2>&1 || true
             sleep 5
-            # КЛЮЧЕВОЙ ФИКС ANR-кадров: системные ANR/crash-диалоги скрыты —
-            # screencap больше не ловит «кладбище» вместо приложения
-            adb shell settings put global hide_error_dialogs 1
-            adb shell settings put global window_animation_scale 0.0
-            adb shell settings put global transition_animation_scale 0.0
-            adb shell settings put global animator_duration_scale 0.0
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            ok=0
-            # ВАЖНО: script у emulator-runner исполняется из КОРНЯ репо —
-            # все файлы пишем туда (артефакт и шаг нормализации смотрят туда же)
-            for attempt in 1 2 3 4 5 6 7 8; do
-              echo "shot attempt $attempt"
-              adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
-              focused=0
-              for i in $(seq 1 60); do
-                if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
-                # приложение могло умереть/не подняться — поднимаем снова
-                adb shell am start -n dev.stelgen.reverseray/.MainActivity >/dev/null 2>&1 || true
-                sleep 2
-              done
-              adb exec-out screencap -p > "shot-attempt-$attempt.png" || true
-              if [ "$focused" != "1" ]; then
-                echo "app never focused on attempt $attempt"
-                adb logcat -d | tail -60
-                continue
-              fi
-              sleep 4 # даём отрисоваться графику/консоли
-              adb exec-out screencap -p > shot-raw.png
-              if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
-                ok=1
-                break
-              fi
-              # кадр однотонный — закрываем возможный оверлей и пробуем снова
-              adb shell input keyevent KEYCODE_BACK || true
+          done
+          if [ "$boot" != "1" ]; then
+            { echo "== emulator logs =="; tail -80 emulator-*.log; echo "== adb devices =="; adb devices -l; } > boot-fail.log || true
+            echo "::error::эмулятор не загрузился за 3 попытки — см. артефакт screenshot-diagnostics"
+            exit 1
+          fi
+      - name: Hide ANR dialogs + take screenshots (8 attempts)
+        run: |
+          set -e
+          adb shell settings put global hide_error_dialogs 1
+          adb shell settings put global window_animation_scale 0.0
+          adb shell settings put global transition_animation_scale 0.0
+          adb shell settings put global animator_duration_scale 0.0
+          adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+          ok=0
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "shot attempt $attempt"
+            adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
+            focused=0
+            for i in $(seq 1 60); do
+              if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
+              adb shell am start -n dev.stelgen.reverseray/.MainActivity >/dev/null 2>&1 || true
               sleep 2
             done
-            if [ "$ok" != "1" ]; then
-              echo "no good frame in 8 attempts"
-              {
-                echo "== logcat tail =="; adb logcat -d | tail -300
-                echo "== windows focus =="; adb shell dumpsys window 2>/dev/null | grep -i -A2 focus
-                echo "== resumed activity =="; adb shell dumpsys activity activities 2>/dev/null | grep -i -m5 'mResumedActivity\|topResumedActivity'
-              } > shot-fail-logcat.txt || true
-              exit 1
+            adb exec-out screencap -p > "shot-attempt-$attempt.png" || true
+            if [ "$focused" != "1" ]; then
+              echo "app never focused on attempt $attempt"
+              adb logcat -d | tail -60
+              continue
             fi
-      - name: Upload raw shot + logcat (diagnostics, always)
+            sleep 4 # даём отрисоваться графику/консоли
+            adb exec-out screencap -p > shot-raw.png
+            if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
+              ok=1
+              break
+            fi
+            adb shell input keyevent KEYCODE_BACK || true
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            echo "no good frame in 8 attempts"
+            {
+              echo "== logcat tail =="; adb logcat -d | tail -300
+              echo "== windows focus =="; adb shell dumpsys window 2>/dev/null | grep -i -A2 focus
+              echo "== resumed activity =="; adb shell dumpsys activity activities 2>/dev/null | grep -i -m5 'mResumedActivity\|topResumedActivity'
+            } > shot-fail-logcat.txt || true
+            exit 1
+          fi
+      - name: Upload diagnostics (always)
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: screenshot-diagnostics
           path: |
+            emulator-*.log
+            boot-fail.log
             shot-raw.png
             shot-attempt-*.png
             shot-fail-logcat.txt
-          if-no-files-found: ignore
+          if-no-files-found: warn
       - name: Normalize 720x1440 + ensure README embeds the shot
+        if: success()
         working-directory: ${{ github.workspace }}
         run: |
           python3 - <<'PY'
@@ -144,6 +169,7 @@ jobs:
               print("README: скриншот уже встроен")
           PY
       - uses: stefanzweifel/git-auto-commit-action@v6
+        if: success()
         with:
           commit_message: "[skip ci] docs: свежий скриншот приложения (бот-эмулятор, отдельный воркфлоу)"
           file_pattern: "assets/brand/screenshot.png README.md"
