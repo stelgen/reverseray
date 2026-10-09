@@ -91,7 +91,21 @@ jobs:
             echo "::error::веб-контейнер не healthy за 2 попытки (240с каждая) — см. артефакт shot-web"
             exit 1
           fi
-          curl -fsS --max-time 5 http://127.0.0.1:9090/healthz
+          # v0.9.4-фикс: финальный curl дал ECONNRESET (exit 56) на 2 релизах
+          # подряд: docker-proxy на загруженном раннере сбрасывает первые
+          # соединения сразу после healthy, сам контейнер жив. Ретраи решают.
+          hz=0
+          for i in $(seq 1 15); do
+            if curl -fsS --http1.1 --max-time 5 http://127.0.0.1:9090/healthz; then hz=1; break; fi
+            sleep 2
+          done
+          if [ "$hz" != "1" ]; then
+            { echo "== healthz fail: container state =="; docker inspect rr-web --format '{{json .State}}' || true
+              echo "== healthz fail: container logs =="; docker logs --tail 80 rr-web || true
+              echo "== healthz fail: listeners =="; ss -ltnp 2>/dev/null | grep -E '9090|docker-proxy' || true; } >> web-run-fail.txt || true
+            echo "::error::healthz на 127.0.0.1:9090 недоступен за 15 попыток — см. артефакт shot-web"
+            exit 1
+          fi
       - name: Web panel screenshot (headless chromium)
         run: |
           set -e
@@ -102,7 +116,15 @@ jobs:
           with sync_playwright() as p:
               b = p.chromium.launch()
               pg = b.new_page(viewport={"width": 1280, "height": 860})
-              pg.goto("http://127.0.0.1:9090/ui", wait_until="networkidle")
+              # v0.9.4: навигация с ретраями (первый коннект через docker-proxy может быть сброшен)
+              for attempt in range(3):
+                  try:
+                      pg.goto("http://127.0.0.1:9090/ui", wait_until="networkidle", timeout=30000)
+                      break
+                  except Exception:
+                      if attempt == 2:
+                          raise
+                      pg.wait_for_timeout(2000)
               pg.wait_for_timeout(1500)  # даём JSON-карточкам отрисоваться
               pg.screenshot(path="web-raw.png", full_page=True)
               b.close()

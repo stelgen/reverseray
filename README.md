@@ -9,7 +9,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-137%20Go%20%2B%20187%20JVM-2E7D32">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-137%20Go%20%2B%20188%20JVM-2E7D32">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
 </p>
 
@@ -102,7 +102,7 @@ flowchart TB
 | Деплой | Автопилот `rr.sh`: установка/обновление/сброс одной командой | [`deploy/rr.sh`](deploy/rr.sh) |
 | CI-роботы | Тесты, приватность, модули, скриншот, секреты | `.github/workflows/` |
 
-## Возможности (v0.9.3)
+## Возможности (v0.9.4)
 
 | Возможность | Суть |
 |---|---|
@@ -112,13 +112,14 @@ flowchart TB
 | **Модульная система** | APK — тонкий движок; сервер и приложение парсят один и тот же манифест; модули обновляются с GitHub без переустановки APK (по версии/хешу, мусор никогда не применяется); клиент фоллбечится на rrp1, сервер не откатывается никогда (анти-цикл) |
 | **API Mask (v0.8.2)** | Модуль камуфляжа: фоновый обмен внутри туннеля выглядит как API бизнес-приложения — периодические JSON-запросы/ответы со случайными размерами и джиттером; ноль внешних хостов; суточный бюджет из манифеста; каждый обмен честно виден в консоли |
 | **Лимит трафика — король** | Суточный/месячный лимит с датой сброса; исчерпан → РОВНО НОЛЬ байт: туннель умирает, окно «Траффик закончился», автоподключение умеет ждать даты сброса |
-| **Кнопка и график (v0.9.3)** | Кнопка подключения — четыре состояния (старт/подключение/подключено/ошибка) с анимациями канона 2026: тактильный отклик нажатия, мягкий поп смены состояния, кольца состояния (`PulseRingView`: indeterminate-дуга при подключении, двойное дыхание при живом туннеле), без дёрганья и без затрат батареи на невидимом экране; график — текущая/средняя/пиковая скорость, оси bps, градиент; состояние и история переживают сворачивание (живут в сервисе). Реестр протоколов: новый протокол из модуля виден в GUI сразу, согласуются только исполняемые обеими сторонами |
+| **Кнопка и график (v0.9.3)** | Кнопка — 4 состояния (старт/подключение/подключено/ошибка), анимация состояния — `PulseRingView`; график — текущая/средняя/пиковая скорость (оси bps); состояние и история живут в сервисе. Реестр протоколов: новый протокол из модуля виден в GUI сразу, согласуются только исполняемые обеими сторонами |
 | **Единая консоль** | Один компонент на Главной, в Обновлении и в Логе: цветовые роли строк (зелёный/красный/тёмно-жёлтое важное/белая беготня), кнопка «live» внутри бара, положение сохраняется |
 | **Честные вкладки** | «О приложении» (версии, модули, RAM, диск, трафик, константы защиты), «О устройстве» (CPU/RAM/SDK/Java + что читаем), «О сети» (DNS, реальный резолвер, DoT/DoH/DNSSEC/ECS/SNI + источники данных) |
 | **Обновления** | Модули — без переустановки APK (прогресс % и скорость в консоли); APK — по кнопке или раз в 24 ч; скачивание сверяется с SHA256SUMS релиза до установки (анти-подмена) |
 | **UX-канон (v0.8.2)** | Все вкладки скроллятся (включая ландшафт и крупные шрифты), лог обновлений — в том же консольном окне и на языке приложения, никаких пустых полей и пояснений-«скобок» в настройках |
 | **Многоязычность (v0.8.3)** | Выбор языка в настройках (Как в системе / Русский / English); ВСЁ динамично: поля, статусы, уведомления и логи серверных событий; фолбэк — английский (дефолт-ресурсы = EN, RU — values-ru; core — типизированный каталог Msgs с en-фолбэком); паритет переводов и ноль хардкода проверяют CI-гейты перед деплоем |
 | **Пин CA — один канон (v0.9.0)** | пин = SHA256(SPKI CA) у обеих сторон (до 0.9.0 клиент считал от листа — плановая ротация листа ломала честные ссылки); ротация CA сервера = один тап владельца: диалог с фактическим пином в каноне ссылки, «Принять» обновляет ссылку и реконнектит; молчаливого доверия нет никогда |
+| **Диагностика подключения (v0.9.4)** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена (6 символов) для сверки со строкой из rr.sh/enroll |
 | **Docker** | Distroless БЕЗ шелла (v0.8.3: governor — код в самом бинаре, busybox удалён), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy); restart-governor: падение — не чаще раза в 30 с, бесконечный crash-loop отдаёт контейнер Docker с ошибкой |
 | **Веб-панель `/ui` (v0.9.1)** | Сессии, трафик, egress IP, протоколы, hardening-счётчики, модули и камуфляж + «О сервере» и «Константы защиты» — тот же канон фактов, что и в APK |
 
@@ -170,6 +171,7 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 | 3 | Строгий пин (v0.9.0): пин = SHA256(SPKI CA) у обеих сторон; если CA перегенерировали — APK покажет диалог «Сервер сменил сертификат»: «Принять новый пин» обновит ссылку и реконнектит (анти-MITM: молча не доверяем никогда) |
 | 4 | `sudo bash rr.sh --reset` — чистое состояние за минуту |
 | 5 | Сканеры в метриках `reverseray_hardening_*` — это нормально: порт молчит по дизайну |
+| 6 | `ERROR 1: auth failed` — токен ссылки устарел (сервер переустанавливали или `--reset`): возьмите свежую строку из вывода `rr.sh`/`enroll` и вставьте заново; не долбите сервер — после 5 неудач он лочит IP, и клиент видит «TLS handshake_failure(40)» вместо причины |
 
 ## Интеграция с Xray
 
@@ -194,13 +196,14 @@ admin API — только localhost/unix; контейнер distroless + gover
 
 | Робот | Что делает |
 |---|---|
-| `go` | gofmt/vet/test-race/coverage — 136 тестов |
-| `android` | сборка + 187 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл, i18n-гейты) |
+| `go` | gofmt/vet/test-race/coverage — 137 тестов |
+| `android` | сборка + 188 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл, i18n-гейты) |
 | `modules` | канон-чек манифеста (включая секцию camouflage) + парсеры обеих сторон согласны |
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |
 | `gitleaks` | секреты |
-| `screenshot` | отдельный воркфлоу ПОСЛЕ РЕЛИЗА, две параллельные джобы: APK с эмулятора → `assets/brand/screenshot.png`, веб-панель (headless-браузер, образ релиза) → `assets/brand/web.png` |
+| `screenshot-apk` | отдельный воркфлоу после релиза: APK с эмулятора (adb полным путём, boot 4×450 с, гейты /dev/kvm+system-image+AVD) → `assets/brand/screenshot.png` |
+| `screenshot-web` | отдельный воркфлоу после релиза: веб-панель /ui из образа релиза (pull×3, healthy 240 с, healthz-ретраи 15×2 с) → `assets/brand/web.png` |
 | `assets` | детерминизм брендинга, живой banner.gif |
 | `docker` | сборка образа + healthcheck |
 | `codeql` | стат-анализ безопасности |
@@ -257,6 +260,7 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 | API Mask (v0.8.2) | in-tunnel background chatter shaped like a business app's API; zero external hosts; daily budget from the manifest |
 | Traffic limit is king | exhausted → exactly zero bytes; auto-reconnect can wait for the reset date |
 | Honest UI | unified console across tabs (scrollable, in-bar live button); About panels show EVERYTHING the app learned |
+| Connection diagnostics (v0.9.4) | server `auth failed` → auto-reconnect stops with a clear status (retries only earn an IP lockout shown as a cryptic TLS alert); AUTH log prints the token prefix (6 chars) to compare with the rr.sh/enroll output |
 | SSD/RAM discipline | counters live in RAM, persisted once per minute |
 | Docker | distroless БЕЗ шелла (governor in-binary), cap_drop ALL, healthcheck (CI waits for healthy on the real entrypoint), restart-governor (30 s min delay, gives up after 20 failures) |
 

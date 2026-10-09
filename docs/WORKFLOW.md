@@ -18,8 +18,8 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 
 | Джоба | Содержание |
 |---|---|
-| Go test/vet/fmt | gofmt, vet, `test -race`, coverage (131 тест) |
-| Android build | assembleDebug + unit-тесты (176, Robolectric 21/31, JVM-изоляция, i18n-гейты) |
+| Go test/vet/fmt | gofmt, vet, `test -race`, coverage (137 тестов) |
+| Android build | assembleDebug + unit-тесты (188, Robolectric 21/31, JVM-изоляция, i18n-гейты) |
 | Docker run | v0.8.3: сборка образа → запуск КАК В ПРОДЕ (родной entrypoint) → ожидание healthcheck до 90 с → compose-smoke на родном compose.yaml; упал/не healthy → красный прогон с docker logs+inspect |
 | Brand assets | перегенерация + сверка с закоммиченным (+ живой banner.gif, скриншот приложения) |
 | Gitleaks | скан секретов (каждый push/PR) |
@@ -64,6 +64,13 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | **Порядок блокировок RRP** | `st.mu → s.mu` и НИКОГДА наоборот (дедлок TypeClose/Read, найден тестом многоканальности под -race); `markClosed` не вызывается под `s.mu`. |
 | **Flow-control кредит ≤ буфер** | `tunnel_window = StreamWindow×2` — ровно anti-abuse буфер DATA на стрим (capIn 1 МБ): честный клиент принципиально не может убить стрим `close(4)`; fake-phone в e2e уважает окно как настоящий APK. |
 
+## Политики канона (v0.9.4, добавление)
+
+| Политика | Правило |
+|---|---|
+| **auth failed ≠ сетевой сбой (v0.9.4)** | ERROR 1 «auth failed» = токен/ссылка устарели (переустановка/`--reset` сервера). Клиент: `RrpAuthException` → авто-реконнект СТОП, честный статус + подсказка «свежая ссылка из rr.sh/enroll»; в журнале AUTH — префикс токена (6 символов) для сверки. Ретраи запрещены: 5 неудач → IP-локаут 30с·2ⁿ (до 10 мин), который клиент видит как «TLS handshake_failure(40)» (BC конвертирует глухой pre-TLS close в alert 40). Сервер не меняется (локаут — канон анти-брутфорса). |
+| **Скриншот-боты: гейты до циклов (v0.9.4)** | adb — только полный путь (`$ADB`; на свежих раннерах его нет в PATH — boot-детект не срабатывал никогда, «adb: command not found»); /dev/kvm, system-image и AVD проверяются ЯВНО ДО попыток boot; `tail` только `-n N` (GNU «option used in invalid context» на старой форме); healthz веб-бота — ретраи 15×2с (docker-proxy на загруженном раннере даёт ECONNRESET сразу после healthy, контейнер жив). |
+
 ## Тех-долг (бэклог)
 
 - Android 4.0 (API 14–20): некоторые тинты/анимации Material требуют API 21+
@@ -101,11 +108,12 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
    каталога, решает установка/обновление, печатает строку подключения;
    `--reset` — обнулить состояние).
 7. **Скриншот-роботы (v0.9.3+, асинхронно после релиза):** ДВА независимых
-   workflow — `screenshot-apk.yml` (эмулятор) и `screenshot-web.yml`
-   (веб-панель из ОПУБЛИКОВАННОГО образа, healthy-ожидание 120 с) — по
-   `workflow_run` Release=success; каждый коммитит свой ассет в README
-   (branch: main, rebase). Любой фейл одного не валит CI/Release/второго
-   робота — артефакт-диагностика.
+   workflow — `screenshot-apk.yml` (эмулятор; v0.9.4: adb полным путём, boot
+   4×450 с, гейты /dev/kvm+system-image+AVD до попыток) и `screenshot-web.yml`
+   (веб-панель из ОПУБЛИКОВАННОГО образа; v0.9.4: pull×3, healthy 240 с,
+   healthz-ретраи 15×2с) — по `workflow_run` Release=success; каждый коммитит
+   свой ассет в README (branch: main, rebase). Любой фейл одного не валит
+   CI/Release/второго робота — артефакт-диагностика.
 8. Скорость релиза (v0.7): паблиш берёт артефакты `build-binaries` (без
    пересборки), Go-тест+coverage одним прогоном, кэш Gradle в CI.
 
@@ -114,7 +122,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 - **Go**: unit + E2E (fake-phone) + hostile-environment (`evilclient_test.go`)
   + многоканальность (`multistream_test.go`: 8 потоков × SHA-целостность)
   — запускаются в каждом PR и релизе.
-- **Android**: 187 unit (Robolectric API 21/31, evil-сервер, QR, SSRF, тайминги,
+- **Android**: 188 unit (Robolectric API 21/31, evil-сервер, QR, SSRF, тайминги,
   канон HELLO/AUTH, бронепарсер rrp://, согласование протоколов, PROBE-кадры);
   JVM-изоляция (`forkEvery=1`) обязательна.
 - **Ассеты**: детерминизм, размеры, синхронность лендинг-копий.

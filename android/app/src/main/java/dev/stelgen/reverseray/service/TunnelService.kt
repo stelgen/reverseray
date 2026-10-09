@@ -26,6 +26,7 @@ import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
 import dev.stelgen.reverseray.core.Msgs
 import dev.stelgen.reverseray.core.ProtoFallback
+import dev.stelgen.reverseray.core.RrpAuthException
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
@@ -725,6 +726,17 @@ class TunnelService : Service() {
                         break
                     }
                 }
+            } catch (e: RrpAuthException) {
+                // v0.9.4 КАНОН: auth failed — токен/ссылка устарели, это НЕ сетевой
+                // сбой. Ретраи бессмысленны и зарабатывают IP-локаут на сервере
+                // (5 неудач → клиент видит «TLS handshake_failure(40)» вместо
+                // причины). Останавливаем авто-реконнект честным статусом;
+                // обновление ссылки + кнопка Старт начинают новую серию.
+                lastError = e.message ?: "?"
+                pushLog(getString(R.string.status_auth_failed), LogKind.ERR)
+                updateStatus(STATE_ERROR, getString(R.string.status_auth_failed))
+                r.client = null
+                return
             } catch (e: Exception) {
                 lastError = e.message ?: "?"
                 failStreak++

@@ -41,7 +41,16 @@ import org.bouncycastle.tls.crypto.TlsCrypto
 import org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto
 
 /** Ошибка клиента RRP (TCP/TLS/handshake/соединение). */
-class RrpClientException(message: String, cause: Throwable? = null) : IOException(message, cause)
+open class RrpClientException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+/**
+ * v0.9.4: сервер отклонил токен (ERROR 1 «auth failed») — это НЕ сетевой сбой:
+ * ретраи бессмысленны и лишь зарабатывают IP-локаут (30с·2ⁿ; клиент видит его
+ * как «TLS handshake_failure(40)» — BC конвертирует глухой pre-TLS close в
+ * alert 40). Владелец (TunnelService) обязан остановить авто-реконнект и
+ * потребовать обновить ссылку из rr.sh/enroll.
+ */
+class RrpAuthException(message: String) : RrpClientException(message)
 
 /** Минимальная future для err_code OPEN: CompletableFuture недоступен на API < 24 (minSdk 14). */
 class OpenFuture {
@@ -353,7 +362,9 @@ class RrpClient(
             // не мог декодировать и отвечал «ERROR 1: auth failed».
             val hmac = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(hmacSha256(hmacKey, macInput))
-            log("SENT AUTH mode=$MODE_TOKEN_HMAC nonce=${ok.nonce} hmac=${hmac.take(12)}… sessionId=$sessionId")
+            // v0.9.4: token6 — первые 6 символов токена ИЗ КОНФИГА; владелец
+            // сверяет их со ссылкой из rr.sh/enroll. Не совпали — ссылка устарела.
+            log("SENT AUTH mode=$MODE_TOKEN_HMAC token6=${token.take(6)} nonce=${ok.nonce} hmac=${hmac.take(12)}… sessionId=$sessionId")
             sendFrame(
                 RrpFrame.Auth(MODE_TOKEN_HMAC, hmac, ok.nonce)
             )
@@ -494,8 +505,12 @@ class RrpClient(
                     pendingOpens.remove(id)?.complete(ERR_PROTOCOL)
                 }
                 if (state != State.READY && handshakeError == null) {
+                    // v0.9.4: код 1 сервер отправляет ТОЛЬКО на провал AUTH
+                    // («auth failed») — типизируем отдельно, чтобы сервис мог
+                    // остановить авто-реконнект вместо долбёжки в локаут.
                     handshakeError =
-                        RrpClientException(Msgs.SERVER_ERROR.t(frame.code, frame.message))
+                        if (frame.code == 1) RrpAuthException(Msgs.SERVER_ERROR.t(frame.code, frame.message))
+                        else RrpClientException(Msgs.SERVER_ERROR.t(frame.code, frame.message))
                     helloLatch.countDown()
                     readyLatch.countDown()
                 }

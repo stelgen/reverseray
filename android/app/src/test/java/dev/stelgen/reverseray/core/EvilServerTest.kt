@@ -227,6 +227,47 @@ class EvilServerTest {
         }
     }
 
+    @Test
+    fun `auth failed error frame throws RrpAuthException with token6 in log`() {
+        val logs = ArrayDeque<String>()
+        val server = EvilServer { conn, inp, out ->
+            // рукопожатие без READY: после AUTH настоящий сервер при чужом токене
+            // отдаёт ERROR 1 «auth failed» вместо READY
+            val hello = readFrame(inp)
+            if (hello != null && hello.first == RrpFrame.TYPE_HELLO.toByte()) {
+                out(
+                    RrpFrame.TYPE_HELLO_OK.toByte(), 0,
+                    """{"session_id":"s1","server_ver":"0.9.4","nonce":"AAAAAAAAAAAAAAAAAAAAAA","tunnel_window":524288}""".toByteArray(),
+                )
+                readFrame(inp) // AUTH
+                out(RrpFrame.TYPE_ERROR.toByte(), 0, byteArrayOf(0, 1) + "auth failed".toByteArray())
+            }
+            Thread.sleep(300)
+        }
+        try {
+            val c = newClient(server, object : RrpClient.Listener {
+                override fun onLog(client: RrpClient, message: String) {
+                    synchronized(logs) { logs.add(message) }
+                }
+            })
+            try {
+                c.connect()
+                error("connect must fail with RrpAuthException")
+            } catch (e: RrpAuthException) {
+                assertTrue(e.message!!.contains("auth failed"))
+            } finally {
+                c.close()
+            }
+            // v0.9.4: токен-префикс в журнале AUTH — сверка со ссылкой из rr.sh
+            assertTrue(
+                "token6 must be logged",
+                synchronized(logs) { logs.any { it.contains("token6=" + server.token.take(6)) } },
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
     @Ignore(
         "JVM-interop: JDK TLS-сервер -> BC-клиент, S→C DATA не доставляется до " +
             "первого клиентского трафика; путь CLOSE(err=2) покрыт Go-тестом " +
