@@ -1,31 +1,24 @@
 package dev.stelgen.reverseray.update
 
-import dev.stelgen.reverseray.service.LogKind
+import dev.stelgen.reverseray.core.LogKind
+import dev.stelgen.reverseray.core.LogStore
 
 /**
- * Технический журнал обновлений для вкладки «Обновление» (то же окно и
- * формат, что и лог туннеля на главной). v0.8.2:
- *  - строки несут цветовую роль (как в едином консольном окне);
- *  - слушатель onLine отдаёт строку СРАЗУ в консоль (реалтайм), а не
- *    только при следующем полном перерендере вкладки.
+ * Журнал обновлений (v0.9.6): СВОИХ строк больше нет — всё пишется в
+ * единый лог-центр LogStore каналом UPDATE. Окно «Обновление» берёт
+ * из LogStore сообщения своего канала; полный лог видит и это тоже.
  */
 object UpdateLogger {
 
-    class Line(val text: String, val kind: LogKind = LogKind.INFO)
-
-    private val lines = ArrayDeque<Line>()
-
-    /** Слушатель для UI (вызывается на добавление строки; UI сам решает поток). */
-    @Volatile var onLine: ((Line) -> Unit)? = null
+    /** Слушатель для UI (реалтайм; UI сам решает поток). */
+    @Volatile var onLine: ((LogStore.Entry) -> Unit)? = null
 
     fun add(line: String, kind: LogKind = LogKind.INFO) {
-        val l = Line(line, kind)
-        synchronized(lines) {
-            lines.addFirst(l)
-            while (lines.size > 200) lines.removeLast()
-        }
-        onLine?.invoke(l)
+        val e = LogStore.Entry(line, kind, LogStore.Channel.UPDATE)
+        LogStore.push(line, kind, LogStore.Channel.UPDATE)
+        onLine?.invoke(e)
     }
 
-    fun snapshot(): List<Line> = synchronized(lines) { lines.toList() }
+    /** Снимок канала UPDATE из единого лога (новые сверху). */
+    fun snapshot(): List<LogStore.Entry> = LogStore.snapshot(LogStore.Channel.UPDATE)
 }

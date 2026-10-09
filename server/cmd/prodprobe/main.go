@@ -27,13 +27,15 @@ import (
 
 	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
+	"github.com/stelgen/reverseray/server/internal/wg"
 )
 
 func main() {
 	link := flag.String("link", os.Getenv("RR_PROBE_LINK"), "rrp://token@host:port/?pin=B64&name=X")
 	target := flag.String("target", "1.1.1.1:443", "PROBE-цель (нужен подключённый телефон)")
-	proto := flag.String("proto", "", "согласовать протокол сессии: пусто/rrp1 | mtproto2 (DH-апгрейд после READY)")
+	proto := flag.String("proto", "", "согласовать протокол сессии: пусто/rrp1 | mtproto2 | wireguard (апгрейд после READY)")
 	streams := flag.Int("streams", 1, "параллельных PROBE-запросов (многоканальность)")
+	holdSecs := flag.Int("hold", 0, "держать сессию N секунд после проверки (отладка mixed/egress)")
 	flag.Parse()
 	if *streams < 1 {
 		*streams = 1
@@ -43,6 +45,7 @@ func main() {
 	}
 
 	useMtp := *proto == "mtproto2"
+	useWg := *proto == wg.ProtoID
 	var token, hostPort, pinB64, name string
 	{
 		rest := *link
@@ -88,10 +91,14 @@ func main() {
 	}
 	fmt.Printf("target=%s pin=%s device=%s proto=%s streams=%d\n",
 		hostPort, pinB64, name, func() string {
-			if useMtp {
+			switch {
+			case useMtp:
 				return "mtproto2"
+			case useWg:
+				return wg.ProtoID
+			default:
+				return "rrp1"
 			}
-			return "rrp1"
 		}(), *streams)
 
 	cfg := &tls.Config{
@@ -200,6 +207,66 @@ func main() {
 		fmt.Println("mtproto2: KEY_REQ→KEY_RESP OK — DH-канон принят сервером, IGE-конверт поднят")
 		probeConn = wrap
 	}
+	// v0.9.6: wireguard — WG-хендшейк тем же зеркалом, что и APK (Wg.kt):
+	// KEY_REQ(kind=wireguard) → WG_INIT(msg1) → WG_RESP(msg2) → ключи
+	// транспортных конвертов. Данные WG-конвертом идут только DATA/UDP_DATA,
+	// PING/PROBE — служебные кадры вне конверта у обеих сторон.
+	if useWg {
+		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		f, err = rrp.ReadFrame(conn)
+		if err != nil {
+			fmt.Println("ERR: read KEY_REQ:", err)
+			os.Exit(1)
+		}
+		if f.Type != rrp.TypeKeyReq {
+			fmt.Printf("ERR: ждали KEY_REQ, получили 0x%02x %q\n", f.Type, f.Payload)
+			os.Exit(1)
+		}
+		var req struct {
+			Kind string `json:"kind"`
+			SPub string `json:"spub"`
+		}
+		if err := json.Unmarshal(f.Payload, &req); err != nil {
+			fmt.Println("ERR: KEY_REQ json:", err)
+			os.Exit(1)
+		}
+		if req.Kind != wg.ProtoID {
+			fmt.Printf("ERR: KEY_REQ kind=%q ≠ wireguard\n", req.Kind)
+			os.Exit(1)
+		}
+		spub, err := base64.RawURLEncoding.DecodeString(req.SPub)
+		if err != nil || len(spub) != wg.KeySize {
+			fmt.Printf("ERR: spub bad: %v len=%d\n", err, len(spub))
+			os.Exit(1)
+		}
+		var serverPub, psk [wg.KeySize]byte
+		copy(serverPub[:], spub)
+		psk = wg.TokenPSK(token)
+		msg1, ch, err := wg.NewClientHandshake(&serverPub, &psk)
+		if err != nil {
+			fmt.Println("ERR: WG msg1:", err)
+			os.Exit(1)
+		}
+		if err := rrp.WriteFrame(conn, rrp.TypeWgInit, 0, 0, msg1); err != nil {
+			fmt.Println("ERR: write WG_INIT:", err)
+			os.Exit(1)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		f, err = rrp.ReadFrame(conn)
+		if err != nil {
+			fmt.Println("ERR: read WG_RESP:", err)
+			os.Exit(1)
+		}
+		if f.Type != rrp.TypeWgResp {
+			fmt.Printf("ERR: ждали WG_RESP, получили 0x%02x %q\n", f.Type, f.Payload)
+			os.Exit(1)
+		}
+		if err := ch.ConsumeResponse(f.Payload, &psk); err != nil {
+			fmt.Println("ERR: WG msg2:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wireguard: KEY_REQ→WG_INIT→WG_RESP OK — Noise_IKpsk2 принят сервером, WG-конверты активны")
+	}
 
 	// PING/PONG (служебный кадр — вне MTProto-конверта у обеих сторон)
 	nonce := []byte("12345678")
@@ -273,6 +340,10 @@ func main() {
 		}
 	}
 	wall := time.Since(t0).Milliseconds()
+	if *holdSecs > 0 {
+		fmt.Printf("HOLD: держим сессию %dс (телефон подключён)…\n", *holdSecs)
+		time.Sleep(time.Duration(*holdSecs) * time.Second)
+	}
 	if oks > 0 {
 		fmt.Printf("PROBE: OK %d/%d — egress до %s подтверждён (телефон подключён!), wall=%dms\n",
 			oks, *streams, *target, wall)

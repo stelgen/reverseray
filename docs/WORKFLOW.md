@@ -18,7 +18,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 
 | Джоба | Содержание |
 |---|---|
-| Go test/vet/fmt | gofmt, vet, `test -race`, coverage (137 тестов) |
+| Go test/vet/fmt | gofmt, vet, `test -race`, coverage (147 тестов) |
 | Android build | assembleDebug + unit-тесты (188, Robolectric 21/31, JVM-изоляция, i18n-гейты) |
 | Docker run | v0.8.3: сборка образа → запуск КАК В ПРОДЕ (родной entrypoint) → ожидание healthcheck до 90 с → compose-smoke на родном compose.yaml; упал/не healthy → красный прогон с docker logs+inspect |
 | Brand assets | перегенерация + сверка с закоммиченным (+ живой banner.gif, скриншот приложения) |
@@ -27,7 +27,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | **Modules integrity (v0.8)** | канон-чек `modules/modules.json` + тесты парсеров обеих сторон (Go+Kotlin) |
 | **Privacy audit (v0.8)** | скрипт `scripts/privacy_audit.py`: ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных/токенов в доках |
 | **Govulncheck (v0.8)** | известные уязвимости stdlib/зависимостей |
-| **Screenshot bots (v0.9.3)** | ДВА ПОЛНОСТЬЮ НЕЗАВИСИМЫХ воркфлоу, асинхронно ПОСЛЕ РЕЛИЗА (workflow_run Release success + еженедельный cron + workflow_dispatch), НИКОГДА не блокируют релиз и друг друга: `screenshot-apk.yml` — APK с эмулятора (boot-wait, скрытые ANR-диалоги, 8 попыток) → `assets/brand/screenshot.png`; `screenshot-web.yml` — веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; каждый коммитит только свой файл (README уже встраивает оба) |
+| **Screenshot bots (v0.9.3)** | ДВА ПОЛНОСТЬЮ НЕЗАВИСИМЫХ воркфлоу, асинхронно ПОСЛЕ РЕЛИЗА (workflow_run Release success + еженедельный cron + workflow_dispatch), НИКОГДА не блокируют релиз и друг друга: `screenshot-apk.yml` — JVM-рендер MainActivity (Robolectric NATIVE graphics; v0.9.6: эмулятор удалён — годы флейков) → `assets/brand/screenshot.png`; `screenshot-web.yml` — веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; каждый коммитит только свой файл (README уже встраивает оба) |
 | CodeQL | стат-анализ безопасности |
 
 ## Политики тулчейна

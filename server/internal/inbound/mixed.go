@@ -73,6 +73,9 @@ func (in *Inbound) Serve(ln net.Listener) error {
 			_ = c.Close()
 			continue
 		}
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetNoDelay(true) // v0.9.6: интерактивные SOCKS-сессии без Nagle
+		}
 		go in.handle(c)
 	}
 }

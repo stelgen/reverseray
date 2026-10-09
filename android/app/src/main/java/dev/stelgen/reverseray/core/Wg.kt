@@ -67,21 +67,23 @@ object Wg {
         return out
     }
 
-    /** KDF2 канона WG: t0 = HMAC(ck,ikm); t1 = HMAC(ck,t0‖0x01); ck' = HMAC(t1,0x02). */
+    /** KDF2 — ТОЧНЫЙ канон WG whitepaper (§5.4, зеркало Go): t0 = HMAC(ck,ikm);
+     *  t1 = HMAC(t0,0x01); ck' = HMAC(t0,0x02). (До v0.9.6 — имитация от ck.) */
     fun kdf2(ck: ByteArray, ikm: ByteArray): Triple<ByteArray, ByteArray, ByteArray> {
         val t0 = hmac(ck, ikm)
-        val t1 = hmac(ck, t0 + byteArrayOf(1))
-        val next = hmac(t1, byteArrayOf(2))
+        val t1 = hmac(t0, byteArrayOf(1))
+        val next = hmac(t0, byteArrayOf(2))
         return Triple(t0, t1, next)
     }
 
-    /** KDF3 канона WG: …; ck' = HMAC(t2,0x03). Возвращает (t0, t1, t2). */
+    /** KDF3 — ТОЧНЫЙ канон WG whitepaper (§5.4, зеркало Go): t0 = HMAC(ck,ikm);
+     *  t1 = HMAC(t0,0x01); t2 = HMAC(t0,0x02); ck' = HMAC(t0,0x03). */
     fun kdf3(ck: ByteArray, ikm: ByteArray): Triple<ByteArray, ByteArray, ByteArray> {
         val t0 = hmac(ck, ikm)
-        val t1 = hmac(ck, t0 + byteArrayOf(1))
-        val t2 = hmac(ck, t1 + byteArrayOf(2))
-        val next = hmac(t2, byteArrayOf(3))
-        return Triple(t0, t1, next)
+        val t1 = hmac(t0, byteArrayOf(1))
+        val t2 = hmac(t0, byteArrayOf(2))
+        val next = hmac(t0, byteArrayOf(3))
+        return Triple(t0, t1, t2)
     }
 
     fun macKeyMac1(staticPub: ByteArray): ByteArray =

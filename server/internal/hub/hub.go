@@ -25,6 +25,9 @@ type Device struct {
 type Hub struct {
 	mu      sync.Mutex
 	devices map[string]*Device
+	// test-only: подмена снимка сессий в юнит-тестах (/ui, v0.9.6).
+	// nil в продакшене — Snapshot работает как раньше.
+	testSnapshot []map[string]any
 }
 
 func New() *Hub {
@@ -123,10 +126,21 @@ func (h *Hub) DialUDP(ctx context.Context, timeout time.Duration) (*rrp.UdpChann
 	return best.UdpOpen(dctx)
 }
 
+// SetSnapshotForTest подменяет снимок сессий (только тесты /ui, v0.9.6).
+// nil снимает подмену. В продакшене не вызывается.
+func (h *Hub) SetSnapshotForTest(sessions []map[string]any) {
+	h.mu.Lock()
+	h.testSnapshot = sessions
+	h.mu.Unlock()
+}
+
 // Snapshot lists live sessions for the admin API.
 func (h *Hub) Snapshot() []map[string]any {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.testSnapshot != nil {
+		return h.testSnapshot
+	}
 	var out []map[string]any
 	for _, d := range h.devices {
 		d.mu.Lock()

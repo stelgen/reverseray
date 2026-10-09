@@ -58,6 +58,7 @@ import dev.stelgen.reverseray.ui.PulseRingView
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
+import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.service.LogKind
 import dev.stelgen.reverseray.service.TunnelService
 import dev.stelgen.reverseray.ui.StatusConsole
@@ -280,19 +281,26 @@ class MainActivity : AppCompatActivity() {
         }
         // v0.8.2: журнал обновлений льётся в консоль СРАЗУ (реалтайм),
         // а не только при перерендере вкладки
-        UpdateLogger.onLine = { line ->
+        // v0.9.6: ОДИН источник — LogStore. Реалтайм: канал UPDATE льётся в
+        // консоль обновлений, полный лог дорисовывается, если открыта вкладка.
+        // Главная обновляется статус-броадкастами (renderServiceLogs).
+        LogStore.onEntry = { e ->
             runOnUiThread {
-                updateConsole.append(
-                    StatusConsole.Line(
-                        line.text,
-                        when (line.kind) {
-                            LogKind.OK -> StatusConsole.Role.OK
-                            LogKind.WARN -> StatusConsole.Role.WARN
-                            LogKind.ERR -> StatusConsole.Role.ERR
-                            else -> StatusConsole.Role.INFO
-                        },
-                    )
+                val line = StatusConsole.Line(
+                    e.text,
+                    when (e.kind) {
+                        LogKind.OK -> StatusConsole.Role.OK
+                        LogKind.WARN -> StatusConsole.Role.WARN
+                        LogKind.ERR -> StatusConsole.Role.ERR
+                        else -> StatusConsole.Role.INFO
+                    },
                 )
+                if (e.channel == LogStore.Channel.UPDATE) {
+                    updateConsole.append(line)
+                }
+                if (isLogTabOpen() && e.channel == LogStore.Channel.STATUS) {
+                    logConsole.append(line)
+                }
             }
         }
         renderServiceLogs()
@@ -1464,21 +1472,33 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Сеть/статус
 
-    private fun renderServiceLogs() {
-        val lines = TunnelService.snapshotLogs().map { l ->
-            StatusConsole.Line(
-                l.text,
-                when (l.kind) {
-                    LogKind.OK -> StatusConsole.Role.OK
-                    LogKind.WARN -> StatusConsole.Role.WARN
-                    LogKind.ERR -> StatusConsole.Role.ERR
-                    else -> StatusConsole.Role.INFO
-                },
-            )
-        }
-        homeConsole.render(lines)
-        logConsole.render(lines)
+    private fun toConsoleLines(entries: List<LogStore.Entry>): List<StatusConsole.Line> = entries.map { l ->
+        StatusConsole.Line(
+            l.text,
+            when (l.kind) {
+                LogKind.OK -> StatusConsole.Role.OK
+                LogKind.WARN -> StatusConsole.Role.WARN
+                LogKind.ERR -> StatusConsole.Role.ERR
+                else -> StatusConsole.Role.INFO
+            },
+        )
     }
+
+    /**
+     * v0.9.6 (канон единого лога): каждое окно берёт из LogStore сообщения
+     * СВОЕГО типа — главная: статусы подключения (цвета: подключено —
+     * зелёный, ошибка/отключено — красный, реконнект — тёмно-жёлтый),
+     * обновление: канал UPDATE, полный лог: всё без исключений.
+     */
+    private fun renderServiceLogs() {
+        homeConsole.render(toConsoleLines(LogStore.snapshot(LogStore.Channel.STATUS)))
+        updateConsole.render(toConsoleLines(UpdateLogger.snapshot()))
+        logConsole.render(toConsoleLines(LogStore.snapshot(null)))
+    }
+
+    /** Открыта ли сейчас вкладка полного лога (для реалтайм-дорисовки). */
+    private fun isLogTabOpen(): Boolean =
+        this::pageLog.isInitialized && pageLog.visibility == View.VISIBLE
 
     private fun usageSummaryText(used: Long, limit: Long): String {
         val usedStr = fmtBytes(used)

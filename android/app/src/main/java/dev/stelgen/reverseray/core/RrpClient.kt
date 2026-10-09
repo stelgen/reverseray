@@ -239,12 +239,21 @@ class RrpClient(
     /** Активен ли WireGuard-конверт в этой сессии. */
     val wgActive: Boolean get() = wgCrypto != null
 
+    /**
+     * v0.9.6 ФИКС ДЕДЛОКА WG-хендшейка: reader-поток НЕ МОЖЕТ ждать WG_RESP —
+     * он единственный читает кадры, а WG_RESP диспатчится ТОЛЬКО им
+     * (self-deadlock: ждали кадр, держа единственного его доставщика).
+     * Теперь: KEY_REQ(kind=wg) → строим msg1 и шлём WG_INIT БЕЗ ожидания;
+     * пришедший WG_RESP догревается в dispatch и активирует крипту там же.
+     * Дедлайн — серверный key-timer убьёт сессию, если ответа не будет.
+     */
+
     /** Активен ли крипто-конверт протокола (mtproto2 или wireguard). */
     val tunnelCryptoActive: Boolean get() = mtCrypto != null || wgCrypto != null
 
-    /** v0.9.5: WG-хендшейк — ожидание кадра WG_RESP. */
-    private val wgLatch = CountDownLatch(1)
-    @Volatile private var wgRespFrame: RrpFrame.WgResp? = null
+    /** v0.9.6: незавершённый WG-хендшейк (msg1 отправлен, ждём WG_RESP). */
+    @Volatile private var wgHandshake: Wg.ClientHandshake? = null
+    @Volatile private var wgPsk: ByteArray? = null
 
     /**
      * v0.9.5: начальный выбор камуфляжа для этого устройства (кадр 0x2A после
@@ -518,10 +527,11 @@ class RrpClient(
             is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8/v0.9.5: mtproto2 DH | wireguard WG_INIT
             is RrpFrame.KeyResp -> log(Msgs.KEY_RESP_UNEXPECTED.t())
             is RrpFrame.WgResp -> {
-                // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов
+                // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов.
+                // v0.9.6: дедлок-фикс — consume ЗДЕСЬ (reader-поток), а не в
+                // handleWgKeyReq: он единственный доставщик этого кадра.
                 log(Msgs.WG_RESP_RECV.t(frame.raw.size))
-                wgRespFrame = frame
-                wgLatch.countDown()
+                finishWgHandshake(frame)
             }
             is RrpFrame.WgInit -> log(Msgs.WG_INIT_UNEXPECTED.t())
             is RrpFrame.Noise -> {
@@ -648,8 +658,10 @@ class RrpClient(
     /**
      * WG-хендшейк (v0.9.5): KEY_REQ несёт WG static public сервера
      * ({"kind":"wireguard","spub":…}). Клиент — WG-инициатор: строит
-     * НАСТОЯЩИЙ msg1 (Noise_IKpsk2, PSK = SHA256(token)), шлёт WG_INIT,
-     * ждёт WG_RESP и включает WG-конверты DATA/UDP_DATA.
+     * НАСТОЯЩИЙ msg1 (Noise_IKpsk2, PSK = SHA256(token)), шлёт WG_INIT.
+     *
+     * v0.9.6: БЕЗ ожидания WG_RESP на reader-потоке (self-deadlock —
+     * WG_RESP придёт через тот же поток; см. dispatch → finishWgHandshake).
      */
     private fun handleWgKeyReq(frame: RrpFrame.KeyReq) {
         try {
@@ -660,16 +672,35 @@ class RrpClient(
             val psk = Wg.tokenPsk(token)
             val (msg1, hs) = Wg.newClientHandshake(serverPub, psk)
             log(Msgs.WG_INIT_SENT.t(Wg.MSG_INIT_SIZE))
-            wgRespFrame = null
+            wgHandshake = hs
+            wgPsk = psk
             sendFrame(RrpFrame.WgInit(msg1))
-            if (!wgLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t())
-            }
-            val resp = wgRespFrame ?: throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t())
-            hs.consumeResponse(resp.raw, psk)
-            wgCrypto = Wg.clientTransport(hs)
-            log(Msgs.WG_KEYS_AGREED.t())
         } catch (e: Exception) {
+            // ридер умирает честной причиной (серверный key-timer параллельно закроет сессию)
+            throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)
+        }
+    }
+
+    /**
+     * v0.9.6: WG_RESP (msg2) — финал WG-хендшейка. Вызывается из dispatch
+     * (reader-поток): consumeResponse чисто локальный (без чтения кадров),
+     * поэтому здесь deadlock невозможен по построению.
+     */
+    private fun finishWgHandshake(frame: RrpFrame.WgResp) {
+        val hs = wgHandshake ?: run {
+            log(Msgs.WG_INIT_UNEXPECTED.t())
+            return
+        }
+        val psk = wgPsk
+        try {
+            hs.consumeResponse(frame.raw, psk ?: throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t()))
+            wgCrypto = Wg.clientTransport(hs)
+            wgHandshake = null
+            wgPsk = null
+            log(Msgs.WG_KEYS_AGREED.t())
+            listener?.onState(this, State.READY) // UI: статус крипты
+        } catch (e: Exception) {
+            // битый msg2 — нарушение протокола: сессия закрыта честной причиной
             throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)
         }
     }

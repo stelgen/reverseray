@@ -24,6 +24,7 @@ import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.L10nUi
 import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
+import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.Msgs
 import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpAuthException
@@ -74,12 +75,8 @@ import java.util.concurrent.atomic.AtomicLong
  *   фактическом изменении значения.
  * - Счётчики пакетов/последний размер для строки «стрелки» на главном экране.
  */
-/** Роль строки журнала — цвет в едином консольном окне (v0.8). Файловый уровень:
- *  импортируется MainActivity и тестами. */
-enum class LogKind { INFO, OK, WARN, ERR }
-
-/** Строка журнала с цветовой ролью. */
-class LogLine(val text: String, val kind: LogKind)
+/** Цветовая роль строки журнала — в едином лог-центре LogStore (v0.9.6). */
+typealias LogKind = dev.stelgen.reverseray.core.LogKind
 
 class TunnelService : Service() {
 
@@ -112,6 +109,8 @@ class TunnelService : Service() {
     @Volatile private var config: RrpUriConfig? = null
     @Volatile private var stopping = true
     private var wakeLock: PowerManager.WakeLock? = null
+    /** v0.9.6: Wi-Fi-lock — радио не засыпает в фоне (Android 4+, из коробки). */
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var legacyReceiver: BroadcastReceiver? = null
 
@@ -241,6 +240,13 @@ class TunnelService : Service() {
             else -> startTunnel()
         }
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // v0.9.6: свёртка приложения из recents НЕ глушит туннель —
+        // foreground-сервис продолжает работать (START_STICKY), лог честный.
+        pushLog(Msgs.TASK_REMOVED_STILL_RUNNING.t(), LogKind.INFO)
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
@@ -1033,6 +1039,19 @@ class TunnelService : Service() {
             setReferenceCounted(false)
             acquire()
         }
+        // v0.9.6: Wi-Fi-lock HIGH_PERF — туннель живёт в фоне без сна радио.
+        // Держится только пока поднят туннель; доп. разрешений не требует.
+        try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            @Suppress("DEPRECATION")
+            val mode = android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wifiLock = wm.createWifiLock(mode, "reverseray:wifi").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            pushLog(Msgs.WIFI_LOCK_FAILED.t(e.message ?: "?"), LogKind.WARN)
+        }
     }
 
     private fun releaseWakeLock() {
@@ -1041,6 +1060,11 @@ class TunnelService : Service() {
         } catch (_: Exception) {
         }
         wakeLock = null
+        try {
+            wifiLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) {
+        }
+        wifiLock = null
     }
 
     // ---------- статус ----------
@@ -1218,16 +1242,12 @@ class TunnelService : Service() {
             graphPeak = 0f
         }
 
-        /** Журнал статусов/ошибок (новые сверху) с цветовой ролью строки. */
-        private val logLines = ArrayDeque<LogLine>()
-
-        fun snapshotLogs(): List<LogLine> = synchronized(logLines) { logLines.toList() }
+        // v0.9.6: журнал ОДИН на всё приложение — LogStore (канал STATUS).
+        // Окна (главная/обновление/лог) берут из него сообщения своего типа.
+        fun snapshotLogs(): List<LogStore.Entry> = LogStore.snapshot(LogStore.Channel.STATUS)
 
         fun pushLog(line: String, kind: LogKind = LogKind.INFO) {
-            synchronized(logLines) {
-                logLines.addFirst(LogLine(line, kind))
-                while (logLines.size > 300) logLines.removeLast()
-            }
+            LogStore.push(line, kind, LogStore.Channel.STATUS)
         }
 
         /**

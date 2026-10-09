@@ -404,7 +404,19 @@ func (a *App) acceptTunnels(ln net.Listener) {
 			a.log.Warn("tunnel accept", "err", err)
 			return
 		}
+		tuneTCP(conn)
 		go a.handleTunnelRaw(conn)
+	}
+}
+
+// tuneTCP (v0.9.6, скорость rrp1): TCP_NODELAY (мелкие кадры DATA/PING не
+// ждут Nagle — до 40мс задержки на кадр в WAN) и увеличенные сокет-буферы
+// (throughput на LRTT-линках). Ошибки тихо: это best-effort тюнинг.
+func tuneTCP(conn net.Conn) {
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		_ = tc.SetReadBuffer(512 * 1024)
+		_ = tc.SetWriteBuffer(512 * 1024)
 	}
 }
 

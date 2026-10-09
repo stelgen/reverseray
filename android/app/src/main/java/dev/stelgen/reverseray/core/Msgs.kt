@@ -47,6 +47,16 @@ object Msgs {
     val HANDSHAKE_FAILED = Msg("handshake not completed: %s", "рукопожатие не завершено: %s")
     val READER_STOPPED = Msg("reader stopped: %s", "reader остановлен: %s")
 
+    // ── TunnelService: фоновый режим (v0.9.6) ────────────────────────
+    val WIFI_LOCK_FAILED = Msg(
+        "Wi-Fi lock failed: %s (tunnel keeps running)",
+        "Wi-Fi-lock не получен: %s (туннель продолжает работать)",
+    )
+    val TASK_REMOVED_STILL_RUNNING = Msg(
+        "App swiped away — tunnel keeps running in the background",
+        "Приложение смахнуто — туннель продолжает работать в фоне",
+    )
+
     // ── RrpClient: кадры ─────────────────────────────────────────────────
     val AUTH_UNEXPECTED = Msg("AUTH from the server is not expected", "AUTH от сервера не ожидается")
     val HELLO_UNEXPECTED = Msg("HELLO from the server is not expected", "HELLO от сервера не ожидается")

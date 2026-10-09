@@ -1,16 +1,16 @@
 name: Screenshot APK
-# v0.9.3: скриншот-роботы РАЗДЕЛЕНЫ на два ПОЛНОСТЬЮ независимых воркфлоу.
-# Этот — только APK-скриншот с эмулятора; веб-панель живёт в screenshot-web.yml.
+# v0.9.6: ФИНАЛЬНОЕ решение скриншот-робота — БЕЗ ЭМУЛЯТОРА.
 #
-# Принципы:
-#  - асинхронно ПОСЛЕ релиза (workflow_run Release success): ни CI, ни релиз
-#    не блокируются и не ждут эмулятор;
-#  - веб-бот независим: его фейлы/логика/расписание не влияют на этот
-#    воркфлоу вообще (раздельные concurrency-группы, раздельные коммиты);
-#  - коммитит ТОЛЬКО assets/brand/screenshot.png (README уже встраивает);
-#  - ЛЮБОЙ фейл оставляет артефакт-диагностику (логи джоб без токена
-#    нечитаемы — урок 08.10);
-#  - упал — упал один этот воркфлоу: CI/Release/веб-бот остаются зелёными.
+# История (v0.9.3–v0.9.5): CI-эмулятор падал месяцами — то «adb not found»,
+# то /dev/kvm, то AVD не создаётся, то boot не дожимается за 4×450с на
+# загруженном раннере. Каждая починка — новый флейк. Решение: Robolectric
+# NATIVE graphics рендерит НАСТОЯЩИЕ пиксели MainActivity на JVM —
+# детерминированно, за ~2 минуты, без KVM/AVD/adb вообще.
+#
+# Принципы сохранены:
+#  - асинхронно ПОСЛЕ релиза (workflow_run) + cron + dispatch;
+#  - коммитит ТОЛЬКО assets/brand/screenshot.png;
+#  - упал — упал только этот воркфлоу (CI/Release/web-бот не трогает).
 
 on:
   workflow_dispatch: {}
@@ -34,9 +34,12 @@ jobs:
           github.event_name == 'schedule' ||
           github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
+        with:
+          # скриншот рендерим ИЗ ПОСЛЕДНЕГО КОДА main (бот документирует прод)
+          ref: main
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -44,144 +47,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: true
-      - run: pip install pillow
-      - name: Build debug APK
+      - name: Render main screen to PNG (Robolectric native graphics)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon
-      - name: Boot emulator (4 attempts, logs kept)
+          ./gradlew :app:testDebugUnitTest --tests '*ScreenshotBot*' --no-daemon
+          test -f app/build/screenshot.png || { echo "::error::PNG не создан"; exit 1; }
+          ls -la app/build/screenshot.png
+      - name: Copy asset
         run: |
-          set -e
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          # v0.9.4-фиксы (релиз v0.9.3 упал: «adb: command not found» и
-          # boot-детект никогда не срабатывал — все попытки объявлялись failed):
-          # 1) adb юзается ТОЛЬКО полным путём ($ADB), platform-tools доустанавливаем;
-          # 2) /dev/kvm проверяем ДО 4x450с попыток — без KVM эмулятор не оживёт;
-          # 3) system-image и AVD проверяются ЯВНО (avdmanager больше не падает молча);
-          # 4) tail только в форме -n N (GNU «invalid context» на старых формах).
-          [ -e /dev/kvm ] || { echo "::error::/dev/kvm недоступен — эмулятор не стартует"; exit 1; }
-          echo "SDK=$SDK; kvm: $(ls -l /dev/kvm 2>/dev/null || echo ABSENT)"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" \
-            "system-images;android-30;google_apis;x86_64" | tail -n 2 || true
-          ADB="$SDK/platform-tools/adb"
-          [ -x "$ADB" ] || { echo "::error::adb не установлен (platform-tools)"; exit 1; }
-          "$ADB" start-server >/dev/null 2>&1 || true
-          IMG="$SDK/system-images/android-30/google_apis/x86_64"
-          [ -d "$IMG" ] || { echo "::error::system-image android-30 не установлен"; exit 1; }
-          # v0.9.4-фикс: ошибка avdmanager больше не глотается «|| true» —
-          # вывод падения уходит в boot-fail.log (артефакт), фоллбек без -d pixel
-          # (профиль может отсутствовать в свежих cmdline-tools), AVD home — явно.
-          export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
-          mkdir -p "$ANDROID_AVD_HOME"
-          AVDLOG="$(mktemp)"
-          if ! echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
-               -n ci -k "system-images;android-30;google_apis;x86_64" -d pixel >"$AVDLOG" 2>&1; then
-            { echo "== avdmanager(-d pixel) failed =="; cat "$AVDLOG"; } >> boot-fail.log || true
-            if ! echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
-                 -n ci -k "system-images;android-30;google_apis;x86_64" >"$AVDLOG" 2>&1; then
-              { echo "== avdmanager(без -d) failed =="; cat "$AVDLOG"; } >> boot-fail.log || true
-              echo "::error::AVD ci не создан — вывод avdmanager в артефакте boot-fail.log"
-              exit 1
-            fi
-          fi
-          echo "== avd home ==" >> boot-fail.log; ls -la "$ANDROID_AVD_HOME" >> boot-fail.log 2>&1 || true
-          [ -e "$ANDROID_AVD_HOME/ci.avd" ] || { echo "::error::AVD ci не найден в $ANDROID_AVD_HOME"; exit 1; }
-          # v0.9.3-диагностика: состояние KVM/accel в артефакт (boot-fail.log)
-          { echo "== kvm =="; ls -l /dev/kvm 2>&1 || true
-            echo "== accel check =="; "$SDK/emulator/emulator" -accel check 2>&1 || true; } >> boot-fail.log || true
-          boot=0
-          for b in 1 2 3 4; do # v0.9.3: 4 попытки (v0.9.3-релиз упал на boot при 3)
-            echo "boot attempt $b"
-            "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
-              -no-audio -no-boot-anim -no-snapshot -accel auto > "emulator-$b.log" 2>&1 &
-            EPID=$!
-            "$ADB" wait-for-device 2>/dev/null || true
-            for i in $(seq 1 150); do # 450с на попытку — загрузка эмулятора на загруженном раннере медленная
-              if "$ADB" shell getprop sys.boot_completed 2>/dev/null | grep -q 1; then boot=1; break; fi
-              sleep 3
-            done
-            if [ "$boot" = "1" ]; then echo "emulator booted (attempt $b)"; break; fi
-            echo "boot attempt $b failed — killing and retrying"
-            { echo "== attempt $b log tail =="; tail -n 40 "emulator-$b.log" || true; } >> boot-fail.log || true
-            kill "$EPID" 2>/dev/null || true
-            "$ADB" kill-server >/dev/null 2>&1 || true
-            sleep 5
-          done
-          if [ "$boot" != "1" ]; then
-            { echo "== emulator logs =="; tail -n 80 emulator-*.log; echo "== adb devices =="; "$ADB" devices -l; } >> boot-fail.log || true
-            echo "::error::эмулятор не загрузился за 4 попытки — см. артефакт shot-apk (boot-fail.log: kvm/accel/логи попыток)"
-            exit 1
-          fi
-      - name: Hide ANR dialogs + take screenshots (8 attempts)
-        run: |
-          set -e
-          ADB="${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools/adb"
-          [ -x "$ADB" ] || { echo "::error::adb не найден"; exit 1; }
-          "$ADB" shell settings put global hide_error_dialogs 1
-          "$ADB" shell settings put global window_animation_scale 0.0
-          "$ADB" shell settings put global transition_animation_scale 0.0
-          "$ADB" shell settings put global animator_duration_scale 0.0
-          "$ADB" install -r android/app/build/outputs/apk/debug/app-debug.apk
-          ok=0
-          for attempt in 1 2 3 4 5 6 7 8; do
-            echo "shot attempt $attempt"
-            "$ADB" shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
-            focused=0
-            for i in $(seq 1 60); do
-              if "$ADB" shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
-              "$ADB" shell am start -n dev.stelgen.reverseray/.MainActivity >/dev/null 2>&1 || true
-              sleep 2
-            done
-            "$ADB" exec-out screencap -p > "shot-attempt-$attempt.png" || true
-            if [ "$focused" != "1" ]; then
-              echo "app never focused on attempt $attempt"
-              "$ADB" logcat -d | tail -n 60
-              continue
-            fi
-            sleep 4
-            "$ADB" exec-out screencap -p > shot-raw.png
-            if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
-              ok=1
-              break
-            fi
-            "$ADB" shell input keyevent KEYCODE_BACK || true
-            sleep 2
-          done
-          if [ "$ok" != "1" ]; then
-            echo "no good frame in 8 attempts"
-            {
-              echo "== logcat tail =="; "$ADB" logcat -d | tail -n 300
-              echo "== windows focus =="; "$ADB" shell dumpsys window 2>/dev/null | grep -i -A2 focus
-              echo "== resumed activity =="; "$ADB" shell dumpsys activity activities 2>/dev/null | grep -i -m5 'mResumedActivity\|topResumedActivity'
-            } > shot-fail-logcat.txt || true
-            exit 1
-          fi
-      - name: Upload apk-shot diagnostics (always)
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: shot-apk
-          path: |
-            shot-raw.png
-            shot-attempt-*.png
-            shot-fail-logcat.txt
-            emulator-*.log
-            boot-fail.log
-          if-no-files-found: warn
-      - name: Normalize + commit APK screenshot
-        run: |
-          python3 - <<'PY'
-          from PIL import Image
-          img = Image.open("shot-raw.png").convert("RGB")
-          img = img.resize((720, 1440), Image.LANCZOS)
-          img.save("assets/brand/screenshot.png", optimize=True)
-          print("normalized:", img.size)
-          PY
+          mkdir -p assets/brand
+          cp android/app/build/screenshot.png assets/brand/screenshot.png
       - uses: stefanzweifel/git-auto-commit-action@v6
         with:
-          commit_message: "[skip ci] docs: свежий скриншот APK (бот, независимый воркфлоу после релиза)"
+          commit_message: "[skip ci] docs: свежий скриншот APK (бот JVM-рендер, без эмулятора)"
           file_pattern: "assets/brand/screenshot.png"
           branch: main
           rebase: true

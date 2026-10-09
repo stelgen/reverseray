@@ -106,21 +106,23 @@ func kdf1(ck *[HashSize]byte, ikm []byte) (t0 [HashSize]byte) {
 	return
 }
 
-// KDF2: t0 = HMAC(ck, ikm); t1 = HMAC(ck, t0‖0x1); ck' = HMAC(t1, 0x2).
+// KDF2 — ТОЧНЫЙ канон whitepaper (§5.4): t0 = HMAC(ck, ikm);
+// t1 = HMAC(t0, 0x1); ck' = HMAC(t0, 0x2). (До v0.9.6 t1/ck' ошибочно
+// считались от ck — имитация, что запрещено политикой канона WG.)
 func kdf2(ck *[HashSize]byte, ikm []byte) (t0, t1 [HashSize]byte) {
 	t0 = hmacBlake2s(ck[:], ikm)
-	t1 = hmacBlake2s(ck[:], append(t0[:], 1))
-	*ck = hmacBlake2s(t1[:], []byte{2})
+	t1 = hmacBlake2s(t0[:], []byte{1})
+	*ck = hmacBlake2s(t0[:], []byte{2})
 	return
 }
 
-// KDF3: t0 = HMAC(ck, ikm); t1 = HMAC(ck, t0‖0x1); t2 = HMAC(ck, t1‖0x2);
-// ck' = HMAC(t2, 0x3).
+// KDF3 — ТОЧНЫЙ канон whitepaper (§5.4): t0 = HMAC(ck, ikm);
+// t1 = HMAC(t0, 0x1); t2 = HMAC(t0, 0x2); ck' = HMAC(t0, 0x3).
 func kdf3(ck *[HashSize]byte, ikm []byte) (t0, t1, t2 [HashSize]byte) {
 	t0 = hmacBlake2s(ck[:], ikm)
-	t1 = hmacBlake2s(ck[:], append(t0[:], 1))
-	t2 = hmacBlake2s(ck[:], append(t1[:], 2))
-	*ck = hmacBlake2s(t2[:], []byte{3})
+	t1 = hmacBlake2s(t0[:], []byte{1})
+	t2 = hmacBlake2s(t0[:], []byte{2})
+	*ck = hmacBlake2s(t0[:], []byte{3})
 	return
 }
 

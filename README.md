@@ -9,7 +9,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-145%20Go%20%2B%20194%20JVM-2E7D32">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-147%20Go%20%2B%20195%20JVM-2E7D32">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
 </p>
 
@@ -193,8 +193,8 @@ admin API — только localhost/unix; контейнер distroless + gover
 
 | Робот | Что делает |
 |---|---|
-| `go` | gofmt/vet/test-race/coverage — 137 тестов |
-| `android` | сборка + 188 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл, i18n-гейты) |
+| `go` | gofmt/vet/test-race/coverage — 147 тестов |
+| `android` | сборка + 195 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл, i18n-гейты) |
 | `modules` | канон-чек манифеста (включая секцию camouflage) + парсеры обеих сторон согласны |
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |

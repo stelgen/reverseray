@@ -23,7 +23,7 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v0.9.5"
+DEFAULT_TAG="v0.9.6"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
 UI_LAN=1 # 1 = открывать веб-морду (/ui) в локальной сети; --no-ui закрывает в localhost
