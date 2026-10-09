@@ -156,7 +156,8 @@ jobs:
           RR_REPO: ${{ github.repository }}
           RR_DIGEST: ${{ needs.docker.outputs.image_digest }}
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY'          echo "RR_TAG=$RR_TAG RR_REPO=$RR_REPO RR_DIGEST_LEN=${#RR_DIGEST}" | tee release-digests-debug.txt
+
           import os, pathlib
           tag = os.environ["RR_TAG"]
           repo = os.environ["RR_REPO"]
@@ -184,9 +185,17 @@ jobs:
           p.write_text(s, encoding="utf-8")
           print(s)
           PY
+      - name: Upload digests debug (always)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-digests-debug
+          path: release-digests-debug.txt
+          if-no-files-found: ignore
       - uses: stefanzweifel/git-auto-commit-action@v6
         continue-on-error: true # пост-хозяйство: ни при каких условиях не роняет релиз
         with:
           commit_message: "[skip ci] chore(release): digest ${{ github.ref_name }} в deploy/digests.yaml"
           file_pattern: deploy/digests.yaml
+          branch: main # checkout по тегу = detached HEAD — пушим ЯВНО в main
           rebase: true # main мог уйти вперёд за время multi-arch сборки (Release #32)
