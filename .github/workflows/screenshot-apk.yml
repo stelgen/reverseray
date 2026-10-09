@@ -60,25 +60,30 @@ jobs:
             "system-images;android-30;google_apis;x86_64" | tail -2 || true
           echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
             -n ci -k "system-images;android-30;google_apis;x86_64" -d pixel || true
+          # v0.9.3-диагностика: состояние KVM/accel в артефакт (boot-fail.log)
+          { echo "== kvm =="; ls -l /dev/kvm 2>&1 || true
+            echo "== accel check =="; "$SDK/emulator/emulator" -accel check 2>&1 || true; } > boot-fail.log || true
           boot=0
-          for b in 1 2 3; do
+          for b in 1 2 3 4; do # v0.9.3: 4 попытки (v0.9.3-релиз упал на boot при 3)
             echo "boot attempt $b"
             "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
-              -no-audio -no-boot-anim -accel auto > "emulator-$b.log" 2>&1 &
+              -no-audio -no-boot-anim -no-snapshot -accel auto > "emulator-$b.log" 2>&1 &
             EPID=$!
-            for i in $(seq 1 100); do
+            adb wait-for-device 2>/dev/null || true
+            for i in $(seq 1 150); do # 450с на попытку — загрузка эмулятора на загруженном раннере медленная
               if adb shell getprop sys.boot_completed 2>/dev/null | grep -q 1; then boot=1; break; fi
               sleep 3
             done
             if [ "$boot" = "1" ]; then echo "emulator booted (attempt $b)"; break; fi
             echo "boot attempt $b failed — killing and retrying"
+            { echo "== attempt $b log tail =="; tail -40 "emulator-$b.log" || true; } >> boot-fail.log || true
             kill "$EPID" 2>/dev/null || true
             adb kill-server >/dev/null 2>&1 || true
             sleep 5
           done
           if [ "$boot" != "1" ]; then
-            { echo "== emulator logs =="; tail -80 emulator-*.log; echo "== adb devices =="; adb devices -l; } > boot-fail.log || true
-            echo "::error::эмулятор не загрузился за 3 попытки — см. артефакт shot-apk"
+            { echo "== emulator logs =="; tail -80 emulator-*.log; echo "== adb devices =="; adb devices -l; } >> boot-fail.log || true
+            echo "::error::эмулятор не загрузился за 4 попытки — см. артефакт shot-apk (boot-fail.log: kvm/accel/логи попыток)"
             exit 1
           fi
       - name: Hide ANR dialogs + take screenshots (8 attempts)
