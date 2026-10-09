@@ -41,3 +41,44 @@ func TestStatusAndUIEndpoints(t *testing.T) {
 	}
 	_ = app
 }
+
+// v0.9.1: /status несёт «О сервере» и «Константы защиты» — паритет фактов с APK;
+// /ui рендерит секцию и не содержит дурацких уточнений.
+func TestStatusServerFactsAndUI(t *testing.T) {
+	_, cfg, _ := startTestServer(t)
+
+	body, status := httpGet(t, "http://"+cfg.Listen.AdminTCP+"/status")
+	if status != 200 {
+		t.Fatalf("status: %d", status)
+	}
+	var rep StatusReport
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.GoVersion == "" || rep.GOOS == "" || rep.GOARCH == "" {
+		t.Fatalf("go facts пусты: %q %q %q", rep.GoVersion, rep.GOOS, rep.GOARCH)
+	}
+	if rep.UptimeSec < 0 || rep.MemSysMB <= 0 {
+		t.Fatalf("uptime/mem: %d %f", rep.UptimeSec, rep.MemSysMB)
+	}
+	if len(rep.Facts) < 5 {
+		t.Fatalf("фактов защиты мало: %d", len(rep.Facts))
+	}
+	found := false
+	for _, f := range rep.Facts {
+		if strings.Contains(f, "SPKI CA") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("факт про пин CA отсутствует")
+	}
+
+	html, _ := httpGet(t, "http://"+cfg.Listen.AdminTCP+"/ui")
+	if !strings.Contains(html, "Константы защиты") {
+		t.Fatal("/ui без секции Константы защиты")
+	}
+	if strings.Contains(html, "только чтение") {
+		t.Fatal("/ui содержит дурацкое уточнение «только чтение»")
+	}
+}

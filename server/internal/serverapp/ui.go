@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -46,6 +49,17 @@ type StatusReport struct {
 	Camouflage    *CamouflageInfo `json:"camouflage,omitempty"`
 	ApimaskFrames uint64          `json:"apimask_frames_total"`
 	ApimaskBytes  uint64          `json:"apimask_bytes_total"`
+	// v0.9.1: паритет фактов с APK — «О сервере» и «Константы защиты»
+	GoVersion    string   `json:"go_version,omitempty"`
+	GOOS         string   `json:"goos,omitempty"`
+	GOARCH       string   `json:"goarch,omitempty"`
+	MemAllocMB   float64  `json:"mem_alloc_mb,omitempty"`
+	MemSysMB     float64  `json:"mem_sys_mb,omitempty"`
+	StateDirMB   float64  `json:"state_dir_mb,omitempty"`
+	UptimeSec    int64    `json:"uptime_sec,omitempty"`
+	BytesRelayed uint64   `json:"bytes_relayed_total,omitempty"`
+	UdpDatagrams uint64   `json:"udp_datagrams_total,omitempty"`
+	Facts        []string `json:"facts,omitempty"`
 }
 
 // CamouflageInfo — открытая сводка модуля камуфляжа для /status и /ui.
@@ -83,7 +97,39 @@ func (e *egressIP) get() string {
 	return e.val
 }
 
+// dirSizeMB — суммарный размер state-каталога (дисциплина SSD:
+// ходим по файлам не чаще раза в минуту — кеш в App).
+func dirSizeMB(dir string) float64 {
+	var total int64
+	_ = filepath.Walk(dir, func(_ string, fi os.FileInfo, err error) error {
+		if err == nil && fi != nil && !fi.IsDir() {
+			total += fi.Size()
+		}
+		return nil
+	})
+	return float64(total) / 1024 / 1024
+}
+
 func (a *App) statusJSON() []byte {
+	// v0.9.1: факты сервера (тот же паттерн открытости, что и в APK)
+	a.stateDirMu.Lock()
+	if time.Since(a.stateDirAt) > 60*time.Second {
+		a.stateDirSize = dirSizeMB(a.cfg.StateDir)
+		a.stateDirAt = time.Now()
+	}
+	a.stateDirMu.Unlock()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	facts := []string{
+		"TLS 1.3 + ALPN; лист 3 года; пин = SHA256(SPKI CA) — ротация листа клиентов не ломает",
+		"HMAC-SHA256(key=SHA256(token), msg=nonce‖session_id), constant-time; nonce TTL 60 с, replay → отказ",
+		"≤120 рукопожатий/мин/IP; lockout за невалидный HMAC: 5 неудач → 30с·2^n (до 10 мин)",
+		"MTProto 2.0: DH-2048 на официальном dh_prime Telegram, AES-256-IGE, msg_key SHA-256",
+		"DATA ≤ 65535 Б; прочие кадры ≤ 4096 Б; окно стрима 512 КБ→4 МБ; бюджет сессии 16 МБ",
+		"WAN-hardening: первый байт ≠ TLS → tarpit + тишина (0 байт ответа)",
+		"Манифест modules.json: schema-чек, семвер, sha256, даунгрейд запрещён, мусор не применяется",
+		"DNS/SNI резолвит телефон — сервер не знает хосты назначения (redact by default)",
+	}
 	s := StatusReport{
 		OK:               true,
 		Version:          Version,
@@ -118,6 +164,16 @@ func (a *App) statusJSON() []byte {
 	}
 	s.ApimaskFrames = a.met.ApimaskFrames.Load()
 	s.ApimaskBytes = a.met.ApimaskBytes.Load()
+	s.GoVersion = runtime.Version()
+	s.GOOS = runtime.GOOS
+	s.GOARCH = runtime.GOARCH
+	s.MemAllocMB = float64(ms.Alloc) / 1024 / 1024
+	s.MemSysMB = float64(ms.Sys) / 1024 / 1024
+	s.StateDirMB = a.stateDirSize
+	s.UptimeSec = int64(time.Since(a.startedAt) / time.Second)
+	s.BytesRelayed = a.met.BytesRelayed.Load()
+	s.UdpDatagrams = a.udpDatagrams()
+	s.Facts = facts
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return []byte(`{"ok":false}`)
@@ -163,8 +219,9 @@ code{background:var(--line);padding:1px 6px;border-radius:6px;font-size:12px}
 <div class="card"><table><thead><tr>
 <th>Устройство</th><th>Сессия</th><th>Протокол</th><th>RTT</th><th>↓ вход</th><th>↑ выход</th><th>В полёте</th>
 </tr></thead><tbody id="rows"><tr><td colspan="7" style="color:var(--mut)">нет активных сессий</td></tr></tbody></table></div>
-<footer>авто-обновление 3 с · ReverseRay web UI · только чтение</footer>
+<footer>авто-обновление 3 с · ReverseRay web UI</footer>
 <script>
+function fmtUp(sec){const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60);return (h?h+" ч ":"")+m+" мин"}
 function fmt(b){if(b==null||b===undefined)return"—";const u=["Б","КБ","МБ","ГБ"];let i=0,x=Number(b);while(x>=1024&&i<3){x/=1024;i++}return x.toFixed(i?1:0)+" "+u[i]}
 function protoLabel(id,s){const l=(s.protocol_labels||{})[id]||id;const v=(s.protocol_vers||{})[id];return v?(l+' (v'+v+')'):l}
 async function tick(){
@@ -178,13 +235,22 @@ async function tick(){
    ['Auth OK / fail',s.auth_ok_total+' / '+s.auth_failures_total,s.auth_failures_total>0?'warn':'ok'],
    ['Inbound-подключений',s.inbound_conns_total,''],
    ['Egress IP',s.egress_ip||'—',''],
+   ['Go / ОС',(s.go_version||'—')+' · '+((s.goos||'—')+'/'+(s.goarch||'—')),''],
+   ['RAM (alloc)',fmt((s.mem_alloc_mb||0)*1048576),''],
+   ['Диск state',fmt((s.state_dir_mb||0)*1048576),''],
+   ['Uptime',fmtUp(s.uptime_sec||0),''],
+   ['Релея всего',fmt(s.bytes_relayed_total||0),''],
+   ['UDP-дейтаграмм',s.udp_datagrams_total||0,''],
   ];
   const hard=s.hardening_profile?('<div class="card"><div class="k">Hardening (WAN)</div><div class="v ok">'+s.hardening_profile+'</div>'+
    '<div class="k" style="margin-top:6px">Сканы отбито / лимит-дропов</div><div class="v">'+s.hardening_scans_total+' / '+s.hardening_limited_total+'</div></div>'):'';
   const mods=s.modules_version?('<div class="card"><div class="k">Модули (общий манифест APK↔сервер)</div><div class="v ok">'+s.modules_version+'</div><div class="k" style="margin-top:6px">Источник</div><div class="v">'+(s.modules_source||'builtin')+'</div></div>'):'';
+  const facts=(s.facts&&s.facts.length)?('<div class="card" style="margin-bottom:10px"><div class="k">Константы защиты (тот же канон, что и в APK)</div>'+
+   '<div style="margin-top:6px;font-size:12.5px;line-height:1.6">'+s.facts.map(f=>'• '+f).join('<br>')+'</div>'+
+   '<div class="k" style="margin-top:8px">DNS / SNI</div><div style="font-size:12.5px">резолвит телефон — сервер хостов назначения не знает (redact by default)</div></div>'):'';
   const camo=(s.camouflage&&s.camouflage.enabled)?('<div class="card"><div class="k">Маскировка (API Mask)</div><div class="v ok">'+(s.camouflage.ver?('v'+s.camouflage.ver):'вкл')+'</div><div class="k" style="margin-top:6px">Кадров NOISE / байт</div><div class="v">'+s.apimask_frames_total+' / '+fmt(s.apimask_bytes_total)+'</div></div>'):'';
   document.getElementById('cards').innerHTML=c.map(([k,v,cls])=>
-   '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('')+hard+mods+camo;
+   '<div class="card"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div></div>').join('')+hard+mods+camo+facts;
   const rows=(s.sessions||[]).map(x=>
    '<tr><td>'+(x.device||'?')+'</td><td><code>'+String(x.session||'').slice(0,10)+'…</code></td>'+
    '<td>'+protoLabel(x.proto||'rrp1',s)+'</td><td>'+(x.rtt_ms!=null?x.rtt_ms+' мс':'—')+'</td>'+

@@ -75,4 +75,27 @@ class RrpProtocolsVerTest {
         assertEquals("неттакого", RrpProtocols.label("неттакого"))
         assertEquals("", RrpProtocols.ver("неттакого"))
     }
+
+/** v0.9.1: слои — старый тонкий движок + НОВЫЙ протокол из манифеста:
+ *  реестр подхватывает id/метку/версию, дефолт остаётся rrp1, мусор → rrp1,
+ *  движок никогда сам не прыгает на незнакомый протокол. */
+    @Test
+    fun `new protocol from manifest layers into old thin engine`() {
+        RrpProtocols.applyRegistryFull(
+            ids = listOf("rrp1", "future2"),
+            version = "0.9.1",
+            labels = mapOf("rrp1" to "RRP/1", "future2" to "Future/2"),
+            vers = mapOf("rrp1" to "1", "future2" to "2"),
+        )
+        try {
+            assertEquals("Future/2 (v2)", RrpProtocols.labelWithVer("future2"))
+            assertTrue(RrpProtocols.displayList().contains("future2"))
+            assertEquals("future2", RrpProtocols.normalize("future2"))
+            // движок остаётся на стабильном дефолте
+            assertEquals("rrp1", RrpProtocols.normalize(null))
+            assertEquals("rrp1", RrpProtocols.normalize("мусор"))
+        } finally {
+            RrpProtocols.applyRegistryFull(listOf("rrp1"), "1", mapOf("rrp1" to "RRP/1"), mapOf("rrp1" to "1"))
+        }
+    }
 }

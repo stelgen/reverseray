@@ -9,8 +9,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-131%20Go%20%2B%20182%20JVM-2E7D32">
-  <img alt="Security" src="https://img.shields.io/badge/WAN--hardening-antiscan%20%2B%20tarpit-8B0000">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-131%20Go%20%2B%20183%20JVM-2E7D32">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
 </p>
 
@@ -119,7 +118,7 @@ flowchart TB
 | **Многоязычность (v0.8.3)** | Выбор языка в настройках (Как в системе / Русский / English); ВСЁ динамично: поля, статусы, уведомления и логи серверных событий; фолбэк — английский (дефолт-ресурсы = EN, RU — values-ru; core — типизированный каталог Msgs с en-фолбэком); паритет переводов и ноль хардкода проверяют CI-гейты перед деплоем |
 | **Пин CA — один канон (v0.9.0)** | пин = SHA256(SPKI CA) у обеих сторон (до 0.9.0 клиент считал от листа — плановая ротация листа ломала честные ссылки); ротация CA сервера = один тап владельца: диалог с фактическим пином в каноне ссылки, «Принять» обновляет ссылку и реконнектит; молчаливого доверия нет никогда |
 | **Docker** | Distroless БЕЗ шелла (v0.8.3: governor — код в самом бинаре, busybox удалён), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy); restart-governor: падение — не чаще раза в 30 с, бесконечный crash-loop отдаёт контейнер Docker с ошибкой |
-| **Веб-морда `/ui`** | Сессии, трафик, egress IP, протоколы, hardening-счётчики, версии модулей и камуфляжа — только чтение |
+| **Веб-панель `/ui` (v0.9.1)** | Сессии, трафик, egress IP, протоколы, hardening-счётчики, модули и камуфляж + «О сервере» и «Константы защиты» — тот же канон фактов, что и в APK |
 
 ## Быстрый старт — одна команда (автопилот)
 
@@ -199,7 +198,7 @@ admin API — только localhost/unix; контейнер distroless + gover
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |
 | `gitleaks` | секреты |
-| `screenshot` | отдельный воркфлоу (постфактум, после CI): скриншот с эмулятора → `assets/brand/screenshot.png` |
+| `screenshot` | отдельный воркфлоу ПОСЛЕ РЕЛИЗА, две параллельные джобы: APK с эмулятора → `assets/brand/screenshot.png`, веб-панель (headless-браузер, образ релиза) → `assets/brand/web.png` |
 | `assets` | детерминизм брендинга, живой banner.gif |
 | `docker` | сборка образа + healthcheck |
 | `codeql` | стат-анализ безопасности |

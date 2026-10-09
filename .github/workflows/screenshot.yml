@@ -1,30 +1,29 @@
 name: Screenshot
-# v0.8.3: скриншот приложения для README — ОТДЕЛЬНЫЙ воркфлоу.
+# v0.9.1: скриншоты ДВУХ панелей — APK (эмулятор) и веб (/ui из
+# ОПУБЛИКОВАННОГО образа релиза, headless-браузер) — в РЕАЛЬНОМ Git.
 #
 # Принципы:
-#  - НЕ участвует в CI-гейтах и релизе (полностью десинхронизирован от
-#    Release: эмулятор капризный — не должен блокировать выкладку);
-#  - постфактум: запускается после зелёного CI на main, по расписанию
-#    и вручную (workflow_dispatch);
-#  - коммитит assets/brand/screenshot.png (README уже встраивает этот
-#    файл — картинка на главной обновляется сама; если блок в README
-#    удалён, бот вернёт его);
-#  - упал — упал один этот воркфлоу: CI/Release остаются зелёными;
+#  - асинхронно ПОСЛЕ релиза (workflow_run Release success): ни CI, ни релиз
+#    не блокируются и не ждут эмулятор;
+#  - apk и web — ПАРАЛЛЕЛЬНЫЕ джобы; итог коммитит отдельная джоба;
+#  - коммитит assets/brand/screenshot.png + assets/brand/web.png
+#    (README уже встраивает оба файла; отсутствующий блок бот вернёт);
 #  - ЛЮБОЙ фейл оставляет артефакт-диагностику (логи джоб без токена
-#    нечитаемы — урок 08.10): логи эмулятора, logcat, кадры попыток.
-#
-# v0.8.3.1: android-emulator-runner заменён на РУЧНУЮ загрузку эмулятора
-# (два прогона падали ДО первого кадра — внутри чёрного ящика не видно
-# причины; теперь бут под нашим контролем с retry ×3 и логами).
+#    нечитаемы — урок 08.10);
+#  - упал — упал один этот воркфлоу: CI/Release остаются зелёными.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег образа ghcr для веб-панели (пусто = последний релиз)"
+        required: false
+        default: ""
   schedule:
-    - cron: "30 2 * * 1" # еженедельно, ночной UTC
+    - cron: "30 2 * * 1"
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["Release"]
     types: [completed]
-    branches: [main]
 
 permissions:
   contents: write
@@ -34,18 +33,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  shot:
+  apk:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
           github.event_name == 'schedule' ||
           github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    defaults:
-      run:
-        # ЯВНЫЙ bash: default-вьюер рендерит шаги как sh -c, а наш скрипт
-        # с циклами должен исполняться bash'ем (дэш падал "expecting done")
-        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -55,8 +49,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: true
-      - name: Install Pillow (sanity-check кадра)
-        run: pip install pillow
+      - run: pip install pillow
       - name: Build debug APK
         working-directory: android
         run: |
@@ -90,7 +83,7 @@ jobs:
           done
           if [ "$boot" != "1" ]; then
             { echo "== emulator logs =="; tail -80 emulator-*.log; echo "== adb devices =="; adb devices -l; } > boot-fail.log || true
-            echo "::error::эмулятор не загрузился за 3 попытки — см. артефакт screenshot-diagnostics"
+            echo "::error::эмулятор не загрузился за 3 попытки — см. артефакт shot-apk"
             exit 1
           fi
       - name: Hide ANR dialogs + take screenshots (8 attempts)
@@ -117,7 +110,7 @@ jobs:
               adb logcat -d | tail -60
               continue
             fi
-            sleep 4 # даём отрисоваться графику/консоли
+            sleep 4
             adb exec-out screencap -p > shot-raw.png
             if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
               ok=1
@@ -135,46 +128,136 @@ jobs:
             } > shot-fail-logcat.txt || true
             exit 1
           fi
-      - name: Upload diagnostics (always)
+      - name: Upload apk-shot diagnostics (always)
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: screenshot-diagnostics
+          name: shot-apk
           path: |
-            emulator-*.log
-            boot-fail.log
             shot-raw.png
             shot-attempt-*.png
             shot-fail-logcat.txt
+            emulator-*.log
+            boot-fail.log
           if-no-files-found: warn
-      - name: Normalize 720x1440 + ensure README embeds the shot
-        if: success()
-        working-directory: ${{ github.workspace }}
+
+  web:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule' ||
+          github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve released image tag
+        id: tag
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${{ github.event.workflow_run.head_branch }}"; fi
+          if [ -z "$T" ]; then
+            T=$(curl -fsSL --max-time 15 "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"])')
+          fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "Веб-панель из образа ghcr.io/stelgen/reverseray:$T"
+      - name: Run released server (web panel on 9090)
+        run: |
+          set -e
+          TAG="${{ steps.tag.outputs.tag }}"
+          docker run -d --name rr-web -p 127.0.0.1:9090:9090 \
+            -e RR_STATE_DIR=/var/lib/reverseray \
+            "ghcr.io/stelgen/reverseray:${TAG}"
+          ok=""
+          for i in $(seq 1 30); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' rr-web 2>/dev/null || echo unknown)
+            if [ "$st" = "healthy" ]; then ok=1; break; fi
+            sleep 2
+          done
+          [ "$ok" = "1" ] || { docker logs --tail 50 rr-web || true; exit 1; }
+          curl -fsS --max-time 5 http://127.0.0.1:9090/healthz
+      - name: Web panel screenshot (headless chromium)
+        run: |
+          set -e
+          pip install playwright pillow
+          python3 -m playwright install --with-deps chromium
+          python3 - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              b = p.chromium.launch()
+              pg = b.new_page(viewport={"width": 1280, "height": 860})
+              pg.goto("http://127.0.0.1:9090/ui", wait_until="networkidle")
+              pg.wait_for_timeout(1500)  # даём JSON-карточкам отрисоваться
+              pg.screenshot(path="web-raw.png", full_page=True)
+              b.close()
+          print("web-raw.png done")
+          PY
+      - name: Upload web-shot diagnostics (always)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: shot-web
+          path: |
+            web-raw.png
+          if-no-files-found: warn
+
+  commit:
+    needs: [apk, web]
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: pip install pillow
+      - uses: actions/download-artifact@v6
+        with:
+          name: shot-apk
+          path: in-apk
+      - uses: actions/download-artifact@v6
+        with:
+          name: shot-web
+          path: in-web
+      - name: Normalize + ensure README embeds both panels
         run: |
           python3 - <<'PY'
           from PIL import Image
-          img = Image.open("shot-raw.png").convert("RGB")
+          img = Image.open("in-apk/shot-raw.png").convert("RGB")
           img = img.resize((720, 1440), Image.LANCZOS)
           img.save("assets/brand/screenshot.png", optimize=True)
-          print("screenshot normalized:", img.size)
-          # README «подвахивает» кадр сам: он уже ссылается на этот файл.
-          # Гарантия: если блок скриншота удалён — возвращаем его.
+          web = Image.open("in-web/web-raw.png").convert("RGB")
+          w = 1200
+          web = web.resize((w, round(web.height * w / web.width)), Image.LANCZOS)
+          web.save("assets/brand/web.png", optimize=True)
+          print("normalized:", img.size, web.size)
           import pathlib
           p = pathlib.Path("README.md")
           s = p.read_text(encoding="utf-8")
-          if "assets/brand/screenshot.png" not in s:
-              block = ('\n<p align="center">\n'
+          apk_block = ('\n<p align="center">\n'
                        '  <img src="assets/brand/screenshot.png" alt="Интерфейс приложения" width="280"/>\n'
                        '</p>\n')
-              s = s.replace("## Быстрый старт", block + "\n## Быстрый старт", 1) \
-                   if "## Быстрый старт" in s else s + block
+          web_block = ('\n<p align="center">\n'
+                       '  <img src="assets/brand/web.png" alt="Веб-панель" width="720"/>\n'
+                       '</p>\n')
+          changed = False
+          if "assets/brand/screenshot.png" not in s:
+              s = s.replace("## Быстрый старт", apk_block + "\n## Быстрый старт", 1) \
+                   if "## Быстрый старт" in s else s + apk_block
+              changed = True
+          if "assets/brand/web.png" not in s:
+              anchor = "assets/brand/screenshot.png"
+              i = s.find(anchor)
+              j = s.find("</p>", i) + 3
+              s = s[:j] + web_block + s[j:]
+              changed = True
+          if changed:
               p.write_text(s, encoding="utf-8")
-              print("README: блок скриншота восстановлен")
+              print("README обновлён")
           else:
-              print("README: скриншот уже встроен")
+              print("README уже встраивает обе панели")
           PY
       - uses: stefanzweifel/git-auto-commit-action@v6
-        if: success()
         with:
-          commit_message: "[skip ci] docs: свежий скриншот приложения (бот-эмулятор, отдельный воркфлоу)"
-          file_pattern: "assets/brand/screenshot.png README.md"
+          commit_message: "[skip ci] docs: свежие скриншоты APK и веб-панели (бот, отдельный воркфлоу после релиза)"
+          file_pattern: "assets/brand/screenshot.png assets/brand/web.png README.md"
+          branch: main
+          rebase: true

@@ -89,6 +89,13 @@ type App struct {
 	// egress — кешированный внешний IP сервера для /status и веб-морды
 	egress egressIP
 
+	// startedAt — uptime для веб-морды (v0.9.1: паритет фактов с APK)
+	startedAt time.Time
+	// v0.9.1: кеш размера state-каталога для /status (SSD-дисциплина)
+	stateDirMu   sync.Mutex
+	stateDirSize float64
+	stateDirAt   time.Time
+
 	// v0.8: hardening-гейт туннельного порта + синхронизатор модулей
 	hardSt  *hardening.Stats
 	gate    *hardening.Gate
@@ -105,6 +112,7 @@ type App struct {
 
 // New assembles the app.
 func New(cfg *config.Config, log *slog.Logger) (*App, error) {
+	startedAt := time.Now()
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("state dir: %w", err)
 	}
@@ -162,6 +170,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	}, log, cfg.StateDir)
 	log.Info("hardening gate up", "profile", gate.Describe())
 	return &App{
+		startedAt:      startedAt,
 		cfg:            cfg,
 		log:            log,
 		store:          store,

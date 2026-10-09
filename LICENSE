@@ -1,8 +1,5 @@
-# ReverseRay License
-
-Copyright (c) 2026 STELGEN — автор идеи и автор проекта.
-
-## BSD 2-Clause License
+Copyright (c) 2026, STELGEN
+All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -25,20 +22,3 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
-
----
-
-## Об атрибуции (по-человечески)
-
-BSD-2-Clause — это лицензия с **обязательным указанием авторства**: в любом
-редистрибутиве (исходники или бинарники) должно сохраняться упоминание
-владельца авторских прав — `Copyright (c) 2026 STELGEN` и этот файл LICENSE.
-
-Автор просит (и лицензия это обеспечивает) указывать авторство идеи и проекта
-— например, ссылкой на https://github.com/stelgen/reverseray — во всех
-производных работах, статьях, форках и сборках.
-
-Документация и брендинг репозитория (`docs/`, `assets/`, `landing/`)
-могут по желанию цитироваться на условиях **CC-BY-4.0** с той же ссылкой на
-автора, если хочется более мягкого «только укажи автора» без инженерных
-оговорок BSD.
