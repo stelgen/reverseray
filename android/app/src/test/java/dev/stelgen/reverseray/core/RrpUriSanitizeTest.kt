@@ -109,8 +109,15 @@ class RrpUriSanitizeTest {
     }
 
     @Test
-    fun `serialize always carries explicit proto`() {
-        val s = RrpUri.parse(canon).serialize()
-        assertTrue(s.contains("proto=rrp1"))
+    fun `serialize carries proto only when explicit v095 AUTO canon`() {
+        // v0.9.5: proto= пишется ТОЛЬКО когда выбран явно; отсутствует = AUTO.
+        val withProto = RrpUri.parse(canon).serialize()
+        assertTrue(withProto.contains("proto=rrp1"))
+        val auto = RrpUri.parse(RrpUri.parse(canon).copy(proto = "").serialize()).serialize()
+        assertTrue(!auto.contains("proto="))
+        // явный proto= сохраняется при перепарсинге
+        assertEquals("rrp1", RrpUri.parse(withProto).proto)
+        // AUTO сохраняется (пусто) — лучший общий протокол согласуется на коннекте
+        assertEquals("", RrpUri.parse(auto).proto)
     }
 }

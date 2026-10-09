@@ -472,20 +472,29 @@ sealed class RrpFrame(val type: Int) {
 
     /** 0x24 S→C (mtproto2): JSON {p,g,g_a} — параметры DH (base64url 256-байтовые доли). */
     class KeyReq(
-        val p: String,
-        val g: Int,
-        val gA: String,
+        val p: String = "",
+        val g: Int = 0,
+        val gA: String = "",
+        /** v0.9.5: kind протокола ("wireguard") — непустой ⇒ WG-хендшейк. */
+        val kind: String = "",
+        /** v0.9.5: WG static public сервера (b64url 32 Б) для kind=wireguard. */
+        val sPub: String = "",
     ) : RrpFrame(TYPE_KEY_REQ) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "p" to MiniJson.q(p),
             "g" to g.toString(),
             "g_a" to MiniJson.q(gA),
+            "kind" to MiniJson.q(kind),
+            "spub" to MiniJson.q(sPub),
         ).toByteArray(Charsets.UTF_8)
 
         companion object {
             internal fun fromPayload(p: ByteArray): KeyReq {
                 val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_REQ_BAD_JSON.t())
-                return KeyReq(m["p"] ?: "", m["g"]?.toIntOrNull() ?: 0, m["g_a"] ?: "")
+                return KeyReq(
+                    m["p"] ?: "", m["g"]?.toIntOrNull() ?: 0, m["g_a"] ?: "",
+                    m["kind"] ?: "", m["spub"] ?: "",
+                )
             }
         }
     }
@@ -500,6 +509,38 @@ sealed class RrpFrame(val type: Int) {
             internal fun fromPayload(p: ByteArray): KeyResp {
                 val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_RESP_BAD_JSON.t())
                 return KeyResp(m["g_b"] ?: "")
+            }
+        }
+    }
+
+    /** 0x27 C→S (wireguard): бинарный payload — НАСТОЯЩИЙ WG msg1 (148 Б). */
+    class WgInit(val raw: ByteArray) : RrpFrame(TYPE_WG_INIT) {
+        override fun buildPayload(): ByteArray = raw
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): WgInit = WgInit(p)
+        }
+    }
+
+    /** 0x28 S→C (wireguard): бинарный payload — НАСТОЯЩИЙ WG msg2 (92 Б). */
+    class WgResp(val raw: ByteArray) : RrpFrame(TYPE_WG_RESP) {
+        override fun buildPayload(): ByteArray = raw
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): WgResp = WgResp(p)
+        }
+    }
+
+    /** 0x2A C→S (v0.9.5): JSON {"enabled":true|false} — выбор камуфляжа устройством. */
+    class CamCtl(val enabled: Boolean) : RrpFrame(TYPE_CAM_CTL) {
+        override fun buildPayload(): ByteArray = MiniJson.obj(
+            "enabled" to enabled.toString(),
+        ).toByteArray(Charsets.UTF_8)
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): CamCtl {
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_REQ_BAD_JSON.t())
+                return CamCtl(m["enabled"] == "true")
             }
         }
     }
@@ -558,13 +599,23 @@ sealed class RrpFrame(val type: Int) {
         const val TYPE_KEY_RESP = 0x25
         // v0.8.2: кадр камуфляжа «API Mask» (модуль apimask, см. core/Apimask.kt)
         const val TYPE_NOISE = 0x26
+        // v0.9.5: протокол wireguard — НАСТОЯЩИЕ WG-кадры (Noise_IKpsk2) внутри
+        // приватного канала: WG_INIT (C→S, msg1 148 Б) → WG_RESP (S→C, msg2 92 Б);
+        // после обмена payload'ы DATA/UDP_DATA — WG transport-пакеты (type=4).
+        const val TYPE_WG_INIT = 0x27
+        const val TYPE_WG_RESP = 0x28
+        // v0.9.5: управление камуфляжем с клиента (персистентный выбор устройства)
+        const val TYPE_CAM_CTL = 0x2A
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
         const val MAX_CONTROL_PAYLOAD = 4096
 
-        fun maxPayloadFor(type: Int): Int =
-            if (type == TYPE_DATA || type == TYPE_UDP_DATA) MAX_DATA_PAYLOAD else MAX_CONTROL_PAYLOAD
+        fun maxPayloadFor(type: Int): Int = when (type) {
+            TYPE_DATA, TYPE_UDP_DATA -> MAX_DATA_PAYLOAD
+            TYPE_WG_INIT, TYPE_WG_RESP -> 256 // wg msg1=148 Б / msg2=92 Б (запас)
+            else -> MAX_CONTROL_PAYLOAD
+        }
 
         /** Парсинг кадра из потока: 12 байт заголовка + payload, с проверкой версии/лимитов. */
         fun parse(source: InputStream): RrpFrame {
@@ -608,6 +659,9 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_KEY_REQ -> KeyReq.fromPayload(payload)
                 TYPE_KEY_RESP -> KeyResp.fromPayload(payload)
                 TYPE_NOISE -> Noise.fromPayload(payload)
+                TYPE_WG_INIT -> WgInit(payload)
+                TYPE_WG_RESP -> WgResp(payload)
+                TYPE_CAM_CTL -> CamCtl.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)
                 else -> throw RrpFrameException(Msgs.UNKNOWN_FRAME.t(Integer.toHexString(type)))

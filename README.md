@@ -9,7 +9,7 @@
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-137%20Go%20%2B%20188%20JVM-2E7D32">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-145%20Go%20%2B%20194%20JVM-2E7D32">
   <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
 </p>
 
@@ -102,27 +102,24 @@ flowchart TB
 | Деплой | Автопилот `rr.sh`: установка/обновление/сброс одной командой | [`deploy/rr.sh`](deploy/rr.sh) |
 | CI-роботы | Тесты, приватность, модули, скриншот, секреты | `.github/workflows/` |
 
-## Возможности (v0.9.4)
+## Возможности (v0.9.5)
+
+Только техника — пользовательский интерфейс сознательно не документируется.
 
 | Возможность | Суть |
 |---|---|
-| **RRP/1** | Мультиплексирование, flow-control, лимиты кадров, keep-alive — спецификация в [`docs/protocol.md`](docs/protocol.md) |
-| **WAN-hardening** | Туннельный порт отвечает только настоящим TLS-клиентам; первый байт не TLS → tarpit + тихое закрытие без единого байта ответа (nmap -sV не видит сервиса); глобальные и per-IP лимиты параллельности |
-| **mtproto2** | После приватного хендшейка (TLS 1.3 + SPKI-pin + HMAC) ключи перегенерируются DH-обменом по канону MTProto 2.0 (официальный dh_prime Telegram); payload ходит в AES-256-IGE конверте; кросс-языковой KAT-тест Go↔Kotlin |
-| **Модульная система** | APK — тонкий движок; сервер и приложение парсят один и тот же манифест; модули обновляются с GitHub без переустановки APK (по версии/хешу, мусор никогда не применяется); клиент фоллбечится на rrp1, сервер не откатывается никогда (анти-цикл) |
-| **API Mask (v0.8.2)** | Модуль камуфляжа: фоновый обмен внутри туннеля выглядит как API бизнес-приложения — периодические JSON-запросы/ответы со случайными размерами и джиттером; ноль внешних хостов; суточный бюджет из манифеста; каждый обмен честно виден в консоли |
-| **Лимит трафика — король** | Суточный/месячный лимит с датой сброса; исчерпан → РОВНО НОЛЬ байт: туннель умирает, окно «Траффик закончился», автоподключение умеет ждать даты сброса |
-| **Кнопка и график (v0.9.3)** | Кнопка — 4 состояния (старт/подключение/подключено/ошибка), анимация состояния — `PulseRingView`; график — текущая/средняя/пиковая скорость (оси bps); состояние и история живут в сервисе. Реестр протоколов: новый протокол из модуля виден в GUI сразу, согласуются только исполняемые обеими сторонами |
-| **Единая консоль** | Один компонент на Главной, в Обновлении и в Логе: цветовые роли строк (зелёный/красный/тёмно-жёлтое важное/белая беготня), кнопка «live» внутри бара, положение сохраняется |
-| **Честные вкладки** | «О приложении» (версии, модули, RAM, диск, трафик, константы защиты), «О устройстве» (CPU/RAM/SDK/Java + что читаем), «О сети» (DNS, реальный резолвер, DoT/DoH/DNSSEC/ECS/SNI + источники данных) |
-| **Обновления** | Модули — без переустановки APK (прогресс % и скорость в консоли); APK — по кнопке или раз в 24 ч; скачивание сверяется с SHA256SUMS релиза до установки (анти-подмена) |
-| **UX-канон (v0.8.2)** | Все вкладки скроллятся (включая ландшафт и крупные шрифты), лог обновлений — в том же консольном окне и на языке приложения, никаких пустых полей и пояснений-«скобок» в настройках |
-| **Многоязычность (v0.8.3)** | Выбор языка в настройках (Как в системе / Русский / English); ВСЁ динамично: поля, статусы, уведомления и логи серверных событий; фолбэк — английский (дефолт-ресурсы = EN, RU — values-ru; core — типизированный каталог Msgs с en-фолбэком); паритет переводов и ноль хардкода проверяют CI-гейты перед деплоем |
-| **Пин CA — один канон (v0.9.0)** | пин = SHA256(SPKI CA) у обеих сторон (до 0.9.0 клиент считал от листа — плановая ротация листа ломала честные ссылки); ротация CA сервера = один тап владельца: диалог с фактическим пином в каноне ссылки, «Принять» обновляет ссылку и реконнектит; молчаливого доверия нет никогда |
-| **Диагностика подключения (v0.9.4)** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена (6 символов) для сверки со строкой из rr.sh/enroll |
-| **Docker** | Distroless БЕЗ шелла (v0.8.3: governor — код в самом бинаре, busybox удалён), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy); restart-governor: падение — не чаще раза в 30 с, бесконечный crash-loop отдаёт контейнер Docker с ошибкой |
-| **Веб-панель `/ui` (v0.9.1)** | Сессии, трафик, egress IP, протоколы, hardening-счётчики, модули и камуфляж + «О сервере» и «Константы защиты» — тот же канон фактов, что и в APK |
-
+| **RRP/1** | Мультиплексирование, flow-control (кредит ≤ буферу приёма), лимиты кадров, keep-alive — спецификация в [`docs/protocol.md`](docs/protocol.md) |
+| **wireguard (v0.9.5)** | НАСТОЯЩАЯ криптография WireGuard (актуальный канон whitepaper) внутри приватного канала: Noise_IKpsk2-хендшейк (mac1, enc_static, enc_timestamp/TAI64N), транспортные пакеты `[type=4][receiver][counter][ChaCha20-Poly1305]` со sliding-window анти-реплеем 2048; PSK хендшейка = SHA256(token) — привязка к нашему ключу доверия; кросс-языковой KAT Go↔Kotlin байт-в-байт |
+| **mtproto2** | После приватного хендшейка ключи перегенерируются DH-обменом по канону MTProto 2.0 (официальный dh_prime Telegram, AES-256-IGE, msg_key SHA-256); кросс-языковой KAT Go↔Kotlin |
+| **AUTO-протокол (v0.9.5)** | Ссылка без `proto=` = режим AUTO: клиент запрашивает предпочтительный протокол, сервер согласует по общему реестру вниз до rrp1; явный `proto=` в ссылке всегда приоритетен; мусор никогда не ломает стек |
+| **WAN-hardening** | Туннельный порт отвечает только настоящим TLS-клиентам; первый байт не TLS → tarpit + тихое закрытие без единого байта ответа; глобальные и per-IP лимиты параллельности |
+| **Модульная система** | APK — тонкий движок; сервер и приложение парсят ОДИН манифест `modules.json`; обновления модулей без переустановки APK (по версии/хешу, мусор не применяется, даунгрейд запрещён); клиент фоллбечится на rrp1, сервер не откатывается никогда (анти-цикл) |
+| **API Mask + выбор клиента (v0.9.5)** | Камуфляж: фоновый обмен внутри туннеля выглядит как API бизнес-приложения; ноль внешних хостов; суточный бюджет из манифеста; кадр `0x2A` — выбор устройства персистентен НА СЕРВЕРЕ (переживает офлайн клиента) и учитывается в READY.features будущих сессий |
+| **Лимит трафика — король** | Суточный/месячный лимит с датой сброса; исчерпан → РОВНО НОЛЬ байт: туннель умирает, автоподключение умеет ждать дату сброса |
+| **Пин CA — один канон** | пин = SHA256(SPKI CA) у обеих сторон; ротация CA = один тап владельца (диалог с фактическим пином, «Принять» обновляет ссылку и реконнектит); молчаливого доверия нет никогда |
+| **Диагностика подключения (v0.9.4)** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена для сверки со строкой из rr.sh/enroll |
+| **Веб-панель `/ui` (v0.9.5)** | Read-only дашборд: график трафика реального времени (окно 90 с), карточки клиентов с полной телеметрией сессии (relay-байты/трафик телефона, стримы, RTT, uptime, UDP/DNS-счётчики, статус крипты протокола), выборы камуфляжа клиентов; опрос 2 с, vanilla JS без зависимостей |
+| **Docker** | Distroless БЕЗ шелла (restart-governor в самом бинаре), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy) |
 ## Быстрый старт — одна команда (автопилот)
 
 Из любого каталога: скрипт создаёт подпапку `reverseray/` (compose, state,
@@ -250,20 +247,21 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 # returns the phone's IP
 ```
 
-### Highlights
+### Highlights (technical only — UI is intentionally not documented)
 
 | Feature | Summary |
 |---|---|
+| RRP/1 | multiplexing, flow-control (credit ≤ receive buffer), frame limits, keep-alive — spec in docs/protocol.md |
+| wireguard (v0.9.5) | REAL WireGuard crypto (current whitepaper canon) inside the private channel: Noise_IKpsk2 handshake (mac1, TAI64N), transport packets with ChaCha20-Poly1305 and a 2048 sliding-window anti-replay; handshake PSK = SHA256(token); byte-exact Go↔Kotlin KAT |
+| mtproto2 | DH key regeneration per Telegram canon (official dh_prime); AES-256-IGE payload envelope; cross-language KAT |
+| AUTO protocol (v0.9.5) | link without `proto=` = AUTO: client asks for the preferred protocol, server negotiates down to rrp1; explicit `proto=` always wins |
 | WAN hardening | tunnel port speaks only to real TLS clients; scanners get a tarpit and zero response bytes |
-| Modules | APK is a thin engine — server and app parse the SAME `modules.json`; updates without reinstall; client falls back to rrp1 |
-| mtproto2 | DH key regeneration per Telegram canon; AES-256-IGE payload envelope; cross-language KAT test |
-| API Mask (v0.8.2) | in-tunnel background chatter shaped like a business app's API; zero external hosts; daily budget from the manifest |
+| Modules | APK is a thin engine — server and app parse the SAME `modules.json`; updates without reinstall; client falls back to rrp1, server never rolls back |
+| API Mask + client choice (v0.9.5) | in-tunnel API-like chatter; frame `0x2A` persists the device choice on the SERVER (survives offline) and gates READY.features of future sessions |
 | Traffic limit is king | exhausted → exactly zero bytes; auto-reconnect can wait for the reset date |
-| Honest UI | unified console across tabs (scrollable, in-bar live button); About panels show EVERYTHING the app learned |
-| Connection diagnostics (v0.9.4) | server `auth failed` → auto-reconnect stops with a clear status (retries only earn an IP lockout shown as a cryptic TLS alert); AUTH log prints the token prefix (6 chars) to compare with the rr.sh/enroll output |
-| SSD/RAM discipline | counters live in RAM, persisted once per minute |
-| Docker | distroless БЕЗ шелла (governor in-binary), cap_drop ALL, healthcheck (CI waits for healthy on the real entrypoint), restart-governor (30 s min delay, gives up after 20 failures) |
-
+| Connection diagnostics (v0.9.4) | server `auth failed` → auto-reconnect stops with a clear status; AUTH log prints the token prefix (6 chars) |
+| Web panel `/ui` (v0.9.5) | read-only dashboard: real-time traffic chart, per-client session telemetry (relay/phone bytes, streams, RTT, uptime, UDP/DNS counters, crypto state), 2 s poll, zero JS dependencies |
+| Docker | distroless without shell (in-binary restart governor), cap_drop ALL, healthcheck (CI waits for healthy) |
 ### Compatibility
 
 | Component | Min | Tested |

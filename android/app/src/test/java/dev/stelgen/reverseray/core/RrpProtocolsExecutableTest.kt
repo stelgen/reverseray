@@ -37,10 +37,12 @@ class RrpProtocolsExecutableTest {
     fun `неисполняемый протокол сводится к фундаменту при подключении`() = withRegistry(listOf("rrp1", "mtproto2", "future9")) {
         assertEquals("rrp1", RrpProtocols.normalizeExecutable("future9"))
         assertEquals("rrp1", RrpProtocols.normalizeExecutable("мусор"))
-        assertEquals("rrp1", RrpProtocols.normalizeExecutable(null))
-        assertEquals("rrp1", RrpProtocols.normalizeExecutable(""))
+        // v0.9.5: пусто/null = AUTO — предпочтительный (wireguard), сервер согласует
+        assertEquals(RrpProtocols.PREFERRED_AUTO, RrpProtocols.normalizeExecutable(null))
+        assertEquals(RrpProtocols.PREFERRED_AUTO, RrpProtocols.normalizeExecutable(""))
         assertEquals("rrp1", RrpProtocols.normalizeExecutable("rrp1"))
         assertEquals("mtproto2", RrpProtocols.normalizeExecutable("mtproto2"))
+        assertEquals("wireguard", RrpProtocols.normalizeExecutable("wireguard"))
     }
 
     @Test

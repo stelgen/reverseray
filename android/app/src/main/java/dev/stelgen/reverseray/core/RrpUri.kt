@@ -21,8 +21,12 @@ data class RrpUriConfig(
     val name: String? = null,
     /** Транспорт: "tcp" (сырой RRP/1, по умолчанию) или "ws" (WebSocket-апгрейд /rrp). */
     val transport: String = RrpUri.TRANSPORT_TCP,
-    /** Протокол туннеля (канон после нормализации; мусор → дефолт, никогда не ошибка). */
-    val proto: String = RrpProtocols.DEFAULT,
+    /**
+     * Протокол туннеля. v0.9.5: пустая строка = AUTO — клиент просит
+     * предпочтительный протокол, сервер согласует по общему реестру
+     * (вниз до rrp1, если не умеет). Явный proto= в ссылке имеет приоритет.
+     */
+    val proto: String = "",
 ) {
     fun serialize(): String = RrpUri.serialize(this)
 }
@@ -103,7 +107,7 @@ object RrpUri {
         var pin: String? = null
         var name: String? = null
         var transport = TRANSPORT_TCP
-        var proto = RrpProtocols.DEFAULT
+        var proto = "" // v0.9.5: отсутствует = AUTO (лучший общий протокол)
         if (query.isNotEmpty()) {
             for (kv in query.split('&')) {
                 if (kv.isEmpty()) continue
@@ -120,7 +124,10 @@ object RrpUri {
                             else -> TRANSPORT_TCP // неизвестное/пустое → дефолт, не ошибка
                         }
                     }
-                    "proto" -> proto = RrpProtocols.normalize(pctDecode(value))
+                    "proto" -> {
+                        val raw = pctDecode(value).trim()
+                        proto = if (raw.isEmpty()) "" else RrpProtocols.normalize(raw)
+                    }
                     // неизвестные параметры игнорируем — сервер вправе добавить поля
                     else -> {}
                 }
@@ -142,9 +149,11 @@ object RrpUri {
         config.pin?.let { params.add("pin=" + pctEncode(it)) }
         config.name?.let { params.add("name=" + pctEncode(it)) }
         if (config.transport.lowercase(Locale.ROOT) == TRANSPORT_WS) params.add("transport=ws")
-        // proto — всегда явно: формат ключа несёт протокол, обе стороны парсят
-        // его без догадок; мусорное значение сводится к дефолту и там, и там
-        params.add("proto=" + pctEncode(config.proto))
+        // v0.9.5: proto= пишется ТОЛЬКО когда выбран явно (AUTO не фиксируем —
+        // так старые ссылки продолжают получать лучший общий протокол сервера;
+        // канон v0.9.2 «ссылка = источник правды» соблюдается: явный proto=
+        // перекрывает AUTO, ProtoFallback/переключение пишут proto= явно).
+        if (config.proto.isNotBlank()) params.add("proto=" + pctEncode(config.proto))
         if (params.isNotEmpty()) sb.append("/?").append(params.joinToString("&"))
         return sb.toString()
     }

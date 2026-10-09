@@ -61,6 +61,20 @@ const (
 	// сервер отвечает NOISE ТОЛЬКО на полученный NOISE — старые версии обеих
 	// сторон кадр никогда не видят (нулевая поломка совместимости).
 	TypeNoise = 0x26
+
+	// Кадры протокола wireguard (v0.9.5, module protocol.wireguard):
+	// payload — НАСТОЯЩИЕ WireGuard-кадры (Noise_IKpsk2) внутри приватного
+	// канала. WG_INIT (C→S) — msg1 инициатора (148 Б), WG_RESP (S→C) —
+	// msg2 респондера (92 Б). После обмена payload'ы DATA/UDP_DATA —
+	// WG transport-пакеты (type=4, ChaCha20-Poly1305, sliding-window).
+	TypeWgInit = 0x27
+	TypeWgResp = 0x28
+
+	// Управление модулем камуфляжа с клиента (v0.9.5): C→S JSON
+	// {"enabled":true|false}. Сервер сохраняет выбор устройства ПЕРМАНЕНТНО
+	// (переживает реконнекты и офлайн клиента) и отражает в READY.features
+	// следующей сессии: выключенный клиентом apimask не включается обратно.
+	TypeCamCtl = 0x2A
 )
 
 const (
@@ -87,8 +101,13 @@ var (
 
 // MaxPayloadFor returns the hard payload limit for a frame type.
 func MaxPayloadFor(t uint8) int {
-	if t == TypeData || t == TypeUdpData {
+	switch t {
+	case TypeData, TypeUdpData:
 		return MaxDataPayload
+	case TypeWgInit:
+		return 256 // wg msg1 = 148 Б (запас на будущие WG-форматы)
+	case TypeWgResp:
+		return 256 // wg msg2 = 92 Б
 	}
 	return MaxControlPayload
 }

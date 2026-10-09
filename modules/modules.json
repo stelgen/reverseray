@@ -1,10 +1,11 @@
 {
   "schema": 1,
-  "version": "0.8.2",
-  "updated": "2026-10-08",
+  "version": "0.9.5",
+  "updated": "2026-10-09",
   "protocols": [
     { "id": "rrp1", "name": "RRP/1", "ver": "1", "default": true },
-    { "id": "mtproto2", "name": "MTProto/2", "ver": "2.0" }
+    { "id": "mtproto2", "name": "MTProto/2", "ver": "2.0" },
+    { "id": "wireguard", "name": "WireGuard/1", "ver": "1" }
   ],
   "camouflage": {
     "id": "apimask",

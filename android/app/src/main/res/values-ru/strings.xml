@@ -34,7 +34,10 @@
     <string name="update_error">Ошибка обновления: %1$s</string>
     <string name="update_check">Проверить обновления</string>
     <string name="logs_share">Поделиться</string>
-    <string name="btn_start_short">Старт</string>
+        <!-- v0.9.5: кнопка-состояния (канон владельца) -->
+    <string name="btn_connecting">Подключение…</string>
+    <string name="btn_error">Ошибка</string>
+<string name="btn_start_short">Старт</string>
     <string name="traffic_idle">Трафик: нет данных</string>
     <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
     <string name="rate_b">%1$d Б/с</string>
@@ -67,7 +70,19 @@
     <!-- Протоколы -->
     <string name="proto_section">Протокол туннеля</string>
     <string name="proto_unknown">Протокол: неизвестно</string>
-    <string name="proto_switch">Сменить протокол</string>
+        <!-- v0.9.5: режим AUTO протокола + управление модулями из GUI -->
+    <string name="proto_auto_label">AUTO (лучший общий)</string>
+    <string name="modules_camo_on">%1$s: включён — фоновый обмен возобновлён</string>
+    <string name="modules_camo_off">%1$s: выключен ВАШИМ выбором (переживает офлайн)</string>
+    <string name="modules_camo_applied">Выбор отправлен серверу (0x2A) и сохранён</string>
+    <string name="modules_camo_deferred">Выбор сохранён — применится при следующем подключении</string>
+    <string name="modules_section_modules">Модули</string>
+        <string name="modules_camo_toast_on">Модуль включён — лог и статус обновлены</string>
+    <string name="modules_camo_toast_off">Модуль выключен — выбор уйдёт на сервер</string>
+    <string name="app_modules_row2_name_fmt">%1$s · v%2$s</string>
+<string name="modules_hint">Вкл/выкл одним чекбоксом; выбор синхронизируется с сервером и переживает офлайн.</string>
+    <string name="modules_camo_desc">Фоновый обмен API-подобными кадрами внутри туннеля.</string>
+<string name="proto_switch">Сменить протокол</string>
     <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
     <string name="proto_current">Протокол: %1$s</string>
     <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>

@@ -86,6 +86,80 @@ object Msgs {
         "MTProto/2: битый конверт UDP_DATA: %s",
     )
 
+    // ── RrpClient: wireguard (v0.9.5) ─────────────────────────────────────
+    val WG_BAD_SPUB = Msg(
+        "WireGuard: bad server static pub (len %s)",
+        "WireGuard: битый static public сервера (длина %s)",
+    )
+    val WG_INIT_SENT = Msg(
+        "SENT WG_INIT (%sB) — Noise_IKpsk2 msg1 (PSK = SHA256(token))",
+        "SENT WG_INIT (%sБ) — msg1 Noise_IKpsk2 (PSK = SHA256(токена))",
+    )
+    val WG_RESP_TIMEOUT = Msg(
+        "WireGuard: WG_RESP (msg2) not received in time",
+        "WireGuard: WG_RESP (msg2) не получен вовремя",
+    )
+    val WG_RESP_RECV = Msg(
+        "RECV WG_RESP (%sB) — WireGuard msg2 accepted",
+        "RECV WG_RESP (%sБ) — msg2 WireGuard принят",
+    )
+    val WG_MSG2_LEN = Msg(
+        "wg msg2 len %s not equal %s",
+        "wg msg2 длина %s ≠ %s",
+    )
+    val WG_MSG2_TYPE = Msg(
+        "wg msg2 type not equal 2",
+        "wg msg2 тип ≠ 2",
+    )
+    val WG_MSG2_RECEIVER = Msg(
+        "wg msg2 receiver not equal our sender_index",
+        "wg msg2 receiver ≠ наш sender_index",
+    )
+    val WG_MSG2_MAC1 = Msg(
+        "wg msg2 mac1 mismatch",
+        "wg msg2 mac1 не совпал",
+    )
+    val WG_PACKET_SHORT = Msg(
+        "wg transport packet too short",
+        "wg transport-пакет слишком короткий",
+    )
+    val WG_PACKET_TYPE = Msg(
+        "wg transport type not equal 4",
+        "wg transport тип ≠ 4",
+    )
+    val WG_REPLAY = Msg(
+        "wg transport replay detected",
+        "wg transport: повтор пакета (анти-реплей)",
+    )
+    val WG_COUNTER = Msg(
+        "wg transport counter exhausted (rekey required)",
+        "wg transport: счётчик исчерпан (нужен ре-кей)",
+    )
+    val WG_INIT_UNEXPECTED = Msg(
+        "WG_INIT from the server is not expected",
+        "WG_INIT от сервера не ожидается",
+    )
+    val WG_KEYS_AGREED = Msg(
+        "WireGuard/1: handshake OK (Noise_IKpsk2 + PSK; DATA/UDP_DATA payload is ChaCha20-Poly1305, window 2048)",
+        "WireGuard/1: хендшейк OK (Noise_IKpsk2 + PSK; payload DATA/UDP_DATA шифруется ChaCha20-Poly1305, окно 2048)",
+    )
+    val WG_FAILED = Msg(
+        "WireGuard: handshake failed: %s",
+        "WireGuard: хендшейк не удался: %s",
+    )
+    val CAM_CTL_SENT = Msg(
+        "SENT CAM_CTL %s (0x2A) — device choice persisted on server",
+        "SENT CAM_CTL %s (0x2A) — выбор устройства сохранён на сервере",
+    )
+    val CAM_CTL_FAILED = Msg(
+        "CAM_CTL not sent: %s",
+        "CAM_CTL не отправлен: %s",
+    )
+    val CAM_CTL_UNEXPECTED = Msg(
+        "CAM_CTL from the server is not expected",
+        "CAM_CTL от сервера не ожидается",
+    )
+
     // ── RrpClient: SSRF/UDP/WS/каналы ────────────────────────────────────
     val SEND_OPEN_SSRF = Msg("sendOpen: %s blocked by SSRF-guard", "sendOpen: %s заблокирован SSRF-guard")
     val OPEN_SSRF = Msg("OPEN %s blocked by SSRF-guard", "OPEN %s заблокирован SSRF-guard")
@@ -105,7 +179,7 @@ object Msgs {
     val PROBE_SEND_FAILED = Msg("PROBE not sent: %s", "PROBE не отправлен: %s")
     val PING_SEND_FAILED = Msg("ping not sent: %s", "ping не отправлен: %s")
     val NO_CONNECTION = Msg("no connection", "нет соединения")
-    val DATA_LIMIT = Msg("DATA %s > MTProto envelope limit", "DATA %s > лимита MTProto-конверта")
+    val DATA_LIMIT = Msg("DATA %s > protocol envelope limit", "DATA %s > лимита конверта протокола")
     val UDP_DATA_LIMIT = Msg("UDP_DATA %s > envelope limit — dropped", "UDP_DATA %s > лимита конверта — дроп")
     val NOISE_GEN_FAILED = Msg("noise: generation failed: %s", "noise: генерация не удалась: %s")
     val NOISE_SEND_FAILED = Msg("noise not sent: %s", "noise не отправлен: %s")

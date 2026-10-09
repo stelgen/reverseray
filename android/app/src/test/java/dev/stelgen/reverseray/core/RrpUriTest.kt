@@ -41,7 +41,7 @@ class RrpUriTest {
         assertEquals("t", cfg.token)
         assertEquals("2001:db8::1", cfg.host)
         assertEquals(listOf(443), cfg.ports)
-        assertEquals("rrp://t@[2001:db8::1]:443/?proto=rrp1", cfg.serialize())
+        assertEquals("rrp://t@[2001:db8::1]:443", cfg.serialize()) // v0.9.5: AUTO без proto=
     }
 
     @Test

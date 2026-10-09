@@ -113,6 +113,12 @@ class RrpClient(
      *  null — не проверять. Это «реальный трафик до реального хоста»:
      *  сервер диалит цель с егресса и отвечает фактом установки TCP. */
     private val validateProbeTarget: String? = null,
+    /**
+     * v0.9.5: начальный выбор камуфляжа устройством (кадр 0x2A после READY):
+     * true/false — отправить один раз; null — не отправлять. Выбор персистентен
+     * на сервере — переживает офлайн клиента и применяется будущим сессиям.
+     */
+    private val initialCamCtl: Boolean? = null,
     /** Транспорт: "tcp" (сырой RRP/1) или "ws" (WebSocket-апгрейд /rrp). */
     private val transport: String = TRANSPORT_TCP,
     /**
@@ -226,6 +232,25 @@ class RrpClient(
 
     /** Активен ли MTProto-конверт в этой сессии (для UI/статуса). */
     val mtProtoActive: Boolean get() = mtCrypto != null
+
+    /** v0.9.5: крипто-контекст wireguard (не null после WG-хендшейка). */
+    @Volatile private var wgCrypto: Wg.Transport? = null
+
+    /** Активен ли WireGuard-конверт в этой сессии. */
+    val wgActive: Boolean get() = wgCrypto != null
+
+    /** Активен ли крипто-конверт протокола (mtproto2 или wireguard). */
+    val tunnelCryptoActive: Boolean get() = mtCrypto != null || wgCrypto != null
+
+    /** v0.9.5: WG-хендшейк — ожидание кадра WG_RESP. */
+    private val wgLatch = CountDownLatch(1)
+    @Volatile private var wgRespFrame: RrpFrame.WgResp? = null
+
+    /**
+     * v0.9.5: начальный выбор камуфляжа для этого устройства (кадр 0x2A после
+     * READY). true/false — отправить; null — не отправлять (клиент молчит).
+     */
+    @Volatile private var pendingCamCtl: Boolean? = initialCamCtl
 
     @Volatile var tunnelWindow: Long = DEFAULT_TUNNEL_WINDOW
         private set
@@ -387,6 +412,7 @@ class RrpClient(
             log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} proto=${rd.proto} (${RrpProtocols.labelWithVer(rd.proto)}) protocols=${rd.protocols.joinToString(",") { RrpProtocols.labelWithVer(it) }} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
             // v0.8.2: камуфляж «API Mask» — только если сервер подтвердил
             // возможность (features) и модуль включён манифестом
+            flushPendingCamCtl() // v0.9.5: начальный выбор камуфляжа устройства
             if (apimaskSupported && noisePolicy != null) {
                 log(Msgs.APIMASK_ENABLED.t())
                 scheduleNoise()
@@ -489,8 +515,15 @@ class RrpClient(
                 probeResp = frame
             }
             is RrpFrame.ProbeReq -> log(Msgs.PROBE_UNEXPECTED.t())
-            is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8: DH-апгрейд mtproto2
+            is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8/v0.9.5: mtproto2 DH | wireguard WG_INIT
             is RrpFrame.KeyResp -> log(Msgs.KEY_RESP_UNEXPECTED.t())
+            is RrpFrame.WgResp -> {
+                // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов
+                log(Msgs.WG_RESP_RECV.t(frame.raw.size))
+                wgRespFrame = frame
+                wgLatch.countDown()
+            }
+            is RrpFrame.WgInit -> log(Msgs.WG_INIT_UNEXPECTED.t())
             is RrpFrame.Noise -> {
                 // v0.8.2: ответ сервера на наш шум — байты считаются в общий
                 // трафик (честно: это реальные байты мобильной сети),
@@ -499,6 +532,7 @@ class RrpClient(
                 rxBytes.addAndGet(n.toLong())
                 noiseRx.addAndGet(n.toLong())
             }
+            is RrpFrame.CamCtl -> log(Msgs.CAM_CTL_UNEXPECTED.t())
             is RrpFrame.ErrorFrame -> {
                 log(Msgs.SERVER_ERROR_RAW.t(frame.code, frame.message, frame.rawHex()))
                 for (id in pendingOpens.keys) {
@@ -527,8 +561,12 @@ class RrpClient(
      * долю, шлём KEY_RESP и включаем MTProto-конверт на DATA/UDP_DATA.
      */
     private fun handleKeyReq(frame: RrpFrame.KeyReq) {
-        if (mtCrypto != null) {
+        if (mtCrypto != null || wgCrypto != null) {
             log(Msgs.KEY_REQ_IGNORED.t())
+            return
+        }
+        if (frame.kind.isNotBlank() && frame.kind != MtProto.PROTO_ID) {
+            handleWgKeyReq(frame)
             return
         }
         try {
@@ -566,10 +604,29 @@ class RrpClient(
     }
 
     /** Расшифровка DATA-конверта (в обычном режиме — без изменений). */
+    /** Активный конверт: wireguard (v0.9.5) имеет приоритет, затем mtproto2. */
+    private fun activeMaxPlainData(): Int? = when {
+        wgCrypto != null -> Wg.MAX_PLAIN_DATA
+        mtCrypto != null -> MtProto.SessionCrypto.MAX_PLAIN_DATA
+        else -> null
+    }
+
+    private fun encryptDown(bytes: ByteArray): ByteArray {
+        wgCrypto?.let { return it.seal(bytes) }
+        mtCrypto?.let { return it.encryptDown(bytes) }
+        return bytes
+    }
+
+    private fun decryptUpEnvelope(payload: ByteArray): ByteArray {
+        wgCrypto?.let { return it.open(payload) }
+        mtCrypto?.let { return it.decryptUp(payload) }
+        return payload
+    }
+
     private fun decryptPayload(frame: RrpFrame.Data): RrpFrame.Data? {
-        val crypto = mtCrypto ?: return frame
+        if (mtCrypto == null && wgCrypto == null) return frame
         return try {
-            RrpFrame.Data(frame.streamId, frame.flags, crypto.decryptUp(frame.bytes))
+            RrpFrame.Data(frame.streamId, frame.flags, decryptUpEnvelope(frame.bytes))
         } catch (e: Exception) {
             log(Msgs.MTPROTO_DATA_ENVELOPE_BAD.t(frame.streamId, e.message))
             close()
@@ -579,12 +636,63 @@ class RrpClient(
 
     /** Расшифровка UDP_DATA-конверта. */
     private fun decryptUdpPayload(frame: RrpFrame.UdpData): RrpFrame.UdpData? {
-        val crypto = mtCrypto ?: return frame
+        if (mtCrypto == null && wgCrypto == null) return frame
         return try {
-            RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.decryptUp(frame.bytes))
+            RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, decryptUpEnvelope(frame.bytes))
         } catch (e: Exception) {
             log(Msgs.MTPROTO_UDP_ENVELOPE_BAD.t(e.message))
             null
+        }
+    }
+
+    /**
+     * WG-хендшейк (v0.9.5): KEY_REQ несёт WG static public сервера
+     * ({"kind":"wireguard","spub":…}). Клиент — WG-инициатор: строит
+     * НАСТОЯЩИЙ msg1 (Noise_IKpsk2, PSK = SHA256(token)), шлёт WG_INIT,
+     * ждёт WG_RESP и включает WG-конверты DATA/UDP_DATA.
+     */
+    private fun handleWgKeyReq(frame: RrpFrame.KeyReq) {
+        try {
+            val serverPub = MtProto.b64urlDecode(frame.sPub)
+            if (serverPub.size != Wg.KEY_SIZE) {
+                throw Wg.WgException(Msgs.WG_BAD_SPUB.t(frame.sPub.length))
+            }
+            val psk = Wg.tokenPsk(token)
+            val (msg1, hs) = Wg.newClientHandshake(serverPub, psk)
+            log(Msgs.WG_INIT_SENT.t(Wg.MSG_INIT_SIZE))
+            wgRespFrame = null
+            sendFrame(RrpFrame.WgInit(msg1))
+            if (!wgLatch.await(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t())
+            }
+            val resp = wgRespFrame ?: throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t())
+            hs.consumeResponse(resp.raw, psk)
+            wgCrypto = Wg.clientTransport(hs)
+            log(Msgs.WG_KEYS_AGREED.t())
+        } catch (e: Exception) {
+            throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)
+        }
+    }
+
+    /** v0.9.5: выбор камуфляжа устройством — кадр 0x2A немедленно (если READY). */
+    fun sendCamCtl(enabled: Boolean) {
+        pendingCamCtl = enabled
+        if (state == State.READY) {
+            log(Msgs.CAM_CTL_SENT.t(if (enabled) "on" else "off"))
+            sendFrame(RrpFrame.CamCtl(enabled))
+        }
+    }
+
+    private fun flushPendingCamCtl() {
+        val want = pendingCamCtl ?: return
+        pendingCamCtl = null
+        if (state == State.READY) {
+            log(Msgs.CAM_CTL_SENT.t(if (want) "on" else "off"))
+            try {
+                sendFrame(RrpFrame.CamCtl(want))
+            } catch (e: IOException) {
+                log(Msgs.CAM_CTL_FAILED.t(e.message ?: "?"))
+            }
         }
     }
 
@@ -934,12 +1042,12 @@ class RrpClient(
                 packetsTx.incrementAndGet()
                 lastPacketTxSize.set(frame.bytes.size.toLong())
                 lastPacketKind = KIND_TCP
-                val crypto = mtCrypto
-                if (crypto != null) {
-                    if (frame.bytes.size > MtProto.SessionCrypto.MAX_PLAIN_DATA) {
+                val maxPlain = activeMaxPlainData()
+                if (maxPlain != null) {
+                    if (frame.bytes.size > maxPlain) {
                         throw RrpClientException(Msgs.DATA_LIMIT.t(frame.bytes.size))
                     }
-                    wire = RrpFrame.Data(frame.streamId, frame.flags, crypto.encryptDown(frame.bytes))
+                    wire = RrpFrame.Data(frame.streamId, frame.flags, encryptDown(frame.bytes))
                 }
             }
             is RrpFrame.UdpData -> {
@@ -947,14 +1055,14 @@ class RrpClient(
                 packetsTx.incrementAndGet()
                 lastPacketTxSize.set(frame.bytes.size.toLong())
                 lastPacketKind = KIND_UDP
-                val crypto = mtCrypto
-                if (crypto != null) {
-                    if (frame.bytes.size > MtProto.SessionCrypto.MAX_PLAIN_DATA) {
+                val maxPlain = activeMaxPlainData()
+                if (maxPlain != null) {
+                    if (frame.bytes.size > maxPlain) {
                         // семантика UDP: слишком большая дейтаграмма дропается
                         log(Msgs.UDP_DATA_LIMIT.t(frame.bytes.size))
                         return
                     }
-                    wire = RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, crypto.encryptDown(frame.bytes))
+                    wire = RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, encryptDown(frame.bytes))
                 }
             }
             is RrpFrame.Noise -> {

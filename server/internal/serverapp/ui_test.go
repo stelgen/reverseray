@@ -75,8 +75,15 @@ func TestStatusServerFactsAndUI(t *testing.T) {
 	}
 
 	html, _ := httpGet(t, "http://"+cfg.Listen.AdminTCP+"/ui")
-	if !strings.Contains(html, "Константы защиты") {
-		t.Fatal("/ui без секции Константы защиты")
+	// v0.9.5 канон: «Константы защиты» живут в APK и /status — в дашборде их
+	// нет (карточка убрана по решению владельца); дашборд = RT-график + клиенты.
+	if strings.Contains(html, "Константы защиты") {
+		t.Fatal("/ui не должен рендерить «Константы защиты» (v0.9.5)")
+	}
+	for _, need := range []string{"Трафик в реальном времени", "Клиенты", "<svg", "relay_in"} {
+		if !strings.Contains(html, need) {
+			t.Fatal("/ui без элемента дашборда 2026: " + need)
+		}
 	}
 	if strings.Contains(html, "только чтение") {
 		t.Fatal("/ui содержит дурацкое уточнение «только чтение»")

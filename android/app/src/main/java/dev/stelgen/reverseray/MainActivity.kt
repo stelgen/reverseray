@@ -27,6 +27,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.CheckBox
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -710,6 +711,56 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
+        // ── Модули (v0.9.5): чекбокс-каркас для вкл/выкл модулей ──
+        // Правила UX: один чекбокс = один модуль, мгновенный отклик,
+        // уведомление + честный лог; выбор персистентен (переживает офлайн).
+        val modsCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        modsCard.addView(sectionTitle(R.string.modules_section_modules, null))
+        modsCard.addView(TextView(this).apply {
+            setText(R.string.modules_hint)
+            textSize = 12f
+            setTextColor(0xFF6B7280.toInt())
+            setPadding(0, dp(2), 0, dp(6))
+        })
+        val camoCfg = RrpProtocols.camouflageConfig()
+        if (camoCfg.id.isNotBlank()) {
+            val camoRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val camoCheck = CheckBox(this).apply {
+                textSize = 14f
+                text = getString(R.string.app_modules_row2_name_fmt, RrpProtocols.camouflageLabel(), camoCfg.ver)
+                isChecked = camoCfg.enabled && !prefs().getBoolean(TunnelService.KEY_CAMO_OFF, false)
+                if (!camoCfg.enabled) isEnabled = false
+                setOnCheckedChangeListener { _, checked ->
+                    if (!camoCfg.enabled) {
+                        isChecked = false
+                        return@setOnCheckedChangeListener
+                    }
+                    // v0.9.5: через сервис (ACTION_CAMO) — работает и без
+                    // активного подключения; итог придёт статусом/логом.
+                    val i = android.content.Intent(this@MainActivity, TunnelService::class.java)
+                        .setAction(TunnelService.ACTION_CAMO)
+                        .putExtra(TunnelService.EXTRA_ENABLED, checked)
+                    // startService (не foreground): модуль-переключатель не
+                    // поднимает туннель, только передаёт выбор сервису.
+                    startService(i)
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(if (checked) R.string.modules_camo_toast_on else R.string.modules_camo_toast_off),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+            camoRow.addView(camoCheck)
+            camoRow.addView(TextView(this).apply {
+                setText(R.string.modules_camo_desc)
+                textSize = 12f
+                setTextColor(0xFF6B7280.toInt())
+                setPadding(dp(32), 0, 0, dp(4))
+            })
+            modsCard.addView(camoRow)
+        }
+        p.addView(card(modsCard))
+
         // Протоколы
         val protoCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         protoCard.addView(TextView(this).apply {
@@ -1194,7 +1245,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
             return
         }
-        // сохраняем нормализованную ссылку (proto= всегда явный)
+        // сохраняем нормализованную ссылку (v0.9.5: proto= пишется только когда
+        // выбран явно; отсутствует = режим AUTO — лучший общий протокол сервера)
         configView.setText(cfg.serialize())
         prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
         // v0.8: лимит — король. Достигнут → НОЛЬ байт: окно предупреждения вместо старта.
@@ -1233,11 +1285,17 @@ class MainActivity : AppCompatActivity() {
         applyButtonMode(mode)
     }
 
-    private enum class Mode(val color: Int, val isStart: Boolean) {
-        DISCONNECTED(0xFF2E7D32.toInt(), true),
-        CONNECTING(0xFFB58300.toInt(), true),
-        CONNECTED(0xFFC62828.toInt(), false),
-        ERROR(0xFFB71C1C.toInt(), true),
+    /**
+     * v0.9.5 (канон владельца): Старт/Стоп — СИНЯЯ кнопка; подключение —
+     * тёмно-жёлто-оранжевая с надписью «Подключение»; ошибка — красная с
+     * надписью «Ошибка» (цвет держится ERROR_HOLD_MS сервисом, затем
+     * реконнект возвращает тёмно-жёлтый «Подключение»).
+     */
+    private enum class Mode(val color: Int, val isStart: Boolean, val labelRes: Int) {
+        DISCONNECTED(0xFF1565C0.toInt(), true, R.string.btn_start_short),
+        CONNECTING(0xFFB26B00.toInt(), true, R.string.btn_connecting),
+        CONNECTED(0xFF1565C0.toInt(), false, R.string.btn_stop_short),
+        ERROR(0xFFC62828.toInt(), true, R.string.btn_error),
     }
 
     private var buttonColorAnimator: android.animation.ValueAnimator? = null
@@ -1245,7 +1303,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyButtonMode(mode: Mode) {
         bigButtonIsStart = mode.isStart
-        bigButton.setText(if (mode.isStart) R.string.btn_start_short else R.string.btn_stop_short)
+        bigButton.setText(mode.labelRes)
         val current = (bigButton.backgroundTintList?.defaultColor ?: mode.color)
         if (current != mode.color) {
             buttonColorAnimator?.cancel()
@@ -1271,7 +1329,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 pulseRing.visibility = View.VISIBLE
                 pulseRing.setColors(
-                    if (ringState == Mode.CONNECTING) 0xFFB58300.toInt() else 0xFF39D98A.toInt(),
+                    if (ringState == Mode.CONNECTING) 0xFFB26B00.toInt() else 0xFF39D98A.toInt(),
                     0x26888888,
                 )
                 pulseRing.start(
@@ -1327,14 +1385,22 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             RrpProtocols.DEFAULT
         }
-        val names = ids.map { RrpProtocols.displayName(it) }.toTypedArray()
-        val checked = ids.indexOfFirst { it == current }.coerceAtLeast(0)
+        // v0.9.5: первый пункт — AUTO (ссылка без proto=): сервер сам согласует
+        // лучший общий протокол (wireguard → mtproto2 → rrp1).
+        val options = mutableListOf<String>()
+        options.add(getString(R.string.proto_auto_label))
+        options.addAll(ids.map { RrpProtocols.displayName(it) })
+        val checked = if (current.isBlank()) 0 else ids.indexOf(current).let { if (it < 0) 0 else it + 1 }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.proto_switch)
-            .setSingleChoiceItems(names, checked) { dialog, which ->
+            .setSingleChoiceItems(options.toTypedArray(), checked) { dialog, which ->
                 dialog.dismiss()
-                val picked = ids[which]
-                if (picked != current) requestProtoSwitch(picked)
+                if (which == 0) {
+                    if (current.isNotBlank()) requestProtoSwitch(TunnelService.PROTO_AUTO)
+                } else {
+                    val picked = ids[which - 1]
+                    if (picked != current) requestProtoSwitch(picked)
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()

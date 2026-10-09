@@ -215,6 +215,14 @@ class TunnelService : Service() {
                 Thread({ switchProtocol(p) }, "rrp-switch").start()
                 return START_STICKY
             }
+            ACTION_CAMO -> {
+                // v0.9.5: выбор камуфляжа из GUI — персистентно + кадр 0x2A
+                // живой сессии; работает и когда клиент «не подключен»
+                // (применится будущей сессией — сервер помнит выбор).
+                val enabled = intent.getBooleanExtra(EXTRA_ENABLED, true)
+                Thread({ applyCamouflage(enabled) { msg -> updateStatus(STATE_INFO, msg) } }, "rrp-camo").start()
+                return START_STICKY
+            }
             ACTION_ACCEPT_PIN -> {
                 // v0.9.0: владелец ЯВНО принял новый пин CA — обновляем ссылку,
                 // пишем в журнал и реконнектим. Никакого молчаливого доверия.
@@ -249,6 +257,11 @@ class TunnelService : Service() {
      * продолжала подключаться mtproto2. Теперь proto всегда из ссылки;
      * KEY_PROTO выведен из употребления (не читается).
      */
+    /** Честное имя протокола для статусов: AUTO — словом, остальное — меткой. */
+    internal fun protoDisplayName(id: String): String =
+        if (id == PROTO_AUTO || id.isBlank()) getString(R.string.proto_auto_label)
+        else RrpProtocols.labelWithVer(id)
+
     internal fun currentProto(): String {
         val cfg = try {
             RrpUri.parse(prefs().getString(KEY_CONFIG, null) ?: "")
@@ -269,7 +282,9 @@ class TunnelService : Service() {
         } catch (_: Exception) {
             null
         }
-        return RrpProtocols.normalize(cfg?.proto)
+        // v0.9.5: возвращаем КАК В ССЫЛКЕ ("" = AUTO) — GUI честно показывает
+        // режим AUTO, warning «не исполняется» только для явных протоколов.
+        return cfg?.proto?.trim() ?: ""
     }
 
     private fun startTunnel() {
@@ -526,9 +541,15 @@ class TunnelService : Service() {
      *    ссылка НЕ меняется; cooldown, чтобы не молотить по rate-limit.
      */
     private fun switchProtocol(newProtoRaw: String) {
-        val newProto = RrpProtocols.normalize(newProtoRaw)
+        // v0.9.5: "auto" — явный режим «лучший общий протокол» (ссылка без proto=).
+        val isAuto = newProtoRaw == PROTO_AUTO
+        val newProto = if (isAuto) PROTO_AUTO else RrpProtocols.normalize(newProtoRaw)
         val oldProto = currentProto()
         val p = prefs()
+        if (isAuto && claimedProto().isBlank()) {
+            updateStatus(STATE_INFO, getString(R.string.status_switch_same, protoDisplayName(PROTO_AUTO)))
+            return
+        }
         if (switchingProto) {
             updateStatus(STATE_INFO, getString(R.string.status_switch_busy))
             return
@@ -538,10 +559,14 @@ class TunnelService : Service() {
             updateStatus(STATE_INFO, getString(R.string.status_switch_cooldown, (nextSwitchAllowedAt - now) / 1000))
             return
         }
-        if (newProto == oldProto) {
-            updateStatus(STATE_INFO, getString(R.string.status_switch_same, newProto))
+        if (!isAuto && newProto == oldProto) {
+            updateStatus(STATE_INFO, getString(R.string.status_switch_same, RrpProtocols.labelWithVer(newProto)))
             return
         }
+        // v0.9.5: "auto" — режим без proto= в ссылке; валидируем предпочтительным,
+        // в ссылку AUTO не пишем (proto= не появляется).
+        val commitProtoId = if (newProto == PROTO_AUTO) "" else newProto
+        val validateProto = if (newProto == PROTO_AUTO) RrpProtocols.PREFERRED_AUTO else newProto
         switchingProto = true
         try {
             val cfg = try {
@@ -550,7 +575,7 @@ class TunnelService : Service() {
                 updateStatus(STATE_ERROR, getString(R.string.status_no_config))
                 return
             }
-            updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, newProto))
+            updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, protoDisplayName(newProto)))
             // v0.9.2 (R1): АТОМАРНОСТЬ ПЕРЕКЛЮЧЕНИЯ — старые коннекты
             // гарантированно закрыты ДО provisional-коннекта с новым протоколом.
             // Раньше валидационный коннект шёл поверх живых runners: сервер
@@ -560,19 +585,19 @@ class TunnelService : Service() {
             killRunners()
             var lastErr = ""
             for (attempt in 1..SWITCH_RETRIES) {
-                val client = buildClient(cfg, newProto, validate = true)
+                val client = buildClient(cfg, validateProto, validate = true)
                 try {
                     client.connect()
                     // валидация (PROBE) уже прошла внутри connect() — коммитим
-                    commitProto(newProto, cfg)
-                    updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, newProto))
+                    commitProto(commitProtoId, cfg)
+                    updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, protoDisplayName(commitProtoId)))
                     try { client.close() } catch (_: Exception) {}
                     spawnRunners()
                     return
                 } catch (e: Exception) {
                     lastErr = e.message ?: "?"
                     pushLog(getString(R.string.log_proto_attempt, attempt, SWITCH_RETRIES, lastErr))
-                    updateStatus(STATE_ERROR, getString(R.string.status_switch_fail, newProto, lastErr))
+                    updateStatus(STATE_ERROR, getString(R.string.status_switch_fail, protoDisplayName(newProto), lastErr))
                 } finally {
                     try { client.close() } catch (_: Exception) {}
                 }
@@ -582,7 +607,7 @@ class TunnelService : Service() {
             }
             // откат: UI вернёт выбор на старый протокол сразу, не дожидаясь реконнекта
             nextSwitchAllowedAt = System.currentTimeMillis() + SWITCH_COOLDOWN_MS
-            updateStatus(STATE_ERROR, getString(R.string.status_switch_rolled_back, newProto, oldProto, lastErr))
+            updateStatus(STATE_ERROR, getString(R.string.status_switch_rolled_back, protoDisplayName(newProto), RrpProtocols.labelWithVer(oldProto), lastErr))
             sendBroadcast(
                 Intent(ACTION_STATUS).setPackage(packageName)
                     .putExtra(EXTRA_STATE, STATE_PROTO_ROLLBACK)
@@ -645,6 +670,7 @@ class TunnelService : Service() {
             noisePolicy = buildNoisePolicy(),
             protoId = proto,
             validateProbeTarget = if (validate) prefs().getString(KEY_PROBE_TARGET, DEFAULT_PROBE_TARGET) else null,
+            initialCamCtl = camCtlFlag(),
         )
     }
 
@@ -655,6 +681,8 @@ class TunnelService : Service() {
      */
     private fun buildNoisePolicy(): Apimask.NoisePolicy? {
         val cfg = RrpProtocols.camouflageConfig()
+        // v0.9.5: локальный выбор клиента (0x2A) — выключено ⇒ шума нет вообще.
+        if (prefs().getBoolean(KEY_CAMO_OFF, false)) return null
         if (!cfg.enabled) return null
         val engine = Apimask.Engine(cfg)
         val label = RrpProtocols.camouflageLabel()
@@ -665,6 +693,40 @@ class TunnelService : Service() {
                 getString(R.string.apimask_budget_done, label, fmtBytes(used), fmtBytes(budget.toLong()))
             }
         }
+    }
+
+    /**
+     * v0.9.5: начальный кадр 0x2A при подключении: отправляем ТОЛЬКО когда
+     * локальный выбор существует (contains). Выбор персистентен на сервере:
+     * переживает офлайн клиента, применяется будущим сессиям.
+     */
+    private fun camCtlFlag(): Boolean? =
+        if (prefs().contains(KEY_CAMO_OFF)) !prefs().getBoolean(KEY_CAMO_OFF, false) else null
+
+    /**
+     * Управление камуфляжем из GUI (v0.9.5): сохранить выбор + честный лог +
+     * немедленный кадр 0x2A живой сессии (если есть); иначе применится при
+     * следующем подключении. GUI показывает итог тостом.
+     */
+    private fun applyCamouflage(enabled: Boolean, done: (String) -> Unit) {
+        prefs().edit().putBoolean(KEY_CAMO_OFF, !enabled).apply()
+        val label = RrpProtocols.camouflageLabel()
+        val what = getString(if (enabled) R.string.modules_camo_on else R.string.modules_camo_off, label)
+        pushLog(what, if (enabled) LogKind.INFO else LogKind.WARN)
+        var sent = false
+        synchronized(runners) {
+            runners.forEach { r ->
+                val c = r.client
+                if (c != null && c.state == RrpClient.State.READY) {
+                    try {
+                        c.sendCamCtl(enabled)
+                        sent = true
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+        done(if (sent) getString(R.string.modules_camo_applied) else getString(R.string.modules_camo_deferred))
     }
 
     private fun appVersion(): String = try {
@@ -694,7 +756,7 @@ class TunnelService : Service() {
             val claimed = claimedProto()
             // v0.9.2 (R9): честный лог — протокол заявлен модулем/ссылкой,
             // но эта сборка его ещё не исполняет → коннект на rrp1.
-            if (claimed != useProto) {
+            if (claimed.isNotBlank() && claimed != useProto) {
                 pushLog(
                     getString(R.string.log_proto_not_executable, RrpProtocols.labelWithVer(claimed), RrpProtocols.labelWithVer(useProto)),
                     LogKind.WARN,
@@ -712,6 +774,7 @@ class TunnelService : Service() {
                 agentName = "ReverseRay-Android/" + appVersion(),
                 noisePolicy = buildNoisePolicy(),
                 protoId = useProto,
+                initialCamCtl = camCtlFlag(),
             )
             r.client = client
             try {
@@ -1035,7 +1098,13 @@ class TunnelService : Service() {
         const val KEY_AUTO_UPDATE = "auto_update"          // проверка обновлений раз в 24 ч
         const val KEY_THEME = "theme"                      // v0.8.1: auto|dark|light
         // v0.8:
+        /** v0.9.5: сентинел режима AUTO (ссылка без proto=). */
+        const val PROTO_AUTO = "auto"
+
         const val KEY_AUTO_RECONNECT = "auto_reconnect"    // автоподключение при открытии + ожидание сброса лимита (выкл по умолчанию)
+        // v0.9.5: выбор камуфляжа «API Mask» КЛИЕНТОМ (персистентно и локально,
+        // и на сервере через кадр 0x2A — переживает офлайн).
+        const val KEY_CAMO_OFF = "camouflage_off"
         const val KEY_TRAFFIC_LIFETIME = "traffic_lifetime" // суммарный трафик за всё время
         const val PERIOD_DAY = "day"
         const val PERIOD_MONTH = "month"
@@ -1061,6 +1130,10 @@ class TunnelService : Service() {
         const val ACTION_STATUS = "dev.stelgen.reverseray.action.STATUS"
         const val ACTION_STATS = "dev.stelgen.reverseray.action.STATS"
         const val ACTION_SWITCH_PROTO = "dev.stelgen.reverseray.action.SWITCH_PROTO"
+
+        /** v0.9.5: управление камуфляжем «API Mask» из GUI (кадр 0x2A + pref). */
+        const val ACTION_CAMO = "dev.stelgen.reverseray.action.CAMO"
+        const val EXTRA_ENABLED = "enabled"
         const val EXTRA_STATUS = "status"
         const val EXTRA_TX_RATE = "tx_rate"
         const val EXTRA_RX_RATE = "rx_rate"

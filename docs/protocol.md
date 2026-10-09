@@ -28,6 +28,9 @@
 | UDP_DATA | 0x22 | оба | `[u8 atyp][addr][u16 port][data]`; S→C — назначение, C→S — фактический источник |
 | PROBE | 0x23 | оба | C→S: JSON `{"target":"host:port","timeout_ms":N}`; S→C: `{"ok":bool,"err":"","proto":"…"}` |
 | KEY_REQ | 0x24 | S→C | JSON `{p: b64url(256Б), g: 3, g_a: b64url(256Б)}` — только для proto=mtproto2 |
+| WG_INIT | 0x27 | C→S | бинарный WG msg1 (148 Б) — только для proto=wireguard |
+| WG_RESP | 0x28 | S→C | бинарный WG msg2 (92 Б) — ответ сервера |
+| CAM_CTL | 0x2A | C→S | JSON `{"enabled": bool}` — выбор камуфляжа устройством (персистентен на сервере) |
 | KEY_RESP | 0x25 | C→S | JSON `{g_b: b64url(256Б)}` — после него DATA/UDP_DATA в MTProto-конверте |
 | ERROR | 0x7F | оба | `[u16be code][utf8 msg]` |
 
@@ -157,6 +160,73 @@ inner = [salt 8][session_id 8][msg_id 8][seq_no 4][len 4][data][pad]
   внутри туннеля (ноль внешних хостов); суточный бюджет `max_bytes_per_day`
   из манифеста; байты шума учитываются в счётчиках трафика (лимит — король)
   и честно пишутся в консоль/метрики `reverseray_apimask_*`.
+
+## WIREGUARD — протокол wireguard (v0.9.5, модуль protocol.wireguard)
+
+НАСТОЯЩАЯ криптография WireGuard (актуальный канон whitepaper «protocol version 1»),
+а не имитация: клиент APK — WG-инициатор, сервер — WG-респондер. Хендшейк идёт
+ВНУТРИ приватного канала (TLS 1.3 + SPKI-pin + HMAC) после READY, поэтому DPI видит
+TLS, а payload'ы DATA/UDP_DATA — байт-в-байт настоящие WG-пакеты.
+
+### Хендшейк (после READY, внутри сессии)
+
+| Тип | Код | Направление | Payload |
+|---|---|---|---|
+| KEY_REQ | 0x24 | S→C | JSON `{kind: "wireguard", spub: b64url(32Б)}` — WG static public сервера (ephemeral per session) |
+| WG_INIT | 0x27 | C→S | бинарный WG msg1 — 148 Б (type 1) |
+| WG_RESP | 0x28 | S→C | бинарный WG msg2 — 92 Б (type 2) |
+
+- Константы канона: `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s`,
+  `WireGuard v1 zx2c4 Jason@zx2c4.com`, `mac1----`.
+- msg1: `[type=1 LE][sender 4][eph 32][enc_static 48][enc_timestamp 28][mac1 16][mac2 16]`;
+  msg2: `[type=2 LE][sender 4][receiver 4][eph 32][enc_empty 16][mac1 16][mac2 16]`.
+- `mac1 = keyed-BLAKE2s(HASH(LABEL_MAC1 ‖ static_public), префикс кадра)`; mac2 — нули
+  (режим «не под нагрузкой»: cookie-механика WG внутри туннеля не нужна).
+- TAI64N-метка времени (anti-replay рукопожатий): секунды BE + смещение 2^62,
+  наносекунды BE; повтор старой метки → отказ хендшейка.
+- **PSK = SHA256(token)** — наш ключ доверия из приватной ссылки: обе стороны считают
+  его независимо (сервер хранит только хеш — канон hash-only), финальный
+  `KDF_3(chain_key, psk)` даёт транспортные ключи. WG-хендшейк привязан к токену.
+- Транспортные ключи: t0 = клиент→сервер (i2r), t1 = сервер→клиент (r2i) —
+  одинаковый KDF_3 на обеих сторонах, роли зеркальны.
+- Кросс-языковой KAT Go↔Kotlin байт-в-байт: фиксированные ключи/метка/индексы дают
+  детерминированные msg1/msg2 и ChaCha-шифртексты (`internal/wg/wg_test.go TestGenerateKAT`
+  ↔ `WgKATTest.kt`).
+
+### Транспортные пакеты (payload кадра DATA/UDP_DATA)
+
+```
+[type=4 LE][receiver_index 4 LE][counter 8 LE][ChaCha20-Poly1305(key, counter, plaintext, nil)]
+```
+
+- nonce AEAD = `[4 нуля][counter LE64]` (канон WG); счётчики независимы по направлениям.
+- Анти-реплей — sliding window 2048 (канон WG §5.4.7); счётчик ≥ 2^60 → сессия закрывается
+  (канон WG требует ре-кей; сессии короче — честный отказ вместо тишины).
+- Максимум открытого чанка: MaxDataPayload − 32 (заголовок + тег).
+- Управляющие кадры (OPEN/CLOSE/WINDOW/PING/PONG/STATS/PROBE/NOISE/CAM_CTL) — вне конверта.
+- Реализация: `server/internal/wg` (x/crypto blake2s/curve25519/chacha20poly1305) ↔
+  `core/Wg.kt` (BouncyCastle 1.86: X25519/Blake2s/ChaCha20-Poly1305) — все Android 4+.
+
+## AUTO — согласование протокола (v0.9.5)
+
+- Ссылка БЕЗ `proto=` = режим AUTO: клиент запрашивает предпочтительный протокол
+  (`wireguard`), сервер согласует по правилам Negotiate: валидный id → берём его;
+  незнакомый → первый общий из списка клиента → иначе rrp1. Старые серверы и APK
+  совместимы: не знающие wireguard автоматически работают на rrp1.
+- Явный `proto=` в ссылке всегда приоритетен (канон v0.9.2 «ссылка = источник правды»).
+- В GUI переключатель протоколов имеет пункт AUTO; ProtoFallback и переключение пишут
+  `proto=` в ссылку явно (AUTO не «фиксируется» — так свежие ссылки всегда получают
+  лучший общий протокол сервера).
+
+## CAM_CTL — выбор камуфляжа устройством (v0.9.5)
+
+- Тип `0x2A`, C→S; payload JSON `{"enabled": true|false}` ≤ 4096 Б.
+- Сервер сохраняет выбор устройства ПЕРМАНЕНТНО (`state/camouflage.json`): он действует
+  для будущих сессий и переживает офлайн клиента — выключенный клиентом apimask
+  не включается обратно; READY.features следующей сессии выбор учитывает.
+- Мусорный/битый CAM_CTL игнорируется тихо (сессию НЕ рвём).
+- В APK — чекбокс модуля в настройках: сохраняет выбор локально, шлёт 0x2A живой сессии
+  немедленно (иначе при следующем подключении), уведомляет и пишет честный лог.
 
 ## Модули (v0.8)
 

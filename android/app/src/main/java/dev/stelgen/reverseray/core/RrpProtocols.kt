@@ -21,8 +21,15 @@ object RrpProtocols {
     /** Самый стабильный протокол, имплементирован и клиентом, и сервером. */
     const val DEFAULT = "rrp1"
 
+    /**
+     * v0.9.5: предпочтительный протокол для режима AUTO (ссылка без proto=):
+     * клиент просит его в HELLO, сервер согласует вниз до rrp1, если не умеет.
+     * Порядок предпочтения: wireguard (официальный канон WG) → mtproto2 → rrp1.
+     */
+    const val PREFERRED_AUTO = Wg.PROTO_ID
+
     /** Встроенные (манифест может расширить/выключить — кроме rrp1). */
-    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID)
+    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID)
 
     /**
      * v0.9.2: протоколы, которые КЛИЕНТ УМЕЕТ ИСПОЛНЯТЬ (код конвертов
@@ -32,7 +39,7 @@ object RrpProtocols {
      * исполнять (зеркало server/internal/rrp: Negotiate смотрит только
      * исполняемые). Будущая реализация протокола добавляет себя сюда.
      */
-    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID)
+    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID)
 
     /** Умеет ли клиент исполнять протокол (не только показывать в GUI). */
     fun isExecutable(id: String?): Boolean {
@@ -47,13 +54,17 @@ object RrpProtocols {
      * GUI честно показывает протокол из модуля, даже если исполняется rrp1.
      */
     fun normalizeExecutable(raw: String?): String {
+        // v0.9.5: пусто = AUTO — просим предпочтительный, сервер согласует.
+        if (raw.isNullOrBlank()) return PREFERRED_AUTO
         val shown = normalize(raw)
         return if (isExecutable(shown)) shown else DEFAULT
     }
 
     /** Встроенные метки/версии — зеркало modules/modules.json (v0.8.1). */
-    val BUNDLED_LABELS: Map<String, String> = mapOf(DEFAULT to "RRP/1", MtProto.PROTO_ID to "MTProto/2")
-    val BUNDLED_VERS: Map<String, String> = mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0")
+    val BUNDLED_LABELS: Map<String, String> =
+        mapOf(DEFAULT to "RRP/1", MtProto.PROTO_ID to "MTProto/2", Wg.PROTO_ID to "WireGuard/1")
+    val BUNDLED_VERS: Map<String, String> =
+        mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0", Wg.PROTO_ID to "1")
 
     // ---- динамический реестр (манифест модулей) ----
 
@@ -177,7 +188,9 @@ object RrpProtocols {
         return out.toList()
     }
 
-    private fun isKnown(s: String): Boolean = serverKnown.contains(s)
+    // v0.9.5: встроенные протоколы известны ВСЕГДА — сборка умеет их исполнять,
+    // реестр манифеста/сервера лишь «реклама» (не гейт для своих).
+    private fun isKnown(s: String): Boolean = BUNDLED.contains(s) || serverKnown.contains(s)
 
     /**
      * Короткая метка протокола ("RRP/1", "MTProto/2") — из реестра манифеста,

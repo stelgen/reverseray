@@ -39,6 +39,11 @@ type SessionConfig struct {
 	// NoiseHook — учёт камуфляжа «API Mask» (v0.8.2): вызываетсь на каждый
 	// обработанный NOISE (req, resp) — метрики сервера. nil — без учёта.
 	NoiseHook func(req, resp int)
+	// CamCtl — клиент выключил/включил камуфляж для своего устройства
+	// (v0.9.5, кадр 0x2A). Вызывается из handle() (поток Run). nil — без
+	// персистенции (сервер без state). Выбор хранится ПЕРМАНЕНТНО на сервере:
+	// действует для будущих сессий, переживает офлайн клиента.
+	CamCtl func(enabled bool)
 }
 
 func DefaultSessionConfig() SessionConfig {
@@ -107,6 +112,14 @@ type Session struct {
 	// не больше noiseRate ответов в минуту на сессию) и последний сброс окна.
 	noiseWinStart time.Time
 	noiseCount    int
+
+	// v0.9.5: счётчики сессии для дашборда /ui (под s.mu):
+	// rIn/rOut — байты payload'ов, udpDg — дейтаграммы, dnsHits —
+	// запросы к порту 53 (TCP+UDP), connectedAt — время старта сессии.
+	rIn         uint64
+	udpDg       uint64
+	dnsHits     uint64
+	connectedAt time.Time
 
 	noiseRnd *rand.Rand // генератор тел NOISE (не секретно — декоративные)
 
@@ -198,6 +211,11 @@ func (s *Session) Run() {
 			s.shutdown(err)
 			return
 		}
+		s.mu.Lock()
+		if s.connectedAt.IsZero() {
+			s.connectedAt = time.Now()
+		}
+		s.mu.Unlock()
 		if err := s.handle(f); err != nil {
 			s.writeAsync(&Frame{Type: TypeError, Payload: EncodeError(1, err.Error())})
 			s.shutdown(err)
@@ -224,6 +242,9 @@ func (s *Session) handle(f *Frame) error {
 		}
 		if len(f.Payload) > 0 {
 			st.pushIn(f.Payload)
+			s.mu.Lock()
+			s.rIn += uint64(len(f.Payload))
+			s.mu.Unlock()
 		}
 		return nil
 	case TypeOpenOK:
@@ -279,7 +300,17 @@ func (s *Session) handle(f *Frame) error {
 		if err != nil {
 			return fmt.Errorf("udp payload decrypt: %w", err)
 		}
+		s.mu.Lock()
+		s.udpDg++
+		s.rIn += uint64(len(plain))
+		s.mu.Unlock()
 		s.routeUdp(&Frame{Type: TypeUdpData, Flags: f.Flags, StreamID: f.StreamID, Payload: plain})
+		return nil
+	case TypeWgInit:
+		s.handleWgInit(f)
+		return nil
+	case TypeCamCtl:
+		s.handleCamCtl(f)
 		return nil
 	case TypeProbe:
 		s.handleProbe(f)
@@ -547,6 +578,11 @@ func (s *Session) routeUdp(f *Frame) {
 // Send отправляет дейтаграмму телефону (неблокирующе; при переполнении
 // очереди записи дейтаграмма теряется — семантика UDP).
 func (c *UdpChannel) Send(atyp byte, addr []byte, port uint16, data []byte) error {
+	if port == 53 {
+		c.sess.mu.Lock()
+		c.sess.dnsHits++ // v0.9.5: счётчик DNS для дашборда
+		c.sess.mu.Unlock()
+	}
 	payload := EncodeUdpData(atyp, addr, port, data)
 	if len(payload) > MaxDataPayload {
 		return ErrFrameTooLarge
@@ -746,6 +782,9 @@ func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
 		s.mu.Unlock()
 		return nil, errors.New("rrp: device window budget exhausted")
 	}
+	if d.Port == 53 {
+		s.dnsHits++ // v0.9.5: счётчик DNS для дашборда
+	}
 	id := s.nextID
 	s.nextID += 2 // odd ids are server-originated
 	if s.nextID < 2 {
@@ -858,6 +897,100 @@ func (s *Session) LastStats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastS
+}
+
+// ---- v0.9.5: счётчики для дашборда /ui (под s.mu) ----
+
+// Relayed — байты payload'ов сессии: fromPhone (к клиентам), toPhone.
+func (s *Session) Relayed() (fromPhone uint64, toPhone uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rIn, s.bout
+}
+
+// StreamsOpen — открытых стримов прямо сейчас.
+func (s *Session) StreamsOpen() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.streams)
+}
+
+// ConnectedAt — момент первого кадра сессии.
+func (s *Session) ConnectedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connectedAt
+}
+
+// MTActive — включён ли крипто-конверт протокола (mtproto2/wireguard).
+func (s *Session) MTActive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.crypto != nil
+}
+
+// UdpDatagrams — дейтаграмм принято от телефона.
+func (s *Session) UdpDatagrams() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.udpDg
+}
+
+// DnsHits — запросы к порту 53 в этой сессии (TCP Open + UDP Send).
+func (s *Session) DnsHits() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dnsHits
+}
+
+// handleWgInit: бинарный кадр WG_INIT (v0.9.5, wireguard) — маршрутизация
+// в план обмена ключами (rrp.InitResponder). Вызывается из Run — гонок нет.
+func (s *Session) handleWgInit(f *Frame) {
+	s.mu.Lock()
+	if s.crypto != nil || s.keyPlan == nil {
+		s.mu.Unlock()
+		return // повторный/неожиданный INIT — игнор (анти-мусор)
+	}
+	ir, ok := s.keyPlan.(InitResponder)
+	if !ok || ir.ClientInitFrameType() != TypeWgInit {
+		s.mu.Unlock()
+		s.logf("rrp: unexpected WG_INIT for proto %s", s.Proto)
+		s.shutdown(fmt.Errorf("unexpected frame 0x27"))
+		return
+	}
+	s.mu.Unlock()
+	respType, respPayload, crypto, err := ir.OnClientInit(f.Payload)
+	if err != nil {
+		s.logf("rrp: key exchange failed: %v", err)
+		s.shutdown(fmt.Errorf("key exchange: %w", err))
+		return
+	}
+	s.writeAsync(&Frame{Type: respType, Payload: respPayload})
+	s.mu.Lock()
+	s.crypto = crypto
+	if s.keyTimer != nil {
+		s.keyTimer.Stop()
+		s.keyTimer = nil
+	}
+	s.mu.Unlock()
+	s.logf("rrp: payload crypto engaged (session %s, proto %s)", s.ID, s.Proto)
+}
+
+// handleCamCtl: клиент выключил/включил камуфляж для устройства (0x2A).
+// Выбор персистится на сервере (см. serverapp) и переживает офлайн клиента.
+func (s *Session) handleCamCtl(f *Frame) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(f.Payload, &req); err != nil || req.Enabled == nil {
+		s.logf("rrp: camctl garbage ignored")
+		return // мусор не рвёт сессию (канон)
+	}
+	enabled := *req.Enabled
+	if s.cfg.CamCtl != nil {
+		s.cfg.CamCtl(enabled)
+	}
+	s.logf("rrp: camouflage %s by client (persisted)", map[bool]string{true: "enabled", false: "disabled"}[enabled])
 }
 
 // ---- stream ----

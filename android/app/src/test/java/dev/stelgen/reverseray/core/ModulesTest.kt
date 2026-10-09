@@ -83,8 +83,10 @@ class ModulesTest {
         assertEquals(listOf("rrp1"), m.enabledProtocolIds())
         Modules.apply(m)
         assertFalse(RrpProtocols.displayList().contains("mtproto2"))
-        // нормализация мусора всё равно к дефолту
-        assertEquals("rrp1", RrpProtocols.normalize("mtproto2"))
+        // v0.9.5: встроенные протоколы известны всегда (isKnown ⊇ BUNDLED) —
+        // normalize сохраняет id; исполнение гейтится СЕРВЕРНЫМ согласованием
+        // (сервер с выключенным модулем не согласует), а не манифестом GUI.
+        assertEquals("mtproto2", RrpProtocols.normalize("mtproto2"))
     }
 
     @Test

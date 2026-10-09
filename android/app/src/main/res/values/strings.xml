@@ -34,7 +34,10 @@
     <string name="update_error">Update failed: %1$s</string>
     <string name="update_check">Check for updates</string>
     <string name="logs_share">Share</string>
-    <string name="btn_start_short">Start</string>
+        <!-- v0.9.5: кнопка-состояния (канон владельца) -->
+    <string name="btn_connecting">Connecting…</string>
+    <string name="btn_error">Error</string>
+<string name="btn_start_short">Start</string>
     <string name="traffic_idle">Traffic: no data</string>
     <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
     <string name="rate_b">%1$d B/s</string>
@@ -67,7 +70,19 @@
     <!-- Protocols -->
     <string name="proto_section">Tunnel protocol</string>
     <string name="proto_unknown">Protocol: unknown</string>
-    <string name="proto_switch">Switch protocol</string>
+        <!-- v0.9.5: AUTO protocol mode + client-side module controls -->
+    <string name="proto_auto_label">AUTO (best common)</string>
+    <string name="modules_camo_on">%1$s: enabled — background chatter resumes</string>
+    <string name="modules_camo_off">%1$s: disabled BY YOUR choice (survives offline)</string>
+    <string name="modules_camo_applied">Choice sent to server (0x2A) and saved</string>
+    <string name="modules_camo_deferred">Choice saved — applies on next connect</string>
+    <string name="modules_section_modules">Modules</string>
+        <string name="modules_camo_toast_on">Module enabled — log and status updated</string>
+    <string name="modules_camo_toast_off">Module disabled — choice will sync to the server</string>
+    <string name="app_modules_row2_name_fmt">%1$s · v%2$s</string>
+<string name="modules_hint">Toggle with one checkbox; the choice syncs to the server and survives offline.</string>
+    <string name="modules_camo_desc">Background API-like chatter inside the tunnel.</string>
+<string name="proto_switch">Switch protocol</string>
     <string name="proto_switching">Switching to %1$s (validating with real traffic…)</string>
     <string name="proto_current">Protocol: %1$s</string>
     <string name="proto_current_list">Protocol: %1$s · server supports: %2$s</string>

@@ -131,14 +131,30 @@ func (h *Hub) Snapshot() []map[string]any {
 	for _, d := range h.devices {
 		d.mu.Lock()
 		for _, s := range d.sessions {
+			// v0.9.5: полный снимок сессии для дашборда /ui — relay-байты,
+			// стримы, uptime, крипта протокола, UDP/DNS-счётчики.
+			relayIn, relayOut := s.Relayed()
+			st := s.LastStats()
+			var up int64
+			if ct := s.ConnectedAt(); !ct.IsZero() {
+				up = int64(time.Since(ct).Seconds())
+			}
 			out = append(out, map[string]any{
-				"session":     s.ID,
-				"device":      d.Name,
-				"outstanding": s.Outstanding(),
-				"rtt_ms":      s.RTT(),
-				"proto":       s.Proto,
-				"bytes_in":    s.LastStats().BytesIn,
-				"bytes_out":   s.LastStats().BytesOut,
+				"session":      s.ID,
+				"device":       d.Name,
+				"outstanding":  s.Outstanding(),
+				"rtt_ms":       s.RTT(),
+				"proto":        s.Proto,
+				"bytes_in":     st.BytesIn, // трафик, отчитанный телефоном
+				"bytes_out":    st.BytesOut,
+				"relay_in":     relayIn, // байты payload'ов через сервер
+				"relay_out":    relayOut,
+				"streams":      s.StreamsOpen(),
+				"mt_active":    s.MTActive(),
+				"udp":          s.UdpDatagrams(),
+				"dns":          s.DnsHits(),
+				"connected_at": s.ConnectedAt().Unix(),
+				"uptime_sec":   up,
 			})
 		}
 		d.mu.Unlock()

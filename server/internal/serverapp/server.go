@@ -34,6 +34,7 @@ import (
 	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 	"github.com/stelgen/reverseray/server/internal/tlscert"
+	"github.com/stelgen/reverseray/server/internal/wg"
 )
 
 // Version is set via -ldflags at build time.
@@ -108,6 +109,12 @@ type App struct {
 	// устройство phone-1 живёт в памяти; reloadLoop допишет файл при
 	// первой возможности (самовосстановление после починки прав).
 	bootstrapToken string
+
+	// v0.9.5: выбор камуфляжа КЛИЕНТОМ (кадр 0x2A): устройство → выключен ли
+	// apimask. Хранится перманентно (state/camouflage.json) — переживает
+	// реконнекты и офлайн клиента; применяется в READY.features будущих сессий.
+	camoMu  sync.Mutex
+	camoOff map[string]bool
 }
 
 // New assembles the app.
@@ -169,7 +176,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		CheckHours: cfg.Modules.CheckHours,
 	}, log, cfg.StateDir)
 	log.Info("hardening gate up", "profile", gate.Describe())
-	return &App{
+	app := &App{
 		startedAt:      startedAt,
 		cfg:            cfg,
 		log:            log,
@@ -181,7 +188,9 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		hardSt:         hardSt,
 		gate:           gate,
 		modSync:        modSync,
-	}, nil
+	}
+	app.loadCamouflage() // v0.9.5: перманентные выборы камуфляжа клиентов
+	return app, nil
 }
 
 // dedupNonEmpty — уникальные непустые строки (SAN: TLSHosts + PublicHost).
@@ -542,6 +551,20 @@ func (a *App) handleTunnel(conn net.Conn) {
 	if proto == mtproto.ProtoID {
 		scfg.KeyPlan = mtproto.NewServerPlan(sid, a.log)
 	}
+	// v0.9.5: wireguard — настоящий Noise_IKpsk2-хендшейк внутри приватного
+	// канала. PSK = SHA256(token) устройства (наш ключ доверия): WG-хендшейк
+	// привязан к токену, данные — ChaCha20-Poly1305 со sliding-window.
+	if proto == wg.ProtoID {
+		if th := a.store.HashOf(device); len(th) == 32 {
+			if plan, err := wg.NewServerPlan(sid, th, a.log); err == nil {
+				scfg.KeyPlan = plan
+			}
+		}
+	}
+	// v0.9.5: управление камуфляжем с клиента (0x2A) — персистентный выбор.
+	scfg.CamCtl = func(enabled bool) {
+		a.setCamouflageOverride(device, enabled)
+	}
 	// v0.8.2: учёт камуфляжа «API Mask» — метрики без IP/содержимого
 	scfg.NoiseHook = func(req, resp int) {
 		a.met.ApimaskFrames.Add(1)
@@ -561,7 +584,9 @@ func (a *App) handleTunnel(conn net.Conn) {
 		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 2,
 		Proto:        proto,
 		Protocols:    rrp.SupportedIDs(),
-		Features:     rrp.CamouflageFeature(),
+		// v0.9.5: если клиент выключил apimask для этого устройства — features
+		// не заявляем (и локально, и в будущих сессиях: выбор персистентен).
+		Features: a.featuresFor(device),
 	}); err != nil {
 		_ = framed.Close()
 		return
@@ -571,7 +596,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	// DATA/UDP_DATA уходят в MTProto 2.0-конверте (AES-256-IGE). Обмен ключами
 	// и включение крипты теперь живут в rrp.Session (KeyPlan): рукопожатие
 	// завершено, reject «protocol error» из-за гонки PROBE/KEY_RESP невозможен.
-	if proto == mtproto.ProtoID {
+	if proto == mtproto.ProtoID || proto == wg.ProtoID {
 		scfg.Logf = func(format string, args ...any) {
 			a.log.Info(fmt.Sprintf(format, args...), "device", device, "session", sid)
 		}

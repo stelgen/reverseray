@@ -43,6 +43,13 @@ var ProtocolRRP1 = Protocol{ID: "rrp1", Name: "RRP/1", Ver: "1", Default: true}
 // AES-256-IGE конверт MTProto 2.0 (auth_key_id/msg_key/IGE).
 var ProtocolMTProto2 = Protocol{ID: "mtproto2", Name: "MTProto/2", Ver: "2.0", Default: false}
 
+// ProtocolWG — WireGuard-конверт payload'ов DATA/UDP_DATA (v0.9.5, модуль
+// protocol.wireguard): после приватного хендшейка (TLS+HMAC) выполняется
+// НАСТОЯЩИЙ хендшейк WireGuard (Noise_IKpsk2, blake2s/curve25519/chacha20poly1305,
+// mac1, TAI64N) с PSK = SHA256(token), после чего payload'ы — байт-в-байт
+// WG transport-пакеты (type=4 + sliding-window анти-реплей).
+var ProtocolWG = Protocol{ID: "wireguard", Name: "WireGuard/1", Ver: "1", Default: false}
+
 // regMu защищает реестр: модули (modules.Syncer) применяют манифест
 // на горячую, параллельно идут хендшейки (v0.8).
 var regMu sync.RWMutex
@@ -51,7 +58,7 @@ var regMu sync.RWMutex
 // по умолчанию (пользовательский запрос: «сервер должен принимать все
 // протоколы по умолчанию»). Наполняется встроенными + манифестом модулей
 // (SetRegistry). rrp1 присутствует ВСЕГДА — это фундамент.
-var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2}
+var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG}
 
 // registryVersion — версия реестра (берётся из манифеста модулей; пусто = встроенная).
 var registryVersion = ""
@@ -63,7 +70,7 @@ var registryVersion = ""
 // (v0.9.2: иначе сессия молча работала бы как rrp1, обе стороны думая,
 // что идёт заявленный протокол — прод-риск).
 // Будущий протокол добавляется кодом сюда — реестр подхватит из манифеста.
-var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2}
+var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG}
 
 // ExecutableIDs — протоколы, исполняемые этой сборкой сервера.
 func ExecutableIDs() []string {

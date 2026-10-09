@@ -116,6 +116,17 @@ func (s *Store) UpsertDevice(name string, hash []byte) {
 	s.tokens[name] = append([]byte(nil), hash...)
 }
 
+// HashOf — SHA256(token) устройства (v0.9.5: PSK хендшейка wireguard).
+// Возвращает копию (hash-only канон: сырой токен не хранится и не отдаётся).
+func (s *Store) HashOf(name string) []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if h, ok := s.tokens[name]; ok {
+		return append([]byte(nil), h...)
+	}
+	return nil
+}
+
 // Devices lists known device names.
 func (s *Store) Devices() []string {
 	s.mu.RLock()

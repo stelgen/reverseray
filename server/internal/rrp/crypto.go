@@ -41,6 +41,21 @@ type KeyPlan interface {
 	Complete(keyRespPayload []byte) (PayloadCrypto, error)
 }
 
+// InitResponder — план обмена ключами, где после KEY_REQ следует БИНАРНЫЙ
+// кадр инициации от клиента (v0.9.5, wireguard: WG_INIT/msg1), а сервер
+// отвечает бинарным кадром (WG_RESP/msg2). Планы-«простые» (mtproto2) —
+// только KEY_REQ/KEY_RESP, этот интерфейс им не нужен.
+type InitResponder interface {
+	KeyPlan
+	// ClientInitFrameType — тип кадра-инициации, который сессия маршрутизирует
+	// в OnClientInit.
+	ClientInitFrameType() uint8
+	// OnClientInit обрабатывает payload INIT-кадра клиента и возвращает тип
+	// и payload ответного кадра (сервер отправит его через очередь записи)
+	// и крипто-контекст (включается сразу — обмен завершён).
+	OnClientInit(payload []byte) (respType uint8, respPayload []byte, pc PayloadCrypto, err error)
+}
+
 // ErrKeyPlan — план обмена ключами сломан (протокол не может быть исполнен).
 var ErrKeyPlan = errors.New("rrp: key exchange plan failed")
 
