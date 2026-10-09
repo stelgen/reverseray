@@ -47,13 +47,16 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "нет команды '$
 require_cmd curl
 
 # --- docker: с sudo или без ---
+# ВАЖНО: проверяем не только CLI, но и ЖИВОЙ демон (docker info):
+# "docker compose version" работает и при мёртвом демоне — скрипт молча
+# доезжал до pull и умирал невнятно (поймано в живом тесте).
 DC="docker compose"
-docker_ok() { docker compose version >/dev/null 2>&1; }
+docker_ok() { docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; }
 if ! docker_ok; then
-  if command -v sudo >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; then
     DC="sudo docker compose"
   else
-    die "docker compose не найден (или нет прав; попробуй sudo bash rr.sh)"
+    die "docker compose не найден ИЛИ демон не запущен (запусти dockerd/systemctl start docker; или попробуй sudo bash rr.sh)"
   fi
 fi
 SUDO=""
