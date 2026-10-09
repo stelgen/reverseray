@@ -71,8 +71,16 @@ if [ -z "$TAG" ]; then
   TAG=$(curl -fsSL --max-time 10 "https://api.github.com/repos/stelgen/reverseray/releases/latest" \
         | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 2>/dev/null || true)
 fi
-[ -n "$TAG" ] || TAG="$DEFAULT_TAG"
-log "Версия: $TAG"
+if [ -z "$TAG" ]; then
+  # fallback: последний тег (когда /releases/latest недоступен — rate-limit/прокси)
+  TAG=$(curl -fsSL --max-time 10 "https://api.github.com/repos/stelgen/reverseray/tags" \
+        | grep -o '"name": *"[^"]*"' | head -1 | cut -d'"' -f4 2>/dev/null || true)
+fi
+if [ -z "$TAG" ]; then
+  TAG="$DEFAULT_TAG"
+  log "!! последний релиз не определён через GitHub API — запасной $DEFAULT_TAG (укажите --tag vX.Y.Z для принудительной версии)"
+fi
+log "Версия: $TAG (последний релиз GitHub)"
 
 # --- целевой каталог (относительный) + права ---
 mkdir -p "$DEST/state" 2>/dev/null || die "не могу создать каталог $DEST/state (нет прав? запусти с sudo)"
