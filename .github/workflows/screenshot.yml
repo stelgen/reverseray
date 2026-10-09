@@ -169,12 +169,18 @@ jobs:
             -e RR_STATE_DIR=/var/lib/reverseray \
             "ghcr.io/stelgen/reverseray:${TAG}"
           ok=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do # 120с: healthcheck start-period 10s + интервал 30s — на загруженном раннере healthy приходит к ~40-90с
             st=$(docker inspect --format '{{.State.Health.Status}}' rr-web 2>/dev/null || echo unknown)
             if [ "$st" = "healthy" ]; then ok=1; break; fi
             sleep 2
           done
-          [ "$ok" = "1" ] || { docker logs --tail 50 rr-web || true; exit 1; }
+          if [ "$ok" != "1" ]; then
+            { echo "== state =="; docker inspect rr-web --format '{{json .State}}' || true
+              echo "== health log =="; docker inspect rr-web --format '{{json .State.Health}}' || true
+              echo "== logs =="; docker logs --tail 80 rr-web || true; } > web-run-fail.txt || true
+            echo "::error::веб-контейнер не healthy — см. артефакт shot-web"
+            exit 1
+          fi
           curl -fsS --max-time 5 http://127.0.0.1:9090/healthz
       - name: Web panel screenshot (headless chromium)
         run: |
@@ -199,6 +205,7 @@ jobs:
           name: shot-web
           path: |
             web-raw.png
+            web-run-fail.txt
           if-no-files-found: warn
 
   commit:
