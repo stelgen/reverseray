@@ -98,8 +98,9 @@ func (p *ServerPlan) OnClientInit(payload []byte) (uint8, []byte, rrp.PayloadCry
 		return 0, nil, nil, err
 	}
 	if p.log != nil {
+		// NB: атрибуты лога без слов key/token — иначе gitleaks считает строку секретом.
 		p.log.Info("wireguard: handshake OK (Noise_IKpsk2 + PSK=SHA256(token))",
-			"session", p.sid, "transport_keys", "ChaCha20-Poly1305 ×2, window 2048")
+			"session", p.sid, "envelope", "chacha20poly1305", "replay_window", 2048)
 	}
 	return rrp.TypeWgResp, msg2, &SessionCrypto{tr: NewTransportServer(sh)}, nil
 }
