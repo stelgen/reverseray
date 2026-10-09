@@ -34,7 +34,7 @@ func rawDialEvil(t *testing.T, addr, caPinB64, token string) net.Conn {
 		raw.Close()
 		t.Fatalf("tls handshake: %v", err)
 	}
-	if _, err := clientHandshake(conn, token, "phone-evil", ""); err != nil {
+	if _, _, err := clientHandshake(conn, token, "phone-evil", ""); err != nil {
 		conn.Close()
 		t.Fatalf("rrp handshake: %v", err)
 	}

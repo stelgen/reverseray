@@ -16,7 +16,7 @@ android {
         // или дефолтом для локальной разработки; versionCode ВЫВОДИТСЯ из семвера
         // (major*1M + minor*1K + patch) — растёт с КАЖДЫМ релизом автоматически,
         // даже если APK-код не менялся (требование: цифра бежит в каждом релизе).
-        val releaseVersion: String = (project.findProperty("versionName") as String?) ?: "0.9.2"
+        val releaseVersion: String = (project.findProperty("versionName") as String?) ?: "0.9.3"
         val (maj, min, pat) = releaseVersion.removePrefix("v").split('.').map { it.toIntOrNull() ?: 0 }
         versionCode = maj * 1_000_000 + min * 1_000 + pat
         versionName = releaseVersion

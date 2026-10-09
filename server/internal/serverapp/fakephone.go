@@ -12,6 +12,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
@@ -20,6 +21,10 @@ import (
 // fakePhone is a minimal Go RRP/1 client used by e2e tests.
 // It performs the real TLS+auth handshake, then answers OPENs by dialing
 // through the provided hook (the "phone" does the actual egress).
+// v0.9.3: фейк уважает flow-control как РЕАЛЬНЫЙ APK (Kotlin Semaphore):
+// per-stream кредит из HELLO_OK.tunnel_window, пополнение по WINDOW от
+// сервера. Без этого фейк льёт неограниченно и честный тест многоканальности
+// упирается в анти-абьюз буфер сервера (capIn) — не репрезентативно.
 type fakePhone struct {
 	conn net.Conn
 	// wrap — mtproto2-обёртка (v0.8): nil в обычном режиме RRP/1.
@@ -28,6 +33,11 @@ type fakePhone struct {
 	wmu sync.Mutex
 	mu  sync.Mutex
 	dst map[uint32]net.Conn
+
+	// flow-control (v0.9.3): не подтверждённые сервером байты на стрим.
+	win int64
+	fmu sync.Mutex
+	out map[uint32]int64
 
 	dial func(host string, port uint16) (net.Conn, error)
 }
@@ -119,11 +129,13 @@ func DialPhoneOnProto(t *testing.T, conn net.Conn, token, device, proto string,
 
 	t.Helper()
 	p := &fakePhone{conn: conn, dst: make(map[uint32]net.Conn), dial: dial}
-	sid, err := clientHandshake(p.conn, token, device, proto)
+	sid, win, err := clientHandshake(p.conn, token, device, proto)
 	if err != nil {
 		conn.Close()
 		return nil, "", err
 	}
+	p.win = int64(win)
+	p.out = make(map[uint32]int64)
 	if proto == "mtproto2" {
 		p.wrap, err = mtproto.UpgradeClient(conn, sid, nil)
 		if err != nil {
@@ -135,36 +147,43 @@ func DialPhoneOnProto(t *testing.T, conn net.Conn, token, device, proto string,
 	return p, sid, nil
 }
 
-func clientHandshake(conn net.Conn, token, device, proto string) (string, error) {
+func clientHandshake(conn net.Conn, token, device, proto string) (string, uint32, error) {
 	hb, _ := json.Marshal(&rrp.Hello{Agent: "fake-phone", Ver: "1.0", Device: device, MaxStreams: 64, Proto: rrp.FlexString(proto)})
 	if err := rrpWrite1(conn, rrp.TypeHello, hb); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	f, err := rrp.ReadFrame(conn)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if f.Type != rrp.TypeHelloOK {
-		return "", errors.New("expected HELLO_OK")
+		return "", 0, errors.New("expected HELLO_OK")
 	}
 	var hok rrp.HelloOK
 	if err := json.Unmarshal(f.Payload, &hok); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	code := rrp.AuthCode(token, hok.Nonce, hok.SessionID)
 	ab, _ := json.Marshal(&rrp.Auth{Mode: "token-hmac", HMAC: code})
 	if err := rrpWrite1(conn, rrp.TypeAuth, ab); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	f, err = rrp.ReadFrame(conn)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if f.Type != rrp.TypeReady {
 		_, msg := rrp.DecodeError(f.Payload)
-		return "", errors.New("handshake rejected: " + msg)
+		return "", 0, errors.New("handshake rejected: " + msg)
 	}
-	return hok.SessionID, nil
+	// Кредит — из READY (сервер может уточнить после HELLO_OK).
+	win := hok.TunnelWindow
+	var ready rrp.Ready
+	_ = json.Unmarshal(f.Payload, &ready)
+	if ready.TunnelWindow > 0 {
+		win = ready.TunnelWindow
+	}
+	return hok.SessionID, win, nil
 }
 
 // WritePing отправляет PING-кадр от лица телефона (для flood-тестов).
@@ -182,6 +201,12 @@ func (p *fakePhone) write(t uint8, streamID uint32, payload []byte) error {
 }
 
 func (p *fakePhone) loop() {
+	// keyrace-тесты конструируют fakePhone литералом — лениво создаём карту.
+	p.fmu.Lock()
+	if p.out == nil {
+		p.out = make(map[uint32]int64)
+	}
+	p.fmu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		for _, c := range p.dst {
@@ -239,6 +264,16 @@ func (p *fakePhone) loop() {
 			if dst != nil {
 				dst.Close()
 			}
+		case rrp.TypeWindow:
+			// v0.9.3: сервер подтвердил потребление — возвращаем кредит.
+			inc, derr := rrp.DecodeWindow(f.Payload)
+			if derr == nil {
+				p.fmu.Lock()
+				if p.out != nil {
+					p.out[f.StreamID] -= int64(inc)
+				}
+				p.fmu.Unlock()
+			}
 		case rrp.TypePing:
 			p.write(rrp.TypePong, 0, f.Payload)
 		}
@@ -250,7 +285,7 @@ func (p *fakePhone) pumpToPhone(id uint32, dst net.Conn) {
 	for {
 		n, err := dst.Read(buf)
 		if n > 0 {
-			if werr := p.write(rrp.TypeData, id, buf[:n]); werr != nil {
+			if werr := p.writePaced(id, buf[:n]); werr != nil {
 				dst.Close()
 				return
 			}
@@ -262,6 +297,34 @@ func (p *fakePhone) pumpToPhone(id uint32, dst net.Conn) {
 			p.mu.Unlock()
 			return
 		}
+	}
+}
+
+// writePaced отправляет DATA с уважением к flow-control (как Kotlin-клиент):
+// ждём, пока не подтверждённые байты стрима не влезут в кредит win.
+// win == 0 — старое поведение без пейсинга (транспортные тесты net.Pipe).
+func (p *fakePhone) writePaced(id uint32, b []byte) error {
+	if p.win <= 0 {
+		return p.write(rrp.TypeData, id, b)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		p.fmu.Lock()
+		unacked := p.out[id]
+		p.fmu.Unlock()
+		if unacked+int64(len(b)) <= p.win {
+			if err := p.write(rrp.TypeData, id, b); err != nil {
+				return err
+			}
+			p.fmu.Lock()
+			p.out[id] += int64(len(b))
+			p.fmu.Unlock()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("fake-phone: flow-control wait timeout")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 

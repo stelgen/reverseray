@@ -16,7 +16,7 @@
 | HELLO | 0x01 | C→S | JSON `{agent, ver, device, caps?, max_streams, proto?, protocols?}` |
 | HELLO_OK | 0x02 | S→C | JSON `{session_id, server_ver, nonce, tunnel_window, proto, protocols}` |
 | AUTH | 0x03 | C→S | JSON `{mode:"token-hmac", hmac, nonce}` |
-| READY | 0x04 | S→C | JSON `{tunnel_id, role:"active", max_streams, tunnel_window, proto, protocols}` |
+| READY | 0x04 | S→C | JSON `{tunnel_id, role:"active", max_streams, tunnel_window, proto, protocols}` — tunnel_window = StreamWindow×2, ровно anti-abuse буфер DATA на стрим (канон v0.9.3: кредит ≤ буферу приёма) |
 | OPEN | 0x10 | S→C | `[u8 atyp][addr][u16 port]`; домен: `[3][len][name][port]` |
 | OPEN_OK | 0x17 | C→S | `[u8 err_code]` (0 = дial успешен) |
 | DATA | 0x11 | оба | сырые байты стрима |

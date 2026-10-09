@@ -1,0 +1,152 @@
+name: Screenshot APK
+# v0.9.3: скриншот-роботы РАЗДЕЛЕНЫ на два ПОЛНОСТЬЮ независимых воркфлоу.
+# Этот — только APK-скриншот с эмулятора; веб-панель живёт в screenshot-web.yml.
+#
+# Принципы:
+#  - асинхронно ПОСЛЕ релиза (workflow_run Release success): ни CI, ни релиз
+#    не блокируются и не ждут эмулятор;
+#  - веб-бот независим: его фейлы/логика/расписание не влияют на этот
+#    воркфлоу вообще (раздельные concurrency-группы, раздельные коммиты);
+#  - коммитит ТОЛЬКО assets/brand/screenshot.png (README уже встраивает);
+#  - ЛЮБОЙ фейл оставляет артефакт-диагностику (логи джоб без токена
+#    нечитаемы — урок 08.10);
+#  - упал — упал один этот воркфлоу: CI/Release/веб-бот остаются зелёными.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "40 2 * * 1"
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshot-apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule' ||
+          github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+      - run: pip install pillow
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon
+      - name: Boot emulator (3 attempts, logs kept)
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "SDK=$SDK; kvm: $(ls -l /dev/kvm 2>/dev/null || echo ABSENT)"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" \
+            "system-images;android-30;google_apis;x86_64" | tail -2 || true
+          echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n ci -k "system-images;android-30;google_apis;x86_64" -d pixel || true
+          boot=0
+          for b in 1 2 3; do
+            echo "boot attempt $b"
+            "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
+              -no-audio -no-boot-anim -accel auto > "emulator-$b.log" 2>&1 &
+            EPID=$!
+            for i in $(seq 1 100); do
+              if adb shell getprop sys.boot_completed 2>/dev/null | grep -q 1; then boot=1; break; fi
+              sleep 3
+            done
+            if [ "$boot" = "1" ]; then echo "emulator booted (attempt $b)"; break; fi
+            echo "boot attempt $b failed — killing and retrying"
+            kill "$EPID" 2>/dev/null || true
+            adb kill-server >/dev/null 2>&1 || true
+            sleep 5
+          done
+          if [ "$boot" != "1" ]; then
+            { echo "== emulator logs =="; tail -80 emulator-*.log; echo "== adb devices =="; adb devices -l; } > boot-fail.log || true
+            echo "::error::эмулятор не загрузился за 3 попытки — см. артефакт shot-apk"
+            exit 1
+          fi
+      - name: Hide ANR dialogs + take screenshots (8 attempts)
+        run: |
+          set -e
+          adb shell settings put global hide_error_dialogs 1
+          adb shell settings put global window_animation_scale 0.0
+          adb shell settings put global transition_animation_scale 0.0
+          adb shell settings put global animator_duration_scale 0.0
+          adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+          ok=0
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "shot attempt $attempt"
+            adb shell am start -W -n dev.stelgen.reverseray/.MainActivity || true
+            focused=0
+            for i in $(seq 1 60); do
+              if adb shell dumpsys window 2>/dev/null | grep mCurrentFocus | grep -qi reverseray; then focused=1; break; fi
+              adb shell am start -n dev.stelgen.reverseray/.MainActivity >/dev/null 2>&1 || true
+              sleep 2
+            done
+            adb exec-out screencap -p > "shot-attempt-$attempt.png" || true
+            if [ "$focused" != "1" ]; then
+              echo "app never focused on attempt $attempt"
+              adb logcat -d | tail -60
+              continue
+            fi
+            sleep 4
+            adb exec-out screencap -p > shot-raw.png
+            if python3 -c "from PIL import Image; import sys; img=Image.open('shot-raw.png').convert('RGB'); c=len(set(img.resize((64,64)).getdata())); print('colors64:', c); sys.exit(0 if c > 16 else 1)"; then
+              ok=1
+              break
+            fi
+            adb shell input keyevent KEYCODE_BACK || true
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            echo "no good frame in 8 attempts"
+            {
+              echo "== logcat tail =="; adb logcat -d | tail -300
+              echo "== windows focus =="; adb shell dumpsys window 2>/dev/null | grep -i -A2 focus
+              echo "== resumed activity =="; adb shell dumpsys activity activities 2>/dev/null | grep -i -m5 'mResumedActivity\|topResumedActivity'
+            } > shot-fail-logcat.txt || true
+            exit 1
+          fi
+      - name: Upload apk-shot diagnostics (always)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: shot-apk
+          path: |
+            shot-raw.png
+            shot-attempt-*.png
+            shot-fail-logcat.txt
+            emulator-*.log
+            boot-fail.log
+          if-no-files-found: warn
+      - name: Normalize + commit APK screenshot
+        run: |
+          python3 - <<'PY'
+          from PIL import Image
+          img = Image.open("shot-raw.png").convert("RGB")
+          img = img.resize((720, 1440), Image.LANCZOS)
+          img.save("assets/brand/screenshot.png", optimize=True)
+          print("normalized:", img.size)
+          PY
+      - uses: stefanzweifel/git-auto-commit-action@v6
+        with:
+          commit_message: "[skip ci] docs: свежий скриншот APK (бот, независимый воркфлоу после релиза)"
+          file_pattern: "assets/brand/screenshot.png"
+          branch: main
+          rebase: true

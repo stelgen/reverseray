@@ -27,7 +27,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | **Modules integrity (v0.8)** | канон-чек `modules/modules.json` + тесты парсеров обеих сторон (Go+Kotlin) |
 | **Privacy audit (v0.8)** | скрипт `scripts/privacy_audit.py`: ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных/токенов в доках |
 | **Govulncheck (v0.8)** | известные уязвимости stdlib/зависимостей |
-| **Screenshot bot (v0.9.1)** | ОТДЕЛЬНЫЙ воркфлоу `screenshot.yml`, асинхронно ПОСЛЕ РЕЛИЗА (workflow_run Release success + еженедельный cron + workflow_dispatch), НИКОГДА не блокирует релиз; ДВЕ ПАРАЛЛЕЛЬНЫЕ джобы: APK с эмулятора (boot-wait, скрытые ANR-диалоги, 8 попыток) → `assets/brand/screenshot.png`; веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; итог коммитит третья джоба (README встраивает оба файла) |
+| **Screenshot bots (v0.9.3)** | ДВА ПОЛНОСТЬЮ НЕЗАВИСИМЫХ воркфлоу, асинхронно ПОСЛЕ РЕЛИЗА (workflow_run Release success + еженедельный cron + workflow_dispatch), НИКОГДА не блокируют релиз и друг друга: `screenshot-apk.yml` — APK с эмулятора (boot-wait, скрытые ANR-диалоги, 8 попыток) → `assets/brand/screenshot.png`; `screenshot-web.yml` — веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; каждый коммитит только свой файл (README уже встраивает оба) |
 | CodeQL | стат-анализ безопасности |
 
 ## Политики тулчейна
@@ -56,6 +56,13 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | **Governor без шелла (v0.8.3)** | distroless-образ не содержит busybox/интерпретаторов: рестарт-губернатор — подкоманда самого бинаря (`reverseray governor`); CI docker-джоба обязана поднять контейнер с родным entrypoint и дождаться healthy. |
 | **Слои модулей (v0.9.1 канон-верификация)** | новый протокол/модуль в манифесте подхватывается сервером (rrp.SetRegistry, syncer: apply/dedup/no-downgrade/мусор не применяется) и старым тонким движком APK (applyRegistryFull: id/метка/версия; движок остаётся на rrp1, мусор → rrp1, смена только через PROBE-валидацию). Тесты обеих сторон + modules_check.py — релиз движка и релиз манифеста независимы |
 | **Многоязычность (v0.8.3)** | дефолт-ресурсы (values/) — EN (фолбэк), RU — values-ru; выбор языка в настройках (system/ru/en) применяется к Activity, сервису, уведомлениям и логам ядра без перезапуска; core-сообщения — типизированный каталог `Msgs` (Msg(en, ru=null) → EN); НОВЫЙ код обязан добавлять строки в ресурсы/каталог — гейт-тесты StringsParityTest/StringsGateTest падают перед деплоем и печатают, какой язык/какие поля пропущены. |
+
+## Политики канона (v0.9.3, добавление)
+
+| Политика | Правило |
+|---|---|
+| **Порядок блокировок RRP** | `st.mu → s.mu` и НИКОГДА наоборот (дедлок TypeClose/Read, найден тестом многоканальности под -race); `markClosed` не вызывается под `s.mu`. |
+| **Flow-control кредит ≤ буфер** | `tunnel_window = StreamWindow×2` — ровно anti-abuse буфер DATA на стрим (capIn 1 МБ): честный клиент принципиально не может убить стрим `close(4)`; fake-phone в e2e уважает окно как настоящий APK. |
 
 ## Тех-долг (бэклог)
 
@@ -93,18 +100,19 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
    автопилотом `deploy/rr.sh` (создаёт `./reverseray/` относительно текущего
    каталога, решает установка/обновление, печатает строку подключения;
    `--reset` — обнулить состояние).
-7. **Скриншот-роботы (v0.9.1+, асинхронно после релиза):** отдельный
-   workflow `screenshot.yml` по `workflow_run` Release=success — две
-   параллельные джобы (APK с эмулятора, веб-панель из ОПУБЛИКОВАННОГО
-   образа, healthy-ожидание 120 с) + commit-джоба кладёт
-   `assets/brand/screenshot.png` и `assets/brand/web.png` в README
-   (branch: main, rebase). Любой фейл не валит CI/Release — артефакт-диагностика.
+7. **Скриншот-роботы (v0.9.3+, асинхронно после релиза):** ДВА независимых
+   workflow — `screenshot-apk.yml` (эмулятор) и `screenshot-web.yml`
+   (веб-панель из ОПУБЛИКОВАННОГО образа, healthy-ожидание 120 с) — по
+   `workflow_run` Release=success; каждый коммитит свой ассет в README
+   (branch: main, rebase). Любой фейл одного не валит CI/Release/второго
+   робота — артефакт-диагностика.
 8. Скорость релиза (v0.7): паблиш берёт артефакты `build-binaries` (без
    пересборки), Go-тест+coverage одним прогоном, кэш Gradle в CI.
 
 ## Тестовые матрицы
 
 - **Go**: unit + E2E (fake-phone) + hostile-environment (`evilclient_test.go`)
+  + многоканальность (`multistream_test.go`: 8 потоков × SHA-целостность)
   — запускаются в каждом PR и релизе.
 - **Android**: 187 unit (Robolectric API 21/31, evil-сервер, QR, SSRF, тайминги,
   канон HELLO/AUTH, бронепарсер rrp://, согласование протоколов, PROBE-кадры);

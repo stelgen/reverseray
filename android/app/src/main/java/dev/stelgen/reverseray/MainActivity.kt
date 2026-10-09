@@ -53,6 +53,7 @@ import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.SecurityFacts
 import dev.stelgen.reverseray.core.ThemeMode
 import dev.stelgen.reverseray.ui.Formats
+import dev.stelgen.reverseray.ui.PulseRingView
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
@@ -113,8 +114,9 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- главная ----------
     private lateinit var bigButton: MaterialButton
-    private lateinit var pulseRing: View
+    private lateinit var pulseRing: PulseRingView
     private var bigButtonIsStart = true
+    private var lastButtonMode: Mode? = null
     private lateinit var trafficGraph: TrafficGraphView
     private lateinit var trafficLabel: TextView
     private lateinit var packetsLabel: TextView
@@ -478,22 +480,32 @@ class MainActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER_HORIZONTAL
         })
+        // Версия под именем — без строковых ресурсов (техническая метка).
+        p.addView(TextView(this).apply {
+            text = "v" + (try {
+                packageManager.getPackageInfo(packageName, 0).versionName
+            } catch (_: Exception) {
+                ""
+            })
+            textSize = 12f
+            gravity = Gravity.CENTER_HORIZONTAL
+            setTextColor(0xFF6B7280.toInt())
+            setPadding(0, dp(0), 0, dp(2))
+        })
 
-        // ОДНА круглая кнопка Старт/Стоп (дубликат снизу убран — v0.8) с пульс-кольцом
+        // ОДНА круглая кнопка Старт/Стоп (дубликат снизу убран — v0.8) с
+        // кольцами состояния (v0.9.3: PulseRingView — канон 2026, без дёрганья)
         val buttonBox = android.widget.FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(216), dp(216)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setMargins(0, dp(12), 0, dp(8))
             }
         }
-        pulseRing = View(this).apply {
+        pulseRing = PulseRingView(this).apply {
             layoutParams = android.widget.FrameLayout.LayoutParams(dp(216), dp(216)).apply {
                 gravity = Gravity.CENTER
             }
-            background = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL
-                setStroke(dp(2), 0x6639D98A)
-            }
+            setStrokeWidthPx(dp(2).toFloat())
             visibility = View.GONE
         }
         buttonBox.addView(pulseRing)
@@ -508,6 +520,31 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener {
                 if (bigButtonIsStart) startTunnel() else stopTunnel()
+            }
+            // v0.9.3 (канон анимаций 2026): тактильный отклик нажатия —
+            // лёгкое сжатие 3% (120мс, Decelerate) и упругий возврат
+            // (200мс, Overshoot 0.8) — плавно, без дёрганья. Событие
+            // потребляем (return true), клик выполняем сами на UP —
+            // ровно один клик (performClick — паттерн a11y, как в StatusConsole).
+            setOnTouchListener { v, ev ->
+                val springBack = {
+                    v.animate().cancel()
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(200)
+                        .setInterpolator(android.view.animation.OvershootInterpolator(0.8f)).start()
+                }
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        v.animate().cancel()
+                        v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(120)
+                            .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+                    }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        springBack()
+                        v.performClick()
+                    }
+                    android.view.MotionEvent.ACTION_CANCEL -> springBack()
+                }
+                true
             }
         }
         buttonBox.addView(bigButton)
@@ -1221,17 +1258,47 @@ class MainActivity : AppCompatActivity() {
                 start()
             }
         }
-        // кольцо: connected — пульс, connecting — вращение, иначе скрыто
+        // кольца состояния (v0.9.3 PulseRingView): connected — двойное
+        // «дыхание» (спокойная индикация живого туннеля), connecting —
+        // современный indeterminate-дугу, иначе — скрыто. Смена цвета колец
+        // следует режиму (connecting — янтарь, connected — зелень), трек — тема.
         val ringState: Mode? = if (mode == Mode.CONNECTED || mode == Mode.CONNECTING) mode else null
         if (ringState != ringMode) {
             ringMode = ringState
             if (ringState == null) {
+                pulseRing.stop()
                 pulseRing.visibility = View.GONE
-                stopPulse()
             } else {
                 pulseRing.visibility = View.VISIBLE
-                if (ringState == Mode.CONNECTED) startPulse() else startSpin()
+                pulseRing.setColors(
+                    if (ringState == Mode.CONNECTING) 0xFFB58300.toInt() else 0xFF39D98A.toInt(),
+                    0x26888888,
+                )
+                pulseRing.start(
+                    if (ringState == Mode.CONNECTED) PulseRingView.Kind.CONNECTED else PulseRingView.Kind.CONNECTING,
+                )
             }
+        }
+        // v0.9.3 (канон 2026): смена состояния — мягкий «поп» 3.5% и упругий
+        // возврат (140+220мс). Только при РЕАЛЬНОЙ смене режима — без дёрганья
+        // при повторных синхронизациях UI из сервиса.
+        if (mode != lastButtonMode) {
+            lastButtonMode = mode
+            bigButton.animate().cancel()
+            bigButton.scaleX = 1f
+            bigButton.scaleY = 1f
+            bigButton.animate()
+                .scaleX(1.035f).scaleY(1.035f)
+                .setDuration(140)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .withEndAction {
+                    bigButton.animate()
+                        .scaleX(1f).scaleY(1f)
+                        .setDuration(220)
+                        .setInterpolator(android.view.animation.OvershootInterpolator(0.8f))
+                        .start()
+                }
+                .start()
         }
     }
 
@@ -1246,46 +1313,8 @@ class MainActivity : AppCompatActivity() {
         renderServiceLogs()
     }
 
-    private var spinAnimator: android.animation.ValueAnimator? = null
-
-    /** Вращение кольца в состоянии connecting (аккуратная индикация попытки). */
-    private fun startSpin() {
-        stopPulse()
-        spinAnimator?.cancel()
-        spinAnimator = android.animation.ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = 1400
-            repeatCount = android.animation.ValueAnimator.INFINITE
-            interpolator = android.view.animation.LinearInterpolator()
-            addUpdateListener { a -> pulseRing.rotation = a.animatedValue as Float }
-            start()
-        }
-    }
-
-    private var pulseAnimator: android.animation.ValueAnimator? = null
-    private fun startPulse() {
-        spinAnimator?.cancel()
-        stopPulse()
-        val a = android.animation.ValueAnimator.ofFloat(0f, 1f)
-        a.duration = 1200
-        a.repeatCount = android.animation.ValueAnimator.INFINITE
-        a.addUpdateListener { anim ->
-            val t = anim.animatedValue as Float
-            pulseRing.scaleX = 1f + t * 0.08f
-            pulseRing.scaleY = 1f + t * 0.08f
-            pulseRing.alpha = 0.7f - t * 0.5f
-        }
-        a.start()
-        pulseAnimator = a
-    }
-
-    private fun stopPulse() {
-        spinAnimator?.cancel()
-        spinAnimator = null
-        pulseAnimator?.cancel()
-        pulseAnimator = null
-        pulseRing.scaleX = 1f
-        pulseRing.scaleY = 1f
-    }
+    // v0.9.3: анимации кольца перенесены в ui/PulseRingView (инкапсуляция,
+    // экономия батареи — аниматор не крутится, когда вью невидимо).
 
     private fun showProtocolPicker() {
         val ids = RrpProtocols.displayList()

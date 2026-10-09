@@ -242,16 +242,22 @@ func (s *Session) handle(f *Frame) error {
 		}
 		return nil
 	case TypeClose:
+		// v0.9.3 (дедлок-фикс, найден тестом многоканальности под -race):
+		// markClosed берёт st.mu — раньше он вызывался ПОД s.mu, а stream.Read
+		// держит st.mu и берёт s.mu (учёт outstand) → классический AB-BA:
+		// handle(s.mu→st.mu) vs Read(st.mu→s.mu). Канон порядка блокировок:
+		// st.mu → s.mu и НИКОГДА наоборот. markClosed не требует s.mu —
+		// вызываем после Unlock (идемпотентен, сериализуется своим st.mu).
 		s.mu.Lock()
 		st := s.streams[f.StreamID]
-		if st != nil {
-			st.markClosed(f.closeCode())
-		}
 		w := s.pending[f.StreamID]
 		if w != nil {
 			delete(s.pending, f.StreamID)
 		}
 		s.mu.Unlock()
+		if st != nil {
+			st.markClosed(f.closeCode())
+		}
 		if st == nil && w != nil {
 			w.ch <- openResultErr(1)
 		}

@@ -499,10 +499,15 @@ func (a *App) handleTunnel(conn net.Conn) {
 	}
 	sid := rrp.NewID()
 	writeJSONTyped(framed, rrp.TypeHelloOK, &rrp.HelloOK{
-		SessionID:    sid,
-		ServerVer:    Version,
-		Nonce:        nonce,
-		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
+		SessionID: sid,
+		ServerVer: Version,
+		Nonce:     nonce,
+		// v0.9.3 (канон flow-control): кредит телефона ≤ буферу приёма.
+		// Буфер DATA на стрим — capIn 1МБ (session.go pushIn, анти-абьюз);
+		// кредит больше буфера = медленный читатель убивает стрим close(4)
+		// и рвёт закачку. StreamWindow*2 = 1МБ при дефолте 512КБ — ровно capIn,
+		// честный клиент (Kotlin Semaphore) capIn достичь не может.
+		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 2,
 		Proto:        proto,
 		Protocols:    rrp.SupportedIDs(),
 	})
@@ -545,10 +550,15 @@ func (a *App) handleTunnel(conn net.Conn) {
 
 	_ = tc.SetDeadline(time.Time{})
 	if err := writeJSONTyped(framed, rrp.TypeReady, &rrp.Ready{
-		TunnelID:     sid,
-		Role:         "active",
-		MaxStreams:   scfg.MaxStreams,
-		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 4,
+		TunnelID:   sid,
+		Role:       "active",
+		MaxStreams: scfg.MaxStreams,
+		// v0.9.3 (канон flow-control): кредит телефона ≤ буферу приёма.
+		// Буфер DATA на стрим — capIn 1МБ (session.go pushIn, анти-абьюз);
+		// кредит больше буфера = медленный читатель убивает стрим close(4)
+		// и рвёт закачку. StreamWindow*2 = 1МБ при дефолте 512КБ — ровно capIn,
+		// честный клиент (Kotlin Semaphore) capIn достичь не может.
+		TunnelWindow: toU32(a.cfg.Limits.StreamWindow) * 2,
 		Proto:        proto,
 		Protocols:    rrp.SupportedIDs(),
 		Features:     rrp.CamouflageFeature(),

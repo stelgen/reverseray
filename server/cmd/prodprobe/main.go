@@ -1,6 +1,12 @@
 // Одноразовая диагностика прода (не коммитится): телефонная роль против
 // боевого сервера — TLS+SPKI-pin, HELLO→HELLO_OK→AUTH→READY, PING/PONG,
 // PROBE (если телефон подключён — проверит и egress).
+//
+// v0.9.3: полноценный пр checker всех протоколов:
+//
+//	-proto mtproto2 — DH-апгрейд после READY (KEY_REQ→KEY_RESP, IGE-конверт),
+//	  той же функцией, что и настоящий APK (mtproto.UpgradeClient);
+//	-streams N — N параллельных PROBE в одну сессию (многоканальность).
 package main
 
 import (
@@ -13,18 +19,30 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 )
 
 func main() {
 	link := flag.String("link", os.Getenv("RR_PROBE_LINK"), "rrp://token@host:port/?pin=B64&name=X")
 	target := flag.String("target", "1.1.1.1:443", "PROBE-цель (нужен подключённый телефон)")
+	proto := flag.String("proto", "", "согласовать протокол сессии: пусто/rrp1 | mtproto2 (DH-апгрейд после READY)")
+	streams := flag.Int("streams", 1, "параллельных PROBE-запросов (многоканальность)")
 	flag.Parse()
+	if *streams < 1 {
+		*streams = 1
+	}
+	if *streams > 32 {
+		*streams = 32
+	}
 
+	useMtp := *proto == "mtproto2"
 	var token, hostPort, pinB64, name string
 	{
 		rest := *link
@@ -68,10 +86,16 @@ func main() {
 	if name == "" {
 		name = "prodprobe"
 	}
-	fmt.Printf("target=%s pin=%s device=%s\n", hostPort, pinB64, name)
+	fmt.Printf("target=%s pin=%s device=%s proto=%s streams=%d\n",
+		hostPort, pinB64, name, func() string {
+			if useMtp {
+				return "mtproto2"
+			}
+			return "rrp1"
+		}(), *streams)
 
 	cfg := &tls.Config{
-		InsecureSkipVerify: true, // подлинность проверяет SPKI-pin ниже
+		InsecureSkipVerify: true, // #nosec G402: подлинность проверяет SPKI-pin ниже (prodprobe — диагностический инструмент)
 		NextProtos:         []string{"reverseray/1"},
 		ServerName:         "reverseray.test",
 	}
@@ -122,7 +146,7 @@ func main() {
 	}
 	fmt.Println("TLS: OK (pin совпал), ALPN:", conn.ConnectionState().NegotiatedProtocol)
 
-	hb, _ := json.Marshal(&rrp.Hello{Agent: "prodprobe", Ver: "1.0", Device: name, MaxStreams: 64, Proto: rrp.FlexString("rrp1")})
+	hb, _ := json.Marshal(&rrp.Hello{Agent: "prodprobe", Ver: "1.0", Device: name, MaxStreams: 64, Proto: rrp.FlexString(*proto)})
 	if err := rrp.WriteFrame(conn, rrp.TypeHello, 0, 0, hb); err != nil {
 		fmt.Println("ERR: write HELLO:", err)
 		os.Exit(1)
@@ -142,7 +166,7 @@ func main() {
 		fmt.Println("ERR: HELLO_OK json:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("HELLO_OK: sid=%s nonce=%d…\n", hok.SessionID, len(hok.Nonce))
+	fmt.Printf("HELLO_OK: sid=%s nonce=%d… proto=%s реестр=%v\n", hok.SessionID, len(hok.Nonce), hok.Proto, hok.Protocols)
 
 	code := rrp.AuthCode(token, hok.Nonce, hok.SessionID)
 	ab, _ := json.Marshal(&rrp.Auth{Mode: "token-hmac", HMAC: code})
@@ -163,14 +187,28 @@ func main() {
 	}
 	fmt.Println("READY: OK — туннель и AUTH валидны (сервер жив)")
 
-	// PING/PONG
+	// v0.9.3: mtproto2 — сервер пришлёт KEY_REQ после READY; выполняем
+	// DH-апгрейд той же функцией, что и настоящий APK (mtproto.UpgradeClient):
+	// валидируем доли, отвечаем KEY_RESP, поднимаем IGE-конверт.
+	probeConn := io.ReadWriteCloser(conn)
+	if useMtp {
+		wrap, err := mtproto.UpgradeClient(conn, hok.SessionID, nil)
+		if err != nil {
+			fmt.Println("ERR: mtproto2 DH-апгрейд:", err)
+			os.Exit(1)
+		}
+		fmt.Println("mtproto2: KEY_REQ→KEY_RESP OK — DH-канон принят сервером, IGE-конверт поднят")
+		probeConn = wrap
+	}
+
+	// PING/PONG (служебный кадр — вне MTProto-конверта у обеих сторон)
 	nonce := []byte("12345678")
-	if err := rrp.WriteFrame(conn, rrp.TypePing, 0, 0, nonce); err != nil {
+	if err := rrp.WriteFrame(probeConn, rrp.TypePing, 0, 0, nonce); err != nil {
 		fmt.Println("ERR: write PING:", err)
 		os.Exit(1)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	f, err = rrp.ReadFrame(conn)
+	f, err = rrp.ReadFrame(probeConn)
 	if err != nil {
 		fmt.Println("ERR: read PONG:", err)
 		os.Exit(1)
@@ -181,32 +219,73 @@ func main() {
 		fmt.Printf("WARN: got 0x%02x вместо PONG\n", f.Type)
 	}
 
-	// PROBE: валиден только при подключённом телефоне
+	// PROBE: валиден только при подключённом телефоне; streams>1 — проверка
+	// многоканальности (параллельные запросы в одну сессию).
 	pb, _ := json.Marshal(map[string]any{"target": *target, "timeout_ms": 5000})
-	if err := rrp.WriteFrame(conn, rrp.TypeProbe, 0, 0, pb); err != nil {
-		fmt.Println("ERR: write PROBE:", err)
-		os.Exit(1)
+	type probeRes struct {
+		ok  bool
+		err string
+		ms  int64
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(12 * time.Second))
-	f, err = rrp.ReadFrame(conn)
-	if err != nil {
-		fmt.Println("PROBE: нет ответа (телефон не подключён к серверу — ожидаемо, APK пока не может зайти из-за пина)")
+	resCh := make(chan probeRes, *streams)
+	t0 := time.Now()
+	for i := 0; i < *streams; i++ {
+		go func() {
+			r := probeRes{}
+			s := time.Now()
+			defer func() {
+				r.ms = time.Since(s).Milliseconds()
+				resCh <- r
+			}()
+			if err := rrp.WriteFrame(probeConn, rrp.TypeProbe, 0, 0, pb); err != nil {
+				r.err = "write: " + err.Error()
+				return
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+			f, err := rrp.ReadFrame(probeConn)
+			if err != nil {
+				r.err = "read: " + err.Error()
+				return
+			}
+			if f.Type != rrp.TypeProbe {
+				r.err = fmt.Sprintf("unexpected frame 0x%02x", f.Type)
+				return
+			}
+			var pr struct {
+				Ok  bool   `json:"ok"`
+				Err string `json:"err"`
+			}
+			_ = json.Unmarshal(f.Payload, &pr)
+			r.ok, r.err = pr.Ok, pr.Err
+		}()
+	}
+	oks, fails := 0, 0
+	sample := ""
+	for i := 0; i < *streams; i++ {
+		r := <-resCh
+		if r.ok {
+			oks++
+		} else {
+			fails++
+			if sample == "" {
+				sample = r.err
+			}
+		}
+	}
+	wall := time.Since(t0).Milliseconds()
+	if oks > 0 {
+		fmt.Printf("PROBE: OK %d/%d — egress до %s подтверждён (телефон подключён!), wall=%dms\n",
+			oks, *streams, *target, wall)
 		os.Exit(0)
 	}
-	if f.Type == rrp.TypeProbe { // S→C отвечает тем же типом 0x23
-		var pr struct {
-			Ok  bool   `json:"ok"`
-			Err string `json:"err"`
-		}
-		_ = json.Unmarshal(f.Payload, &pr)
-		if pr.Ok {
-			fmt.Printf("PROBE: OK — egress до %s подтверждён (телефон подключён!)\n", *target)
-		} else {
-			fmt.Printf("PROBE: ok=false err=%q (телефон не в сети?)\n", pr.Err)
-		}
-	} else {
-		fmt.Printf("PROBE: неожиданный кадр 0x%02x\n", f.Type)
+	// Ни одного успеха: телефон не подключён (ожидаемо без APK) — но если
+	// сервер отвечал ok=false по делу, это тоже видно.
+	fmt.Printf("PROBE: нет успешных (%d запросов, wall=%dms)", *streams, wall)
+	if strings.TrimSpace(sample) != "" {
+		fmt.Printf(", пример: %q", sample)
 	}
+	fmt.Println(" — телефон не подключён или egress недоступен")
+	os.Exit(0)
 }
 
 func splitAmp(s string) []string {
