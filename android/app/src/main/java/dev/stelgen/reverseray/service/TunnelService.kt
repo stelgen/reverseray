@@ -123,6 +123,17 @@ class TunnelService : Service() {
             pushLog("${client.host}:${client.port}: $message")
         }
 
+        // v0.9.0: пин из ссылки не совпал — UI предлагает владельцу ЯВНО
+        // принять новый пин (анти-MITM канон: молча не доверяем никогда)
+        override fun onPinMismatch(client: RrpClient, realPin: String) {
+            sendBroadcast(
+                Intent(ACTION_STATUS).setPackage(packageName)
+                    .putExtra(EXTRA_STATE, STATE_PIN_MISMATCH)
+                    .putExtra(EXTRA_STATUS, getString(R.string.pin_mismatch_status))
+                    .putExtra(EXTRA_REAL_PIN, realPin)
+            )
+        }
+
         override fun onState(client: RrpClient, state: RrpClient.State) {
             if (state == RrpClient.State.READY) {
                 if (client.mtProtoActive) {
@@ -197,6 +208,21 @@ class TunnelService : Service() {
                 val p = RrpProtocols.normalize(intent.getStringExtra(EXTRA_PROTO))
                 startForegroundCompat(getString(R.string.notif_starting))
                 Thread({ switchProtocol(p) }, "rrp-switch").start()
+                return START_STICKY
+            }
+            ACTION_ACCEPT_PIN -> {
+                // v0.9.0: владелец ЯВНО принял новый пин CA — обновляем ссылку,
+                // пишем в журнал и реконнектим. Никакого молчаливого доверия.
+                val newPin = intent.getStringExtra(EXTRA_REAL_PIN)
+                val link = prefs().getString(KEY_CONFIG, null)
+                val updated = newPin?.let { RrpUri.replacePin(link ?: "", it) }
+                if (updated != null) {
+                    prefs().edit().putString(KEY_CONFIG, updated).apply()
+                    pushLog(Msgs.PIN_ACCEPTED.t(newPin ?: ""), LogKind.WARN)
+                    startTunnel()
+                } else {
+                    pushLog(Msgs.SEND_FAILED.t("pin update failed"), LogKind.ERR)
+                }
                 return START_STICKY
             }
             else -> startTunnel()
@@ -928,6 +954,9 @@ class TunnelService : Service() {
         const val STATE_PROTO = "PROTO"
         const val STATE_PROTO_ROLLBACK = "PROTO_ROLLBACK"
         const val STATE_LIMIT_REACHED = "LIMIT_REACHED" // v0.8: лимит — отдельное важное состояние
+        const val STATE_PIN_MISMATCH = "PIN_MISMATCH" // v0.9.0: ротация CA — явное подтверждение владельца
+        const val EXTRA_REAL_PIN = "real_pin" // v0.9.0: фактический пин сервера (base64url канона ссылки)
+        const val ACTION_ACCEPT_PIN = "dev.stelgen.reverseray.action.ACCEPT_PIN" // v0.9.0
 
         const val EXTRA_STATE = "state"
 

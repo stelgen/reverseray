@@ -132,6 +132,10 @@ object Msgs {
         "TLS: серверный серт действителен до %s, издатель: %s (pin — SPKI CA, ротация листа клиентов не ломает)",
     )
     val PIN_FORMAT = Msg("pin: expected sha256 (32 bytes, hex/base64)", "pin: ожидался sha256 (32 байта, hex/base64)")
+    val PIN_ACCEPTED = Msg(
+        "CA pin updated (owner confirmed): %s — reconnecting with the new pin",
+        "пин CA обновлён (подтверждено владельцем): %s — реконнект с новым пином",
+    )
 
     // ── RrpFrame: границы/размеры ────────────────────────────────────────
     val FRAME_PAYLOAD_LIMIT = Msg(

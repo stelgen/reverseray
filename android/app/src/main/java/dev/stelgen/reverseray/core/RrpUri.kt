@@ -41,6 +41,20 @@ object RrpUri {
      */
     fun parse(raw: String): RrpUriConfig = parseSanitized(sanitizeLink(raw))
 
+    /**
+     * v0.9.0: заменить пин в ссылке (ротация CA с ЯВНЫМ подтверждением
+     * владельца в APK). Остальные поля ссылки сохраняются байт-в-байт
+     * через parse/serialize. Битая ссылка → null (никогда не бросаем).
+     */
+    fun replacePin(link: String, newPin: String): String? {
+        if (newPin.isBlank()) return null
+        return try {
+            parse(link).copy(pin = newPin).serialize()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** Разбор уже очищенной строки (используется и в тестах). */
     internal fun parseSanitized(s: String): RrpUriConfig {
         if (!s.take(SCHEME.length).equals(SCHEME, ignoreCase = true)) {

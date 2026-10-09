@@ -276,4 +276,10 @@
     <string name="lang_ru">Русский</string>
     <string name="lang_en">English</string>
     <string name="settings_language_saved">Язык сохранён</string>
+    <!-- v0.9.0: ротация CA — явное подтверждение владельца -->
+    <string name="pin_mismatch_status">Сервер сменил CA? Ждём подтверждения</string>
+    <string name="pin_mismatch_title">Сервер сменил сертификат</string>
+    <string name="pin_mismatch_msg">Пин CA из твоей ссылки не совпал с сервером.\n\nЕсли CA меняли ВЫ (или ваш деплой) — примите новый пин: ссылка обновится, туннель переподключится. Если НЕ меняли — не принимайте (анти-MITM):\n\n%1$s</string>
+    <string name="pin_accept">Принять новый пин</string>
+    <string name="cancel">Отмена</string>
 </resources>

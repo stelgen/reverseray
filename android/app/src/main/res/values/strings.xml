@@ -276,4 +276,10 @@
     <string name="lang_ru">Russian</string>
     <string name="lang_en">English</string>
     <string name="settings_language_saved">Language saved</string>
+    <!-- v0.9.0: ротация CA — явное подтверждение владельца -->
+    <string name="pin_mismatch_status">Server CA changed? Awaiting your confirmation</string>
+    <string name="pin_mismatch_title">Server certificate changed</string>
+    <string name="pin_mismatch_msg">The CA pin from your link did not match the server.\n\nIf YOU (or your deploy) regenerated the server CA — accept the new pin: the link is updated and the tunnel reconnects. If you did NOT — do not accept (anti-MITM):\n\n%1$s</string>
+    <string name="pin_accept">Accept new pin</string>
+    <string name="cancel">Cancel</string>
 </resources>

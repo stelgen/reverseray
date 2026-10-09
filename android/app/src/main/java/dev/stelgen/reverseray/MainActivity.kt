@@ -221,6 +221,12 @@ class MainActivity : AppCompatActivity() {
                         if (state == TunnelService.STATE_LIMIT_REACHED) {
                             showLimitDialog(statusText)
                         }
+                        // v0.9.0: ротация CA — предлагаем владельцу ЯВНО принять новый пин
+                        if (state == TunnelService.STATE_PIN_MISMATCH) {
+                            intent.getStringExtra(TunnelService.EXTRA_REAL_PIN)?.let {
+                                showPinMismatchDialog(it)
+                            }
+                        }
                     }
                     when (state) {
                         TunnelService.STATE_CONNECTED, TunnelService.STATE_RETRY -> {
@@ -240,6 +246,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                         TunnelService.STATE_STOPPED, TunnelService.STATE_ERROR -> setRunningUi(false)
+                        TunnelService.STATE_CONNECTED -> pinMismatchDialogShown = false
                     }
                 }
                 else -> {}
@@ -1822,6 +1829,28 @@ class MainActivity : AppCompatActivity() {
         if (statusText != null) {
             setUsageText(usageSummaryText(used, limit))
         }
+    }
+
+    /** v0.9.0: раз в эпизод — не спамим диалогом на каждый ретрай. */
+    private var pinMismatchDialogShown = false
+
+    /** v0.9.0: ротация CA — ЯВНОЕ подтверждение владельца (анти-MITM канон:
+     *  молча не доверяем никогда; отказ = туннель продолжает ретраить с отказом). */
+    private fun showPinMismatchDialog(realPin: String) {
+        if (pinMismatchDialogShown) return
+        pinMismatchDialogShown = true
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.pin_mismatch_title)
+            .setMessage(getString(R.string.pin_mismatch_msg, realPin))
+            .setPositiveButton(R.string.pin_accept) { _, _ ->
+                startService(
+                    Intent(this, TunnelService::class.java)
+                        .setAction(TunnelService.ACTION_ACCEPT_PIN)
+                        .putExtra(TunnelService.EXTRA_REAL_PIN, realPin),
+                )
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     /** Строка «следующий сброс счётчика» — настройки + главный. */

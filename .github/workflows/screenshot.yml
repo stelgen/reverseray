@@ -41,6 +41,11 @@ jobs:
           github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        # ЯВНЫЙ bash: default-вьюер рендерит шаги как sh -c, а наш скрипт
+        # с циклами должен исполняться bash'ем (дэш падал "expecting done")
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6

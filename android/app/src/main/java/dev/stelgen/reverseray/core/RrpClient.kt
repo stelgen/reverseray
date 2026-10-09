@@ -70,7 +70,9 @@ class OpenFuture {
  * Клиент RRP/1-туннеля. Pure Kotlin (без android.*).
  *
  * TLS 1.3 через BouncyCastle (bctls 1.80, пост-миграция на TlsCrypto-API):
- * - SPKI-pin: sha256(SPKI leaf-сертификата), сверка вручную в notifyServerCertificate;
+ * - SPKI-pin: sha256(SPKI CA = ПОСЛЕДНИЙ серт цепочки), сверка в
+ *   notifyServerCertificate (v0.9.0: раньше хешировался лист — ломалось при
+ *   плановой ротации листа);
  * - ALPN "reverseray/1" через getProtocolNames()/ProtocolName (BC 1.80);
  * - Chacha20 в приоритете cipher-suite;
  * - провайдер BC задаётся явно (на Android платформенный "BC" — урезанный).
@@ -119,6 +121,10 @@ class RrpClient(
         fun onLog(client: RrpClient, message: String) {}
         /** TOFU: пин из конфига не совпал, принят самоподписанный сервер. */
         fun onPinAccepted(client: RrpClient, newPin: String) {}
+
+        /** v0.9.0: пин из ссылки не совпал (ротация CA владельцем/или MITM).
+         *  realPin — фактический пин сервера в каноне ссылки (base64url). */
+        fun onPinMismatch(client: RrpClient, realPin: String) {}
     }
 
     enum class State { DISCONNECTED, CONNECTING, HANDSHAKE, READY, CLOSED }
@@ -1088,15 +1094,21 @@ class RrpClient(
                 override fun notifyServerCertificate(serverCertificate: TlsServerCertificate) {
                     val chain = serverCertificate.certificate.certificateList
                     if (chain.isEmpty()) throw TlsFatalAlert(AlertDescription.bad_certificate)
-                    val leafDer = chain[0].encoded // TlsCertificate.getEncoded(): полный DER
-                    val cert = org.bouncycastle.asn1.x509.Certificate.getInstance(leafDer)
-                    val spkiDer = cert.subjectPublicKeyInfo.encoded
-                    val actual = MessageDigest.getInstance("SHA-256").digest(spkiDer)
-                    val actualB64 = Base64.getEncoder().encodeToString(actual)
+                    // v0.9.0 КАНОН ПИНА: SHA256(SPKI ПОСЛЕДНЕГО серта цепочки (CA)).
+                    // До 0.9.0 хешировался ЛИСТ (chain[0]) — лист ротируется «заранее»,
+                    // CA не меняется: честные ссылки ломались ложным «pin mismatch»
+                    // на проде после перевыпуска листа (TLS bad_certificate(42)).
+                    val chainDer = chain.map { it.encoded }
+                    val actual = RrpPin.caSha256(chainDer)
+                    val actualB64 = RrpPin.toLinkPin(actual)
 
                     // Строгий путь: пин из конфига совпал.
                     if (pin != null) {
-                        val expected = decodePin(pin)
+                        val expected = RrpPin.fromLinkPin(pin)
+                        if (expected == null) {
+                            log(Msgs.PIN_FORMAT.t())
+                            throw TlsFatalAlert(AlertDescription.bad_certificate)
+                        }
                         if (MessageDigest.isEqual(actual, expected)) {
                             acceptedPin = actualB64
                             rememberServerCert(chain)
@@ -1107,6 +1119,9 @@ class RrpClient(
                         // другим сертификатам мы НЕ доверяем никогда.
                         if (!trustSelfSigned) {
                             log(Msgs.TLS_PIN_MISMATCH.t(actualB64))
+                            // v0.9.0: UI может предложить владельцу ЯВНО принять
+                            // новый пин (анти-MITM канон: молча не доверяем никогда)
+                            listener?.onPinMismatch(this@RrpClient, actualB64)
                             throw TlsFatalAlert(AlertDescription.bad_certificate)
                         }
                     }
@@ -1186,27 +1201,6 @@ class RrpClient(
         }
     }
 
-    /** pin — hex (64 симв.) или base64 (32 байта) sha256 от SPKI. */
-    private fun decodePin(raw: String): ByteArray {
-        val p = raw.trim()
-        val bytes: ByteArray? = when {
-            p.matches(Regex("^[0-9a-fA-F]{64}$")) ->
-                ByteArray(32) { i -> p.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
-            else -> try {
-                Base64.getDecoder().decode(p)
-            } catch (e: IllegalArgumentException) {
-                try {
-                    Base64.getUrlDecoder().decode(p)
-                } catch (e2: IllegalArgumentException) {
-                    null
-                }
-            }
-        }
-        if (bytes == null || bytes.size != 32) {
-            throw RrpClientException(Msgs.PIN_FORMAT.t())
-        }
-        return bytes
-    }
 
     companion object {
         const val DEFAULT_AGENT = "ReverseRay-Android/0.8.2"
