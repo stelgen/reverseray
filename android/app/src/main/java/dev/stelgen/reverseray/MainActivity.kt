@@ -195,7 +195,10 @@ class MainActivity : AppCompatActivity() {
                     val rx = intent.getLongExtra(TunnelService.EXTRA_RX_RATE, 0L)
                     val tx = intent.getLongExtra(TunnelService.EXTRA_TX_RATE, 0L)
                     trafficGraph.addSample(rx.toFloat(), tx.toFloat())
-                    trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx))
+                    // v0.9.2 (R4): среднее (EMA) и пик по окну истории — из сервиса
+                    val gs = TunnelService.graphStats()
+                    trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx)) +
+                        "   ·   " + getString(R.string.traffic_stats, fmtRate(gs[0].toLong()), fmtRate(gs[2].toLong()))
                     val pkTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_COUNT, 0L)
                     val pkRx = intent.getLongExtra(TunnelService.EXTRA_PKT_RX_COUNT, 0L)
                     val szTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_SIZE, 0L)
@@ -233,7 +236,7 @@ class MainActivity : AppCompatActivity() {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { p ->
                                 setProtoText(getString(R.string.proto_current, RrpProtocols.labelWithVer(p)))
                             }
-                            setRunningUi(true)
+                            setUiState(state)
                         }
                         TunnelService.STATE_PROTO_ROLLBACK -> {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { old ->
@@ -244,9 +247,13 @@ class MainActivity : AppCompatActivity() {
                                     Toast.LENGTH_LONG,
                                 ).show()
                             }
+                            setUiState(state)
                         }
-                        TunnelService.STATE_STOPPED, TunnelService.STATE_ERROR -> setRunningUi(false)
-                        TunnelService.STATE_CONNECTED -> pinMismatchDialogShown = false
+                        TunnelService.STATE_CONNECTED -> {
+                            pinMismatchDialogShown = false
+                            setUiState(state)
+                        }
+                        else -> setUiState(state) // STOPPED/ERROR/LIMIT/INFO/PIN — кнопка честно отражает состояние
                     }
                 }
                 else -> {}
@@ -260,6 +267,14 @@ class MainActivity : AppCompatActivity() {
         // v0.8: применить сохранённые модули до сборки UI (реестр протоколов)
         loadCachedModules()
         buildUi()
+        // v0.9.2 (R3/R4): мгновенная синхронизация из сервиса — кнопка, статус,
+        // протокол и ИСТОРИЯ графика переживают пересоздание Activity.
+        syncUiFromService()
+        // v0.9.2 (R9): реестр обновился (модуль нового протокола прилетел) —
+        // строки протокола перерисовываются СРАЗУ, не дожидаясь статуса.
+        RrpProtocols.onRegistryChanged = {
+            runOnUiThread { refreshProtoLine() }
+        }
         // v0.8.2: журнал обновлений льётся в консоль СРАЗУ (реалтайм),
         // а не только при перерендере вкладки
         UpdateLogger.onLine = { line ->
@@ -360,7 +375,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPage(index: Int) {
         listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEachIndexed { i, p ->
-            p.visibility = if (i == index) View.VISIBLE else View.GONE
+            val show = i == index
+            p.visibility = if (show) View.VISIBLE else View.GONE
+            // v0.9.2 (R5): мягкий fade-переход вкладок (150мс, Views-канон)
+            if (show && p.alpha < 1f) {
+                p.animate().alpha(1f).setDuration(150).start()
+            } else if (show) {
+                p.alpha = 0.4f
+                p.animate().alpha(1f).setDuration(150).start()
+            }
         }
         when (index) {
             2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
@@ -1148,32 +1171,99 @@ class MainActivity : AppCompatActivity() {
         }
         val i = Intent(this, TunnelService::class.java).setAction(TunnelService.ACTION_START)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-        setRunningUi(true)
+        setUiState(TunnelService.STATE_CONNECTING)
     }
 
     private fun stopTunnel() {
         startService(Intent(this, TunnelService::class.java).setAction(TunnelService.ACTION_STOP))
-        setRunningUi(false)
+        setUiState(TunnelService.STATE_STOPPED)
     }
 
-    /** Одна центральная кнопка + пульс-кольцо в активных состояниях. */
-    private fun setRunningUi(running: Boolean) {
-        bigButtonIsStart = !running
-        if (running) {
-            bigButton.setText(R.string.btn_stop_short)
-            bigButton.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFC62828.toInt())
-            pulseRing.visibility = View.VISIBLE
-            startPulse()
-        } else {
-            bigButton.setText(R.string.btn_start_short)
-            bigButton.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF2E7D32.toInt())
-            pulseRing.visibility = View.GONE
-            stopPulse()
+    /**
+     * v0.9.2 (R3): состояния кнопки как первоклассная машина состояний:
+     * disconnected (зелёный Старт) / connecting (янтарный, вращение кольца)
+     * / connected (красный Стоп + пульс) / error (тёмно-красный, ожидание).
+     * Переходы цвета — плавные (ValueAnimator.ofArgb), без кринжа и аляпистости.
+     * Источник истины — TunnelService.lastState (сервис переживает recreate).
+     */
+    private fun setUiState(state: String) {
+        val mode = when (state) {
+            TunnelService.STATE_CONNECTED -> Mode.CONNECTED
+            TunnelService.STATE_CONNECTING, TunnelService.STATE_RETRY, TunnelService.STATE_PROTO_ROLLBACK -> Mode.CONNECTING
+            TunnelService.STATE_ERROR, TunnelService.STATE_LIMIT_REACHED, TunnelService.STATE_PIN_MISMATCH -> Mode.ERROR
+            else -> Mode.DISCONNECTED // STOPPED / INFO
+        }
+        applyButtonMode(mode)
+    }
+
+    private enum class Mode(val color: Int, val isStart: Boolean) {
+        DISCONNECTED(0xFF2E7D32.toInt(), true),
+        CONNECTING(0xFFB58300.toInt(), true),
+        CONNECTED(0xFFC62828.toInt(), false),
+        ERROR(0xFFB71C1C.toInt(), true),
+    }
+
+    private var buttonColorAnimator: android.animation.ValueAnimator? = null
+    private var ringMode: Mode? = null
+
+    private fun applyButtonMode(mode: Mode) {
+        bigButtonIsStart = mode.isStart
+        bigButton.setText(if (mode.isStart) R.string.btn_start_short else R.string.btn_stop_short)
+        val current = (bigButton.backgroundTintList?.defaultColor ?: mode.color)
+        if (current != mode.color) {
+            buttonColorAnimator?.cancel()
+            buttonColorAnimator = android.animation.ValueAnimator.ofArgb(current, mode.color).apply {
+                duration = 250
+                addUpdateListener { a ->
+                    bigButton.backgroundTintList =
+                        android.content.res.ColorStateList.valueOf(a.animatedValue as Int)
+                }
+                start()
+            }
+        }
+        // кольцо: connected — пульс, connecting — вращение, иначе скрыто
+        val ringState: Mode? = if (mode == Mode.CONNECTED || mode == Mode.CONNECTING) mode else null
+        if (ringState != ringMode) {
+            ringMode = ringState
+            if (ringState == null) {
+                pulseRing.visibility = View.GONE
+                stopPulse()
+            } else {
+                pulseRing.visibility = View.VISIBLE
+                if (ringState == Mode.CONNECTED) startPulse() else startSpin()
+            }
+        }
+    }
+
+    /** Мгновенная синхронизация UI из сервиса (v0.9.2 R3/R4) — после recreate. */
+    private fun syncUiFromService() {
+        setUiState(TunnelService.lastState)
+        // протокол и его известность — из ссылки + реестра сервера
+        refreshProtoLine()
+        // история графика живёт в сервисе — восстанавливаем целиком
+        val (buf, head, valid) = TunnelService.graphHistory()
+        trafficGraph.setHistory(buf, head, valid)
+        renderServiceLogs()
+    }
+
+    private var spinAnimator: android.animation.ValueAnimator? = null
+
+    /** Вращение кольца в состоянии connecting (аккуратная индикация попытки). */
+    private fun startSpin() {
+        stopPulse()
+        spinAnimator?.cancel()
+        spinAnimator = android.animation.ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = 1400
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { a -> pulseRing.rotation = a.animatedValue as Float }
+            start()
         }
     }
 
     private var pulseAnimator: android.animation.ValueAnimator? = null
     private fun startPulse() {
+        spinAnimator?.cancel()
         stopPulse()
         val a = android.animation.ValueAnimator.ofFloat(0f, 1f)
         a.duration = 1200
@@ -1189,6 +1279,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopPulse() {
+        spinAnimator?.cancel()
+        spinAnimator = null
         pulseAnimator?.cancel()
         pulseAnimator = null
         pulseRing.scaleX = 1f

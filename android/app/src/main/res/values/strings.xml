@@ -266,6 +266,8 @@
     <string name="log_limit_removed">limit removed by user — reconnecting</string>
     <string name="log_limit_period">limit period updated — reconnecting</string>
     <string name="log_proto_attempt">protocol switch: attempt %1$d/%2$d failed: %3$s</string>
+    <string name="traffic_stats">avg %1$s · peak %2$s</string>
+    <string name="log_proto_not_executable">protocol %1$s is advertised by a module but not executable in this build — connecting with %2$s (update the APK)</string>
     <string name="log_proto_applied">protocol applied: %1$s (link updated)</string>
     <string name="log_netcallback_failed">NetworkCallback not registered: %1$s</string>
     <string name="log_network_back">network is back — instant retry</string>

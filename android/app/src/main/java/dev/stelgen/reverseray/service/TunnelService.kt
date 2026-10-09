@@ -93,6 +93,10 @@ class TunnelService : Service() {
 
     private inner class Runner(val target: Target) {
         @Volatile var kick = false
+        /** v0.9.2: раннер выведен из эксплуатации (смена протокола) — поток
+         * runLoop обязан завершиться, а не пересоздать коннект (иначе
+         * двойные коннекты: старый+новый набор на один порт). */
+        @Volatile var retired = false
         /** активный клиент — для форс-закрытия при stopTunnel (иначе стоп ждёт handshake-таймаут до 20с) */
         @Volatile var client: RrpClient? = null
     }
@@ -237,7 +241,35 @@ class TunnelService : Service() {
 
     // ---------- туннель ----------
 
-    private fun currentProto(): String = RrpProtocols.normalize(prefs().getString(KEY_PROTO, null) ?: RrpProtocols.DEFAULT)
+    /**
+     * v0.9.2 (R2): ЕДИНЫЙ источник правды протокола — ССЫЛКА (proto=).
+     * Раньше протокол читался из отдельного KEY_PROTO, который перекрывал
+     * вставленную ссылку: после смены протокола новая ссылка с proto=rrp1
+     * продолжала подключаться mtproto2. Теперь proto всегда из ссылки;
+     * KEY_PROTO выведен из употребления (не читается).
+     */
+    internal fun currentProto(): String {
+        val cfg = try {
+            RrpUri.parse(prefs().getString(KEY_CONFIG, null) ?: "")
+        } catch (_: Exception) {
+            null
+        }
+        return RrpProtocols.normalizeExecutable(cfg?.proto)
+    }
+
+    /**
+     * Заявленный (отображаемый) протокол из ссылки: новый протокол модуля
+     * честно виден в GUI, даже если эта сборка ещё не умеет его исполнять
+     * (тогда коннект идёт на rrp1 — см. RrpProtocols.normalizeExecutable).
+     */
+    internal fun claimedProto(): String {
+        val cfg = try {
+            RrpUri.parse(prefs().getString(KEY_CONFIG, null) ?: "")
+        } catch (_: Exception) {
+            null
+        }
+        return RrpProtocols.normalize(cfg?.proto)
+    }
 
     private fun startTunnel() {
         if (!stopping && runners.isNotEmpty()) {
@@ -272,6 +304,7 @@ class TunnelService : Service() {
 
         spawnRunners()
         registerNetworkWatching()
+        resetGraphHistory()
         startStatsLoop()
         updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, cfg.host))
     }
@@ -328,6 +361,8 @@ class TunnelService : Service() {
                 val drx = rx - lastRx
                 lastTx = tx
                 lastRx = rx
+                // v0.9.2 (R4): история графика живёт в сервисе — переживает recreate
+                addGraphSample(drx * 1000f / STATS_INTERVAL_MS, dtx * 1000f / STATS_INTERVAL_MS)
 
                 // v0.8: счётчик за всё время (канон: RAM, запись на диск пореже)
                 prefs().edit()
@@ -515,6 +550,13 @@ class TunnelService : Service() {
                 return
             }
             updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, newProto))
+            // v0.9.2 (R1): АТОМАРНОСТЬ ПЕРЕКЛЮЧЕНИЯ — старые коннекты
+            // гарантированно закрыты ДО provisional-коннекта с новым протоколом.
+            // Раньше валидационный коннект шёл поверх живых runners: сервер
+            // держал две сессии, реконнект-луп параллельно молотил свой набор
+            // коннектов (в логах «Already running», двойные AUTH, фоллбек в
+            // середине свитча). Теперь: kill → validate → commit → spawn.
+            killRunners()
             var lastErr = ""
             for (attempt in 1..SWITCH_RETRIES) {
                 val client = buildClient(cfg, newProto, validate = true)
@@ -524,7 +566,7 @@ class TunnelService : Service() {
                     commitProto(newProto, cfg)
                     updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, newProto))
                     try { client.close() } catch (_: Exception) {}
-                    restartRunnersQuietly()
+                    spawnRunners()
                     return
                 } catch (e: Exception) {
                     lastErr = e.message ?: "?"
@@ -546,23 +588,29 @@ class TunnelService : Service() {
                     .putExtra(EXTRA_STATUS, getString(R.string.status_switch_rolled_back, newProto, oldProto, lastErr))
                     .putExtra(EXTRA_PROTO, oldProto)
             )
+            // v0.9.2 (R1): откат — рабочие коннекты старого протокола возрождаются
+            if (!stopping) spawnRunners()
         } finally {
             switchingProto = false
         }
     }
 
-    /** Коммит: протокол + ссылка с новым proto= сохраняются ПОСЛЕ успешной валидации. */
+    /**
+     * Коммит ПОСЛЕ успешной валидации: протокол отражается в ссылке
+     * (v0.9.2: единый источник — ссылка, KEY_PROTO больше не пишется).
+     */
     private fun commitProto(proto: String, cfg: RrpUriConfig) {
-        prefs().edit().putString(KEY_PROTO, proto).apply()
-        // обновляем ссылку: proto= должен отражать реально работающий протокол
         val updated = cfg.copy(proto = proto).serialize()
         prefs().edit().putString(KEY_CONFIG, updated).apply()
         pushLog(getString(R.string.log_proto_applied, proto))
     }
 
-    /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
-    private fun restartRunnersQuietly() {
-        if (stopping) return
+    /**
+     * v0.9.2 (R1): kill всех рабочих коннектов БЕЗ перезапуска — идёт
+     * валидационная смена протокола. Раннеры получают retired=true:
+     * их потоки runLoop завершаются, а не пересоздают коннекты.
+     */
+    private fun killRunners() {
         val active: List<Runner>
         synchronized(runners) {
             active = runners.toList()
@@ -570,8 +618,15 @@ class TunnelService : Service() {
         }
         active.forEach {
             it.kick = true
+            it.retired = true
             try { it.client?.close() } catch (_: Exception) {}
         }
+    }
+
+    /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
+    private fun restartRunnersQuietly() {
+        if (stopping) return
+        killRunners()
         spawnRunners()
     }
 
@@ -624,11 +679,26 @@ class TunnelService : Service() {
         var failStreak = 0
         while (!stopping) {
             val cfg = config ?: break
+            // v0.9.2 (R1): ГЕЙТ смены протокола — во время валидационного
+            // provisional-коннекта реконнект-луп не молотит свои попытки
+            // (атомарность: kill → validate → commit → spawn).
+            while (switchingProto && !stopping) {
+                try { Thread.sleep(200) } catch (_: InterruptedException) { return }
+            }
+            if (stopping || r.retired) return
             // протокол перечитываем КАЖДУЮ итерацию: так подхватывается
             // и смена протокола, и фоллбек, и заморозка обновлений (без пересоздания)
-            val useProto = RrpProtocols.normalize(
-                prefs().getString(KEY_PROTO, null) ?: RrpProtocols.DEFAULT,
-            )
+            // v0.9.2 (R2): протокол — только из ссылки (proto=), не из KEY_PROTO
+            val useProto = currentProto()
+            val claimed = claimedProto()
+            // v0.9.2 (R9): честный лог — протокол заявлен модулем/ссылкой,
+            // но эта сборка его ещё не исполняет → коннект на rrp1.
+            if (claimed != useProto) {
+                pushLog(
+                    getString(R.string.log_proto_not_executable, RrpProtocols.labelWithVer(claimed), RrpProtocols.labelWithVer(useProto)),
+                    LogKind.WARN,
+                )
+            }
             val client = RrpClient(
                 host = r.target.host,
                 port = r.target.port,
@@ -648,7 +718,7 @@ class TunnelService : Service() {
                 failStreak = 0
                 attempt = 0
                 updateStatus(STATE_CONNECTED, getString(R.string.status_connected, r.target.port))
-                while (!stopping && client.state == RrpClient.State.READY) {
+                while (!stopping && !switchingProto && client.state == RrpClient.State.READY) {
                     try {
                         Thread.sleep(500)
                     } catch (_: InterruptedException) {
@@ -663,7 +733,9 @@ class TunnelService : Service() {
                 // откатываемся на предыдущий рабочий (rrp1). Сервер НЕ откатываем
                 // (анти-цикл: обновления рассинхронизированы, авто-обновление
                 // может быть отключено — модули заморожены, это не должно ломать).
-                if (ProtoFallback.shouldFallback(useProto, failStreak)) {
+                // v0.9.2 (R1): во время смены протокола фоллбек не срабатывает —
+                // откат сделает switchProtocol после валидации.
+                if (!switchingProto && ProtoFallback.shouldFallback(useProto, failStreak)) {
                     pushLog(ProtoFallback.fallbackReason(useProto), LogKind.WARN)
                     applyProtoFallback(useProto)
                     return
@@ -672,7 +744,13 @@ class TunnelService : Service() {
                 try { client.close() } catch (_: Exception) {}
             }
             r.client = null
-            if (stopping) break
+            if (stopping || r.retired) return
+            if (switchingProto) {
+                // переход занят валидацией: попытка не считается, backoff сбросится
+                attempt = 0
+                failStreak = 0
+                continue
+            }
             attempt++
             val delay = RrpClient.backoffDelayMs(attempt - 1, rnd)
             // ERROR держится на экране минимум HOLD_ERROR_MS, чтобы юзер
@@ -691,7 +769,7 @@ class TunnelService : Service() {
      */
     private fun applyProtoFallback(brokenProto: String) {
         val p = prefs()
-        p.edit().putString(KEY_PROTO, RrpProtocols.DEFAULT).apply()
+        // v0.9.2 (R2): протокол живёт только в ссылке
         try {
             val cfg = RrpUri.parse(p.getString(KEY_CONFIG, "") ?: "")
             if (cfg.proto != RrpProtocols.DEFAULT) {
@@ -746,6 +824,7 @@ class TunnelService : Service() {
         unregisterNetworkWatching()
         releaseWakeLock()
         persistUsageSafely()
+        resetGraphHistory()
         updateStatus(STATE_STOPPED, getString(R.string.status_stopped))
     }
 
@@ -893,6 +972,11 @@ class TunnelService : Service() {
 
     private fun updateStatus(state: String, text: String) {
         lastStatus = text
+        // v0.9.2 (R3): источник истины для UI — сервис (переживает recreate):
+        // MainActivity синхронизируется из lastState/lastStatus/lastProto
+        // сразу после пересоздания, не дожидаясь очередного broadcast.
+        lastState = state
+        lastProto = claimedProto()
         // цветовая роль по состоянию (канон единого консольного окна v0.8)
         val kind = when (state) {
             STATE_CONNECTED, STATE_PROTO -> LogKind.OK
@@ -995,6 +1079,59 @@ class TunnelService : Service() {
         @Volatile private var nextSwitchAllowedAt = 0L
 
         @Volatile var lastStatus: String = ""
+        /** v0.9.2 (R3): последнее состояние/протокол — для мгновенной
+         * синхронизации UI после пересоздания Activity (кнопка/статус). */
+        @Volatile var lastState: String = STATE_STOPPED
+        @Volatile var lastProto: String = ""
+
+        /** v0.9.2 (R4): буфер графика живёт В СЕРВИСЕ (переживает recreate).
+         * Чередование [rx, tx], индекс головы, число валидных сэмплов (500мс).
+         * Служебные метрики: EMA-среднее и пик по окну истории. */
+        private const val GRAPH_SAMPLES = 120 // 60 c при 500 мс
+        private val graphLock = Any()
+        private val graph = FloatArray(GRAPH_SAMPLES * 2)
+        private var graphHead = 0
+        private var graphCount = 0
+        @Volatile private var graphAvgRxEma = 0f
+        @Volatile private var graphAvgTxEma = 0f
+        @Volatile private var graphPeak = 0f
+
+        /** Сэмпл скорости в историю графика (вызывается из stats-лупа). */
+        fun addGraphSample(rxRate: Float, txRate: Float) {
+            synchronized(graphLock) {
+                graphHead = (graphHead + 1) % GRAPH_SAMPLES
+                graph[graphHead * 2] = rxRate.coerceAtLeast(0f)
+                graph[graphHead * 2 + 1] = txRate.coerceAtLeast(0f)
+                if (graphCount < GRAPH_SAMPLES) graphCount++
+                graphAvgRxEma = graphAvgRxEma * 0.75f + rxRate.coerceAtLeast(0f) * 0.25f
+                graphAvgTxEma = graphAvgTxEma * 0.75f + txRate.coerceAtLeast(0f) * 0.25f
+                val peakNow = maxOf(rxRate, txRate).coerceAtLeast(0f)
+                if (peakNow > graphPeak) graphPeak = peakNow
+            }
+        }
+
+        /** Снимок истории для восстановления графика после recreate.
+         * Возвращает [rx, tx]-чередование, head, count. */
+        fun graphHistory(): Triple<FloatArray, Int, Int> {
+            synchronized(graphLock) {
+                return Triple(graph.copyOf(), graphHead, graphCount)
+            }
+        }
+
+        /** [avgRx, avgTx, peak] — сводка для подписей (байт/с). */
+        fun graphStats(): FloatArray = floatArrayOf(graphAvgRxEma, graphAvgTxEma, graphPeak)
+
+        /** Полный сброс истории (старт/стоп туннеля). */
+        fun resetGraphHistory() {
+            synchronized(graphLock) {
+                graph.fill(0f)
+                graphHead = 0
+                graphCount = 0
+            }
+            graphAvgRxEma = 0f
+            graphAvgTxEma = 0f
+            graphPeak = 0f
+        }
 
         /** Журнал статусов/ошибок (новые сверху) с цветовой ролью строки. */
         private val logLines = ArrayDeque<LogLine>()

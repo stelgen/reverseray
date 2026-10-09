@@ -22,4 +22,11 @@ object Formats {
     /** Скорость → «123 KB/s» (из ресурсов). */
     fun kbps(ctx: Context, kbps: Double): String =
         String.format(Locale.US, ctx.getString(R.string.fmt_speed_kbps), kbps)
+
+    /** Скорость в байт/с → «B/s / KB/s / MB/s» (v0.9.2: ось графика и подписи). */
+    fun rate(ctx: Context, bytesPerSec: Long): String = when {
+        bytesPerSec >= 1L shl 20 -> String.format(Locale.US, ctx.getString(R.string.rate_mb), bytesPerSec / (1024f * 1024f))
+        bytesPerSec >= 1L shl 10 -> String.format(Locale.US, ctx.getString(R.string.rate_kb), bytesPerSec / 1024f)
+        else -> String.format(Locale.US, ctx.getString(R.string.rate_b), bytesPerSec)
+    }
 }

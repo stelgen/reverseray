@@ -30,6 +30,12 @@ type SessionConfig struct {
 	// ProbeDialer — исходящий диал для PROBE-валидации (реальный трафик до
 	// реальных хостов перед переключением протокола). nil — PROBE отключён.
 	ProbeDialer func(ctx context.Context, target string, timeout time.Duration) error
+	// KeyPlan — обмен ключами протокола после READY (v0.9.2): KEY_REQ уходит
+	// из СЕССИИ (единственный читатель — Run), KEY_RESP читается в handle().
+	// nil — протокол без обмена ключами (rrp1). Подробности — rrp/crypto.go.
+	KeyPlan KeyPlan
+	// Logf — журнал сессии (обмен ключами). nil — тихо.
+	Logf func(format string, args ...any)
 	// NoiseHook — учёт камуфляжа «API Mask» (v0.8.2): вызываетсь на каждый
 	// обработанный NOISE (req, resp) — метрики сервера. nil — без учёта.
 	NoiseHook func(req, resp int)
@@ -107,6 +113,12 @@ type Session struct {
 	stats *list.List // recent Stats reports
 	lastS Stats
 
+	// v0.9.2: крипто-контекст протокола (mtproto2) — включается на лету после
+	// KEY_RESP. Доступ строго под s.mu (handle/writeLoop/keyTimer).
+	crypto   PayloadCrypto
+	keyPlan  KeyPlan
+	keyTimer *time.Timer
+
 	done chan struct{}
 }
 
@@ -137,6 +149,7 @@ func NewSession(id, device string, conn io.ReadWriteCloser, cfg SessionConfig) *
 		Device:   device,
 		Proto:    cfg.Protocol,
 		cfg:      cfg,
+		keyPlan:  cfg.KeyPlan,
 		wc:       conn,
 		outq:     make(chan outItem, 256),
 		streams:  make(map[uint32]*stream),
@@ -154,9 +167,27 @@ func NewSession(id, device string, conn io.ReadWriteCloser, cfg SessionConfig) *
 }
 
 // Run pumps frames until the transport or the session dies.
+// v0.9.2: обмен ключами протокола (mtproto2) стартует отсюда — KEY_REQ
+// уходит через очередь записи, KEY_RESP читается в handle() наравне с
+// PROBE/PING. Гонка «апгрейд против PROBE» невозможна by design.
 func (s *Session) Run() {
 	go s.writeLoop()
 	go s.pingLoop()
+	if s.keyPlan != nil {
+		req, err := s.keyPlan.RequestPayload()
+		if err == nil {
+			errc := make(chan error, 1)
+			s.outq <- outItem{frame: &Frame{Type: TypeKeyReq, Payload: req}, err: errc}
+			err = <-errc
+		}
+		if err != nil {
+			s.logf("rrp: key request failed: %v", err)
+			s.shutdown(err)
+			return
+		}
+		s.startKeyDeadline()
+		s.logf("rrp: key exchange started (session %s)", s.ID)
+	}
 	defer s.shutdown(errors.New("session ended"))
 	for {
 		if ds, ok := s.wc.(interface{ SetReadDeadline(time.Time) error }); ok {
@@ -178,6 +209,13 @@ func (s *Session) Run() {
 func (s *Session) handle(f *Frame) error {
 	switch f.Type {
 	case TypeData:
+		// v0.9.2: крипто-конверт (mtproto2) — расшифровка payload на входе.
+		// Битый конверт = нарушение протокола (DATA всегда идут конвертом).
+		plain, err := s.decryptDown(f.Payload)
+		if err != nil {
+			return fmt.Errorf("payload decrypt: %w", err)
+		}
+		f.Payload = plain
 		st := s.getStream(f.StreamID)
 		if st == nil {
 			// Unknown stream: ignore data, tell peer to stop.
@@ -231,11 +269,21 @@ func (s *Session) handle(f *Frame) error {
 		}
 		return nil
 	case TypeUdpData:
-		s.routeUdp(f)
+		plain, err := s.decryptDown(f.Payload)
+		if err != nil {
+			return fmt.Errorf("udp payload decrypt: %w", err)
+		}
+		s.routeUdp(&Frame{Type: TypeUdpData, Flags: f.Flags, StreamID: f.StreamID, Payload: plain})
 		return nil
 	case TypeProbe:
 		s.handleProbe(f)
 		return nil
+	case TypeKeyResp:
+		s.handleKeyResp(f)
+		return nil
+	case TypeKeyReq:
+		// KEY_REQ инициирует только сервер; от телефона — нарушение порядка.
+		return ErrProtocolOrder
 	case TypeNoise:
 		s.handleNoise(f)
 		return nil
@@ -326,6 +374,9 @@ func (s *Session) handleProbe(f *Frame) {
 	resp.OK = true
 	resp.Err = ""
 }
+
+// isPayloadFrame — кадры, чьи payload'ы идут через крипто-конверт.
+func isPayloadFrame(t uint8) bool { return t == TypeData || t == TypeUdpData }
 
 // ---- NOISE (v0.8.2, модуль камуфляжа «API Mask») ----
 
@@ -542,7 +593,7 @@ func (s *Session) writeLoop() {
 	for {
 		select {
 		case it := <-s.outq:
-			err := WriteFrame(s.wc, it.frame.Type, it.frame.Flags, it.frame.StreamID, it.frame.Payload)
+			err := s.emit(it.frame)
 			if it.err != nil {
 				it.err <- err
 			}
@@ -553,6 +604,106 @@ func (s *Session) writeLoop() {
 		case <-s.done:
 			return
 		}
+	}
+}
+
+// emit — один кадр наружу: payload-кадры (DATA/UDP_DATA) при включённой
+// крипте шифруются (конверт добавляет заголовки — открытый DATA режется на
+// чанки ≤ MaxPlainData; слишком большой UDP_DATA дропается — семантика UDP).
+// Вызывается только из writeLoop (горутин-эксклюзивно).
+func (s *Session) emit(f *Frame) error {
+	s.mu.Lock()
+	crypto := s.crypto
+	s.mu.Unlock()
+	if crypto == nil || !isPayloadFrame(f.Type) {
+		return WriteFrame(s.wc, f.Type, f.Flags, f.StreamID, f.Payload)
+	}
+	if f.Type == TypeUdpData {
+		if len(f.Payload) > crypto.MaxPlainData() {
+			return nil // дроп, UDP — без гарантий (как в mtproto wrapper)
+		}
+		env, err := crypto.EncryptUp(f.Payload)
+		if err != nil {
+			return err
+		}
+		return WriteFrame(s.wc, f.Type, f.Flags, f.StreamID, env)
+	}
+	payload := f.Payload
+	max := crypto.MaxPlainData()
+	for len(payload) > 0 {
+		chunk := payload
+		if len(chunk) > max {
+			chunk = chunk[:max]
+		}
+		payload = payload[len(chunk):]
+		env, err := crypto.EncryptUp(chunk)
+		if err != nil {
+			return err
+		}
+		if err := WriteFrame(s.wc, f.Type, f.Flags, f.StreamID, env); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decryptDown расшифровывает входящий payload-кадр (если крипта включена).
+// До завершения обмена ключами крипто nil — кадры идут открытыми.
+func (s *Session) decryptDown(payload []byte) ([]byte, error) {
+	s.mu.Lock()
+	crypto := s.crypto
+	s.mu.Unlock()
+	if crypto == nil || len(payload) == 0 {
+		return payload, nil
+	}
+	return crypto.DecryptDown(payload)
+}
+
+// ---- обмен ключами протокола (v0.9.2, внутри сессии) ----
+
+// handleKeyResp: KEY_RESP от телефона → Complete → крипто включена.
+// Вызывается из Run (единственный читатель) — гонок нет.
+func (s *Session) handleKeyResp(f *Frame) {
+	s.mu.Lock()
+	if s.crypto != nil || s.keyPlan == nil {
+		s.mu.Unlock()
+		return // повторный/неожиданный KEY_RESP — игнор (анти-мусор)
+	}
+	crypto, err := s.keyPlan.Complete(f.Payload)
+	if err != nil {
+		s.mu.Unlock()
+		s.logf("rrp: key exchange failed: %v", err)
+		s.shutdown(fmt.Errorf("key exchange: %w", err))
+		return
+	}
+	s.crypto = crypto
+	if s.keyTimer != nil {
+		s.keyTimer.Stop()
+		s.keyTimer = nil
+	}
+	s.mu.Unlock()
+	s.logf("rrp: payload crypto engaged (session %s, proto %s)", s.ID, s.Proto)
+}
+
+// startKeyDeadline: жёсткий дедлайн обмена ключами (битый клиент не висит
+// сессией вечно — idle-таймаут слишком долгий для рукопожатия).
+func (s *Session) startKeyDeadline() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keyTimer = time.AfterFunc(KeyExchangeTimeout, func() {
+		s.mu.Lock()
+		crypto := s.crypto
+		s.mu.Unlock()
+		if crypto == nil {
+			s.logf("rrp: key exchange timeout (%s) — closing", s.ID)
+			s.shutdown(fmt.Errorf("key exchange timeout"))
+		}
+	})
+}
+
+func (s *Session) logf(format string, args ...any) {
+	if s.cfg.Logf != nil {
+		s.cfg.Logf(format, args...)
 	}
 }
 

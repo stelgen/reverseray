@@ -530,6 +530,13 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.PingInterval = a.cfg.PingInterval()
 	scfg.Protocol = proto
 	scfg.ProbeDialer = a.probeDialer()
+	// v0.9.2: обмен ключами mtproto2 — ВНУТРИ сессии (KEY_REQ уходит после
+	// старта Run, KEY_RESP читается Session.handle). Прежняя схема
+	// (UpgradeServer в рукопожатии) гонялась с клиентским PROBE за один
+	// сокет: PROBE мог быть съеден апгрейдом → «protocol error» на клиенте.
+	if proto == mtproto.ProtoID {
+		scfg.KeyPlan = mtproto.NewServerPlan(sid, a.log)
+	}
 	// v0.8.2: учёт камуфляжа «API Mask» — метрики без IP/содержимого
 	scfg.NoiseHook = func(req, resp int) {
 		a.met.ApimaskFrames.Add(1)
@@ -550,23 +557,22 @@ func (a *App) handleTunnel(conn net.Conn) {
 		return
 	}
 
-	// v0.8: протокол mtproto2 — ПОСЛЕ READY (клиент ждёт READY, потом KEY_REQ)
-	// ключи туннеля перегенерируются DH-обменом и DATA/UDP_DATA уходят
-	// в MTProto 2.0-конверте (AES-256-IGE, см. internal/mtproto).
+	// v0.8/v0.9.2: mtproto2 — ключи перегенерируются DH-обменом ПОСЛЕ READY,
+	// DATA/UDP_DATA уходят в MTProto 2.0-конверте (AES-256-IGE). Обмен ключами
+	// и включение крипты теперь живут в rrp.Session (KeyPlan): рукопожатие
+	// завершено, reject «protocol error» из-за гонки PROBE/KEY_RESP невозможен.
 	if proto == mtproto.ProtoID {
-		// дедлайн на обмен ключами: битый клиент не висит горутиной вечно
-		_ = tc.SetDeadline(time.Now().Add(15 * time.Second))
-		upgraded, uerr := mtproto.UpgradeServer(framed, sid, a.log)
-		if uerr != nil {
-			a.log.Warn("mtproto upgrade failed", "device", device, "err", uerr)
-			a.rejectHandshake(ip, framed, "protocol error")
-			return
+		scfg.Logf = func(format string, args ...any) {
+			a.log.Info(fmt.Sprintf(format, args...), "device", device, "session", sid)
 		}
-		framed = upgraded
 		a.met.ProtoSessions.Add(1)
 		defer a.met.ProtoSessions.Add(-1)
-		_ = tc.SetDeadline(time.Time{}) // дальше сессия ставит свои таймауты
-		a.log.Info("mtproto2 transport engaged", "device", device, "session", sid)
+	}
+	// v0.9.2: честный лог даунгрейда — клиент попросил протокол, заявленный
+	// в реестре, но не исполняемый этой сборкой (модуль прилетел раньше кода).
+	if req := hello.Proto.String(); req != "" && rrp.IsSupported(req) && !rrp.IsExecutable(req) && proto != req {
+		a.log.Warn("requested protocol is advertised but not executable on this build — negotiated default",
+			"device", device, "requested", req, "negotiated", proto)
 	}
 
 	sess := rrp.NewSession(sid, device, framed, scfg)

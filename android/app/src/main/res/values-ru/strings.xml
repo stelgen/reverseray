@@ -266,6 +266,8 @@
     <string name="log_limit_removed">лимит снят пользователем — реконнект</string>
     <string name="log_limit_period">период лимита обновился — реконнект</string>
     <string name="log_proto_attempt">смена протокола: попытка %1$d/%2$d не удалась: %3$s</string>
+    <string name="traffic_stats">ср. %1$s · пик %2$s</string>
+    <string name="log_proto_not_executable">протокол %1$s заявлен модулем, но не исполняется этой версией приложения — подключение на %2$s (обновите APK)</string>
     <string name="log_proto_applied">протокол применён: %1$s (ссылка обновлена)</string>
     <string name="log_netcallback_failed">NetworkCallback не зарегистрирован: %1$s</string>
     <string name="log_network_back">сеть появилась — мгновенный retry</string>

@@ -56,6 +56,34 @@ var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2}
 // registryVersion — версия реестра (берётся из манифеста модулей; пусто = встроенная).
 var registryVersion = ""
 
+// executableProtocols — протоколы, которые сервер УМЕЕТ ИСПОЛНЯТЬ (в коде:
+// конверты payload'ов + обмены ключами). Реестр (supportedProtocols) шире —
+// он «реклама» для клиентов/UI: новый протокол из манифеста сразу виден
+// в списках, но согласуется ТОЛЬКО когда обе стороны умеют его исполнять
+// (v0.9.2: иначе сессия молча работала бы как rrp1, обе стороны думая,
+// что идёт заявленный протокол — прод-риск).
+// Будущий протокол добавляется кодом сюда — реестр подхватит из манифеста.
+var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2}
+
+// ExecutableIDs — протоколы, исполняемые этой сборкой сервера.
+func ExecutableIDs() []string {
+	out := make([]string, 0, len(executableProtocols))
+	for _, p := range executableProtocols {
+		out = append(out, p.ID)
+	}
+	return out
+}
+
+// IsExecutable — умеет ли сервер ИСПОЛНЯТЬ протокол (не только показывать).
+func IsExecutable(id string) bool {
+	for _, p := range executableProtocols {
+		if strings.EqualFold(p.ID, id) {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultProtocolID — самый стабильный протокол (имплементирован у нас всегда).
 const DefaultProtocolID = "rrp1"
 
@@ -341,14 +369,23 @@ func NormalizeProto(raw string) string {
 // clientProto — значение &proto= из ссылки клиента (может быть мусором);
 // clientOffers — список, который клиент готов поддерживать; serverDefault —
 // дефолт сервера (RR_PROTOCOL). Возвращает канонический id.
+//
+// v0.9.2: согласуются ТОЛЬКО исполняемые протоколы (IsExecutable). Протокол,
+// заявленный в реестре/манифесте, но не реализованный в этой сборке,
+// согласуется в честный дефолт (rrp1) — сессия никогда не «притворяется»
+// протоколом, которого сервер не умеет. Списки для UI остаются полными
+// (SupportedIDs — реклама реестра, см. ExecutableIDs).
 func Negotiate(clientProto string, clientOffers []string, serverDefault string) string {
 	// 1) клиент явно попросил протокол (даже мусор сводится к дефолту, а не к ошибке)
 	if strings.TrimSpace(clientProto) != "" {
-		return NormalizeProto(clientProto)
+		if IsExecutable(clientProto) {
+			return NormalizeProto(clientProto)
+		}
+		return NormalizeProto(serverDefault)
 	}
-	// 2) первый общий протокол из списка клиента
+	// 2) первый ОБЩИЙ И ИСПОЛНЯЕМЫЙ протокол из списка клиента
 	for _, offer := range clientOffers {
-		if IsSupported(offer) {
+		if IsExecutable(offer) {
 			return NormalizeProto(offer)
 		}
 	}

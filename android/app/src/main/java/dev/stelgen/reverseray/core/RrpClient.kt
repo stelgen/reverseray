@@ -234,6 +234,9 @@ class RrpClient(
     private val streams = ConcurrentHashMap<Long, Stream>()
     private val nextStreamId = AtomicLong(1)
     private val lastPongMs = AtomicLong(0)
+    // v0.9.2 (R6): адаптивный keepalive — время отправки последнего PING и RTT
+    private val lastPingSentAt = AtomicLong(0)
+    private val lastRttMs = AtomicLong(0)
 
     private val pingExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-ping").apply { isDaemon = true } }
@@ -460,7 +463,15 @@ class RrpClient(
             is RrpFrame.Window -> streams[frame.streamId]?.sendWindow
                 ?.release(frame.increment.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             is RrpFrame.Ping -> sendFrameQuiet(RrpFrame.Pong(frame.nonce))
-            is RrpFrame.Pong -> lastPongMs.set(System.currentTimeMillis())
+            is RrpFrame.Pong -> {
+                lastPongMs.set(System.currentTimeMillis())
+                // v0.9.2 (R6): фактический RTT — для адаптивного keepalive
+                val sentAt = lastPingSentAt.get()
+                if (sentAt > 0) {
+                    val rtt = System.currentTimeMillis() - sentAt
+                    if (rtt in 1..300_000) lastRttMs.set(rtt)
+                }
+            }
             is RrpFrame.Stats -> log("STATS: ${frame.json}")
             is RrpFrame.ProbeResp -> {
                 log("RECV PROBE ok=${frame.ok} err=${frame.err} proto=${frame.proto}")
@@ -886,12 +897,13 @@ class RrpClient(
             pingExecutor.schedule({
                 if (!running.get()) return@schedule
                 try {
+                    lastPingSentAt.set(System.currentTimeMillis())
                     sendFrame(RrpFrame.Ping(ByteArray(NONCE_SIZE).also { rnd.nextBytes(it) }))
                 } catch (e: IOException) {
                     log(Msgs.PING_SEND_FAILED.t(e.message))
                 }
                 scheduleNextPing()
-            }, pingIntervalMs(rnd), TimeUnit.MILLISECONDS)
+            }, pingIntervalMs(rnd, lastRttMs.get()), TimeUnit.MILLISECONDS)
         } catch (_: RejectedExecutionException) {
         }
     }
@@ -1214,6 +1226,10 @@ class RrpClient(
 
         /** Таймаут валидационного PROBE, мс (сервер клампит в 1..15 с). */
         const val PROBE_TIMEOUT_MS = 5_000L
+
+        /** v0.9.2 (R6): границы адаптивного keepalive (см. pingIntervalMs). */
+        private const val MIN_PING_INTERVAL_MS = 20_000L
+        private const val MAX_PING_INTERVAL_MS = 55_000L
         const val TRANSPORT_TCP = "tcp"
         const val TRANSPORT_WS = "ws"
 
@@ -1277,10 +1293,20 @@ class RrpClient(
 
         private const val PING_INTERVAL_MS = 60_000L
 
-        /** Интервал PING: 60 с ±10 % джиттера. */
-        fun pingIntervalMs(rnd: Random): Long {
-            val jitter = PING_INTERVAL_MS / 10
-            return PING_INTERVAL_MS - jitter + rnd.nextInt((2 * jitter + 1).toInt())
+        /** Интервал PING: 60 с ±10 % джиттера (базовый, без данных RTT). */
+        fun pingIntervalMs(rnd: Random): Long = pingIntervalMs(rnd, 0L)
+
+        /**
+         * v0.9.2 (R6): адаптивный keepalive — интервал из фактического RTT:
+         * base = clamp(RTT × 4, 20с, 55с) ±10 % джиттера; без RTT — 60с.
+         * Мобильные сети с длинным RTT пингуют реже (экономия батарейки
+         * и трафика), быстрые Wi-Fi — чаще (раньше ловим мёртвый сокет).
+         * Idle-таймаут сервера 180с — держим интервал < 60с всегда.
+         */
+        fun pingIntervalMs(rnd: Random, rttMs: Long): Long {
+            val base = if (rttMs > 0) (rttMs * 4).coerceIn(MIN_PING_INTERVAL_MS, MAX_PING_INTERVAL_MS) else PING_INTERVAL_MS
+            val jitter = base / 10
+            return base - jitter + rnd.nextInt((2 * jitter + 1).toInt())
         }
 
         /** Экспоненциальный backoff переподключения 1→60 с ±30 % джиттера; attempt — 0-based. */

@@ -24,11 +24,45 @@ object RrpProtocols {
     /** Встроенные (манифест может расширить/выключить — кроме rrp1). */
     val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID)
 
+    /**
+     * v0.9.2: протоколы, которые КЛИЕНТ УМЕЕТ ИСПОЛНЯТЬ (код конвертов
+     * payload'ов/обмена ключами в этой сборке). Реестр (манифест ∪ сервер)
+     * шире — он «реклама» для списков/пикера: новый протокол из модуля
+     * виден в GUI ВСЕГДА, но коннектится только когда обе стороны умеют его
+     * исполнять (зеркало server/internal/rrp: Negotiate смотрит только
+     * исполняемые). Будущая реализация протокола добавляет себя сюда.
+     */
+    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID)
+
+    /** Умеет ли клиент исполнять протокол (не только показывать в GUI). */
+    fun isExecutable(id: String?): Boolean {
+        val clean = Modules.normalizeId(id ?: "")
+        return EXECUTABLE.contains(clean)
+    }
+
+    /**
+     * Исполняемая нормализация для подключения: неизвестный/неисполняемый
+     * id → дефолт (никогда не ошибка; канон «мусор не ломает стек»).
+     * Отображаемая нормализация (normalize) при этом оставляет заявленный id —
+     * GUI честно показывает протокол из модуля, даже если исполняется rrp1.
+     */
+    fun normalizeExecutable(raw: String?): String {
+        val shown = normalize(raw)
+        return if (isExecutable(shown)) shown else DEFAULT
+    }
+
     /** Встроенные метки/версии — зеркало modules/modules.json (v0.8.1). */
     val BUNDLED_LABELS: Map<String, String> = mapOf(DEFAULT to "RRP/1", MtProto.PROTO_ID to "MTProto/2")
     val BUNDLED_VERS: Map<String, String> = mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0")
 
     // ---- динамический реестр (манифест модулей) ----
+
+    /** v0.9.2: слушатель обновления реестра — GUI перерисовывает списки
+     * протоколов СРАЗУ (модуль прилетел / сервер прислал реестр), не дожидаясь
+     * очередного статуса. Вызывается на чужом потоке — подписчик сам
+     * переключается на UI-поток. */
+    @Volatile
+    var onRegistryChanged: (() -> Unit)? = null
 
     @Volatile
     private var registryIds: List<String> = BUNDLED
@@ -75,6 +109,10 @@ object RrpProtocols {
             registryLabels = l
             registryVers = v
         }
+        // v0.9.2: реестр обновлён (модуль прилетел) — GUI немедленно перерисует
+        // списки протоколов (вызывается с фонового потока — подписчик сам
+        // переключается на UI-поток).
+        onRegistryChanged?.invoke()
     }
 
     /** Версия активного реестра ("" — встроенный). */
@@ -119,7 +157,14 @@ object RrpProtocols {
     /** Запоминает реестр протоколов, присланный сервером (HELLO_OK/READY). */
     fun rememberServerProtocols(ids: List<String>) {
         if (ids.isNotEmpty()) {
-            serverKnown = ids.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+            val next = ids.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+            val changed = next != serverKnown
+            serverKnown = next
+            // v0.9.2: сервер прислал реестр (HELLO_OK/READY) — новый протокол
+            // немедленно появляется в GUI (пикер/строки протокола).
+            if (changed) {
+                onRegistryChanged?.invoke()
+            }
         }
     }
 

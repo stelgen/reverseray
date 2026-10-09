@@ -166,6 +166,9 @@ func (sc *SessionCrypto) decryptEnvelope(x int, env []byte) ([]byte, error) {
 	return append([]byte(nil), inner[32:32+msgLen]...), nil
 }
 
+// MaxPlainData — максимум открытого чанка для конверта (rrp.PayloadCrypto).
+func (sc *SessionCrypto) MaxPlainData() int { return maxPlainData }
+
 // ---- направления-обёртки ----
 
 // EncryptUp — сервер → клиент (x=8). EncryptDown — клиент → сервер (x=0).
@@ -305,6 +308,71 @@ func UpgradeClient(framed io.ReadWriteCloser, sid string, log *slog.Logger) (io.
 		log.Info("mtproto2: клиент применил ключи", "session", sid)
 	}
 	return newWrapper(framed, sc, false), nil
+}
+
+// ---- ServerPlan (v0.9.2): обмен ключами ВНУТРИ сессии ----
+//
+// Замена UpgradeServer-в-рукопожатии: сервер шлёт KEY_REQ из сессии
+// (Session.Run — единственный читатель сокета), KEY_RESP приходит как
+// control-кадр. Гонка с PROBE/PING невозможна by design (см. rrp/crypto.go).
+
+// ServerPlan — rrp.KeyPlan серверной стороны mtproto2.
+type ServerPlan struct {
+	sid  string
+	log  *slog.Logger
+	pair *KeyPair
+	ga   []byte
+}
+
+// NewServerPlan строит план обмена ключами для сессии sid.
+func NewServerPlan(sid string, log *slog.Logger) *ServerPlan {
+	return &ServerPlan{sid: sid, log: log}
+}
+
+// RequestPayload генерирует DH-пару и возвращает payload кадра KEY_REQ.
+func (p *ServerPlan) RequestPayload() ([]byte, error) {
+	pair, err := GeneratePair()
+	if err != nil {
+		return nil, err
+	}
+	p.pair = pair
+	p.ga = PublicBytes(pair.Public)
+	req, _ := json.Marshal(keyReqJSON{P: b64(P.Bytes()), G: int(G.Int64()), GA: b64(p.ga)})
+	return req, nil
+}
+
+// Complete валидирует KEY_RESP (g_b) и возвращает крипто-контекст сессии.
+func (p *ServerPlan) Complete(payload []byte) (rrp.PayloadCrypto, error) {
+	if p.pair == nil {
+		return nil, fmt.Errorf("%w: KEY_REQ не отправлялся", ErrKeyExchange)
+	}
+	var resp keyRespJSON
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		return nil, fmt.Errorf("%w: KEY_RESP не JSON: %v", ErrKeyExchange, err)
+	}
+	gbRaw, err := base64.RawURLEncoding.DecodeString(resp.GB)
+	if err != nil {
+		return nil, fmt.Errorf("%w: g_b не base64", ErrKeyExchange)
+	}
+	gb, err := PublicFromBytes(gbRaw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrKeyExchange, err)
+	}
+	if err := ValidatePublic(gb); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrKeyExchange, err)
+	}
+	authKey, err := p.pair.Shared(gb)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrKeyExchange, err)
+	}
+	sc, err := NewSessionCrypto(authKey, saltFor(p.sid, p.ga, gbRaw), sessionID8(p.sid))
+	if err != nil {
+		return nil, err
+	}
+	if p.log != nil {
+		p.log.Info("mtproto2: ключи согласованы", "session", p.sid)
+	}
+	return sc, nil
 }
 
 func readFrameWithTimeout(r io.Reader, d time.Duration) (*rrp.Frame, error) {
