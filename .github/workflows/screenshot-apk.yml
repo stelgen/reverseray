@@ -50,7 +50,7 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon
-      - name: Boot emulator (3 attempts, logs kept)
+      - name: Boot emulator (4 attempts, logs kept)
         run: |
           set -e
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
@@ -70,12 +70,27 @@ jobs:
           "$ADB" start-server >/dev/null 2>&1 || true
           IMG="$SDK/system-images/android-30/google_apis/x86_64"
           [ -d "$IMG" ] || { echo "::error::system-image android-30 не установлен"; exit 1; }
-          echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
-            -n ci -k "system-images;android-30;google_apis;x86_64" -d pixel || true
-          [ -e "$HOME/.android/avd/ci.avd" ] || { echo "::error::AVD ci не создан (avdmanager упал)"; exit 1; }
+          # v0.9.4-фикс: ошибка avdmanager больше не глотается «|| true» —
+          # вывод падения уходит в boot-fail.log (артефакт), фоллбек без -d pixel
+          # (профиль может отсутствовать в свежих cmdline-tools), AVD home — явно.
+          export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          mkdir -p "$ANDROID_AVD_HOME"
+          AVDLOG="$(mktemp)"
+          if ! echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+               -n ci -k "system-images;android-30;google_apis;x86_64" -d pixel >"$AVDLOG" 2>&1; then
+            { echo "== avdmanager(-d pixel) failed =="; cat "$AVDLOG"; } >> boot-fail.log || true
+            if ! echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+                 -n ci -k "system-images;android-30;google_apis;x86_64" >"$AVDLOG" 2>&1; then
+              { echo "== avdmanager(без -d) failed =="; cat "$AVDLOG"; } >> boot-fail.log || true
+              echo "::error::AVD ci не создан — вывод avdmanager в артефакте boot-fail.log"
+              exit 1
+            fi
+          fi
+          echo "== avd home ==" >> boot-fail.log; ls -la "$ANDROID_AVD_HOME" >> boot-fail.log 2>&1 || true
+          [ -e "$ANDROID_AVD_HOME/ci.avd" ] || { echo "::error::AVD ci не найден в $ANDROID_AVD_HOME"; exit 1; }
           # v0.9.3-диагностика: состояние KVM/accel в артефакт (boot-fail.log)
           { echo "== kvm =="; ls -l /dev/kvm 2>&1 || true
-            echo "== accel check =="; "$SDK/emulator/emulator" -accel check 2>&1 || true; } > boot-fail.log || true
+            echo "== accel check =="; "$SDK/emulator/emulator" -accel check 2>&1 || true; } >> boot-fail.log || true
           boot=0
           for b in 1 2 3 4; do # v0.9.3: 4 попытки (v0.9.3-релиз упал на boot при 3)
             echo "boot attempt $b"

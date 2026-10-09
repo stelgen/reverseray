@@ -74,7 +74,11 @@ jobs:
           ok=""
           for attempt in 1 2; do # v0.9.3: здоровь-ожидание 240с + вторая попытка контейнера
             docker rm -f rr-web >/dev/null 2>&1 || true
+            # v0.9.4-фикс КОРНЯ: дефолт admin-листенера в образе = 127.0.0.1:9090
+            # (канон приватности) — хост получал RST на каждый коннект (curl 56),
+            # при этом in-container healthcheck был зелёный. Явно наружу.
             docker run -d --name rr-web -p 127.0.0.1:9090:9090 \
+              -e RR_LISTEN_ADMIN_TCP=:9090 \
               -e RR_STATE_DIR=/var/lib/reverseray \
               "ghcr.io/stelgen/reverseray:${TAG}"
             for i in $(seq 1 120); do # 240с: на загруженном раннере healthy приходит поздно
