@@ -58,20 +58,37 @@ jobs:
         run: |
           set -e
           TAG="${{ steps.tag.outputs.tag }}"
-          docker run -d --name rr-web -p 127.0.0.1:9090:9090 \
-            -e RR_STATE_DIR=/var/lib/reverseray \
-            "ghcr.io/stelgen/reverseray:${TAG}"
+          # v0.9.3: явный pull с ретраем (анонимный ghcr — образ публичный,
+          # но на загруженном раннере пулл+старт не всегда влезают в 120с;
+          # сервер сам по себе здоров — это подтверждает docker-гейт Release)
+          pulled=0
+          for a in 1 2 3; do
+            if docker pull "ghcr.io/stelgen/reverseray:${TAG}"; then pulled=1; break; fi
+            sleep 5
+          done
+          if [ "$pulled" != "1" ]; then
+            { echo "== docker version =="; docker version || true; } > web-run-fail.txt || true
+            echo "::error::docker pull не удался за 3 попытки — см. артефакт shot-web"
+            exit 1
+          fi
           ok=""
-          for i in $(seq 1 60); do # 120с: healthcheck start-period 10s + интервал 30s — на загруженном раннере healthy приходит к ~40-90с
-            st=$(docker inspect --format '{{.State.Health.Status}}' rr-web 2>/dev/null || echo unknown)
-            if [ "$st" = "healthy" ]; then ok=1; break; fi
-            sleep 2
+          for attempt in 1 2; do # v0.9.3: здоровь-ожидание 240с + вторая попытка контейнера
+            docker rm -f rr-web >/dev/null 2>&1 || true
+            docker run -d --name rr-web -p 127.0.0.1:9090:9090 \
+              -e RR_STATE_DIR=/var/lib/reverseray \
+              "ghcr.io/stelgen/reverseray:${TAG}"
+            for i in $(seq 1 120); do # 240с: на загруженном раннере healthy приходит поздно
+              st=$(docker inspect --format '{{.State.Health.Status}}' rr-web 2>/dev/null || echo unknown)
+              if [ "$st" = "healthy" ]; then ok=1; break; fi
+              sleep 2
+            done
+            [ "$ok" = "1" ] && break
+            { echo "== attempt $attempt state =="; docker inspect rr-web --format '{{json .State}}' || true
+              echo "== health log =="; docker inspect rr-web --format '{{json .State.Health}}' || true
+              echo "== logs =="; docker logs --tail 80 rr-web || true; } >> web-run-fail.txt || true
           done
           if [ "$ok" != "1" ]; then
-            { echo "== state =="; docker inspect rr-web --format '{{json .State}}' || true
-              echo "== health log =="; docker inspect rr-web --format '{{json .State.Health}}' || true
-              echo "== logs =="; docker logs --tail 80 rr-web || true; } > web-run-fail.txt || true
-            echo "::error::веб-контейнер не healthy — см. артефакт shot-web"
+            echo "::error::веб-контейнер не healthy за 2 попытки (240с каждая) — см. артефакт shot-web"
             exit 1
           fi
           curl -fsS --max-time 5 http://127.0.0.1:9090/healthz
