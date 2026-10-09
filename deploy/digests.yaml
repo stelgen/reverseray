@@ -1,12 +1,11 @@
 # Release digests (источник для прод-compose пиннинов).
 # Формат: тег -> образ digest. Храним последние 3.
-# Обновляется релиз-пайплайном (post-factum, continue-on-error);
-# v0.8.1..v0.8.3 заполнены вручную по digest из ghcr (закрытие пробела,
-# пока auto-commit релиза ещё не прокатился ни разу).
+# Обновляется релиз-пайплайном (post-factum, continue-on-error, branch: main).
+# v0.8.2..v0.9.0 заполнены вручную по digest из ghcr.
 releases:
-  - tag: v0.8.1
-    image: ghcr.io/stelgen/reverseray@sha256:3fe6cd9dc7898febb60c23c968ad584529f7ce11a67c7642dee7d947cee7f681
   - tag: v0.8.2
     image: ghcr.io/stelgen/reverseray@sha256:b5784677cd0afb944410a7c312546412c16e7db868d82a8d0a066a7cf2746bc5
   - tag: v0.8.3
     image: ghcr.io/stelgen/reverseray@sha256:c42e565bc8c29326c6629732f080aae2bef0da471163033b6a9f10939150f441
+  - tag: v0.9.0
+    image: ghcr.io/stelgen/reverseray@sha256:c2542e5fe59ed45799dc7f330f71680ff84a2af5f11b8da72111b0c281b62f30
