@@ -13,7 +13,7 @@ material = "1.9.0"
 # BC тянет minSdk 14). 1.80 = пост-миграция на TlsCrypto-API (DefaultTlsClient(TlsCrypto),
 # ALPN через getProtocolNames()/ProtocolName)
 bcprov = "1.86"
-bctls = "1.86.1"
+bctls = "1.86.2"
 bcutil = "1.86"
 bcpkix = "1.86"
 
