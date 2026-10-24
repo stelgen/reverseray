@@ -201,6 +201,7 @@ class MainActivity : AppCompatActivity() {
                     val rx = intent.getLongExtra(TunnelService.EXTRA_RX_RATE, 0L)
                     val tx = intent.getLongExtra(TunnelService.EXTRA_TX_RATE, 0L)
                     trafficGraph.addSample(rx.toFloat(), tx.toFloat())
+                    syncGraphVisibility()
                     // v0.9.2 (R4): среднее (EMA) и пик по окну истории — из сервиса
                     val gs = TunnelService.graphStats()
                     trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx)) +
@@ -1378,6 +1379,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** v0.9.7 (GUI-финал): пустой график не занимает место — GONE до первых данных. */
+    private fun syncGraphVisibility() {
+        trafficGraph.visibility = if (trafficGraph.hasData()) View.VISIBLE else View.GONE
+    }
+
     /** Мгновенная синхронизация UI из сервиса (v0.9.2 R3/R4) — после recreate. */
     private fun syncUiFromService() {
         setUiState(TunnelService.lastState)
@@ -1387,6 +1393,7 @@ class MainActivity : AppCompatActivity() {
         // история графика живёт в сервисе — восстанавливаем целиком
         val (buf, head, valid) = TunnelService.graphHistory()
         trafficGraph.setHistory(buf, head, valid)
+        syncGraphVisibility()
         renderServiceLogs()
     }
 

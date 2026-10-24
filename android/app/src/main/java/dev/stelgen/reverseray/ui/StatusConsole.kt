@@ -101,7 +101,7 @@ class StatusConsole @JvmOverloads constructor(
     }
     private val body = TextView(context).apply {
         typeface = Typeface.MONOSPACE
-        textSize = 11f
+        textSize = 12f // v0.9.7 (GUI-финал): 11 → 12sp — читаемость лога без потери плотности
         setTextColor(0xFFD8DCE6.toInt())
         setPadding(dp(10), dp(8), dp(10), dp(10))
         setTextIsSelectable(true)

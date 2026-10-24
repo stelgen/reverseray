@@ -86,6 +86,9 @@ class TrafficGraphView(context: Context) : View(context) {
         postInvalidate()
     }
 
+    /** v0.9.7 (GUI-финал): есть ли данные — для схлопывания пустого графика. */
+    fun hasData(): Boolean = count > 0
+
     fun reset() {
         head = 0
         count = 0
