@@ -95,6 +95,9 @@
     <string name="transport_same">Transport already selected</string>
     <string name="conn_line">Connection: %1$s · %2$s</string>
     <string name="upd_auto_modules">app updated — syncing protocol modules</string>
+    <string name="udp_toggle">UDP relay (%1$s)</string>
+    <string name="log_udp_on">udp relay enabled — datagrams flow again</string>
+    <string name="log_udp_off">udp relay disabled by toggle — datagrams rejected (zero-byte rule)</string>
 
     <!-- Update -->
     <string name="version_row">Version: %1$s (code %2$d)</string>
@@ -201,6 +204,8 @@
     <string name="dev_java">Java</string>
 
     <string name="speedtest_line">Speed test: %1$s</string>
+    <string name="speedtest_card">%1$s MB/s · ping %2$s ms · %3$s</string>
+    <string name="speedtest_failed_short">failed: %1$s</string>
     <string name="speedtest_waiting">Speed test: after connect (if limit not reached)</string>
     <string name="config_hint_title">Connection link</string>
     <string name="update_progress">Download: %1$d%% · %2$s</string>
@@ -263,9 +268,9 @@
     <string name="apimask_budget_done">Masking %1$s: daily budget used up (%2$s of %3$s) — noise paused until tomorrow</string>
 
     <!-- v0.8.3: форматтеры и оставшиеся динамические строки -->
-    <string name="fmt_bytes_gb">%s GB</string>
-    <string name="fmt_bytes_mb">%s MB</string>
-    <string name="fmt_bytes_kb">%s KB</string>
+    <string name="fmt_bytes_gb">%1$.1f GB</string>
+    <string name="fmt_bytes_mb">%1$.1f MB</string>
+    <string name="fmt_bytes_kb">%1$.1f KB</string>
     <string name="fmt_bytes_b">%s B</string>
     <string name="fmt_speed_kbps">%.0f KB/s</string>
 

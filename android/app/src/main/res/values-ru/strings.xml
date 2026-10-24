@@ -91,6 +91,9 @@
     <string name="transport_same">Транспорт уже выбран</string>
     <string name="conn_line">Соединение: %1$s · %2$s</string>
     <string name="upd_auto_modules">приложение обновлено — синхронизирую модули протоколов</string>
+    <string name="udp_toggle">UDP-релей (%1$s)</string>
+    <string name="log_udp_on">UDP-релей включён — дейтаграммы снова ходят</string>
+    <string name="log_udp_off">UDP-релей выключен галочкой — дейтаграммы отклоняются (правило нуля байт)</string>
     <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
     <string name="proto_current">Протокол: %1$s</string>
     <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>
@@ -201,6 +204,8 @@
     <string name="dev_java">Java</string>
 
     <string name="speedtest_line">Спидтест: %1$s</string>
+    <string name="speedtest_card">%1$s МБ/с · пинг %2$s мс · %3$s</string>
+    <string name="speedtest_failed_short">ошибка: %1$s</string>
     <string name="speedtest_waiting">Спидтест: после подключения (если лимит не достигнут)</string>
     <string name="config_hint_title">Ссылка подключения</string>
     <string name="update_progress">Загрузка: %1$d%% · %2$s</string>
@@ -263,9 +268,9 @@
     <string name="apimask_budget_done">Маскировка %1$s: суточный бюджет исчерпан (%2$s из %3$s) — шум затих до завтра</string>
 
     <!-- v0.8.3: форматтеры и оставшиеся динамические строки -->
-    <string name="fmt_bytes_gb">%s ГБ</string>
-    <string name="fmt_bytes_mb">%s МБ</string>
-    <string name="fmt_bytes_kb">%s КБ</string>
+    <string name="fmt_bytes_gb">%1$.1f ГБ</string>
+    <string name="fmt_bytes_mb">%1$.1f МБ</string>
+    <string name="fmt_bytes_kb">%1$.1f КБ</string>
     <string name="fmt_bytes_b">%s Б</string>
     <string name="fmt_speed_kbps">%.0f КБ/с</string>
 

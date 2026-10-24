@@ -344,6 +344,12 @@ object Msgs {
         "модуль протокола %s не даёт подключиться (%s неудачи подряд) — клиент фоллбечится на %s; сервер не откатываем (анти-цикл): он поднимет новый протокол, когда обновится сам",
     )
 
+    // ── UDP-модуль (v1.0.0) ──────────────────────────────────────────────
+    val UDP_DISABLED = Msg(
+        "UDP relay is disabled by the owner's toggle — datagram rejected",
+        "UDP-релей выключен галочкой владельца — дейтаграмма отклонена",
+    )
+
     // ── Negotiation: явные статусы согласования (v0.9.7) ─────────────
     val PROTO_AUTO_DOWNGRADED = Msg(
         "server does not support %s — negotiated %s",

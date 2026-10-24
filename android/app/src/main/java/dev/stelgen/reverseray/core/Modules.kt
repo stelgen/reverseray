@@ -36,6 +36,10 @@ object Modules {
         val default: Boolean,
     )
 
+    /** v1.0.0: последний распарсенный UDP-модуль (для галочки в настройках). */
+    @Volatile var lastUdp: Udp? = null
+        private set
+
     /** v0.8.2: секция camouflage манифеста — модуль камуфляжа «API Mask». */
     data class Camouflage(
         val id: String,
@@ -47,6 +51,14 @@ object Modules {
         val maxBytesPerDay: Int,
     )
 
+    /** v1.0.0: секция udp манифеста — модуль UDP-релея (галочка в APK). */
+    data class Udp(
+        val id: String,
+        val name: String,
+        val ver: String,
+        val enabled: Boolean,
+    )
+
     data class Manifest(
         val version: String,
         val protocols: List<ProtocolEntry>,
@@ -54,6 +66,8 @@ object Modules {
         val dnsProbeNames: List<String>,
         /** null — секции нет: модуль выключен (решение за манифестом). */
         val camouflage: Camouflage?,
+        /** null — секции нет: UDP-модуль манифестом не заявлен. */
+        val udp: Udp?,
     ) {
         fun enabledProtocolIds(): List<String> = protocols.filter { it.enabled }.map { it.id }
 
@@ -169,7 +183,22 @@ object Modules {
                 maxBytesPerDay = camoObj.optInt("max_bytes_per_day", 0),
             )
         }
-        return Manifest(version, out, probe, dnsNames, camo)
+        // v1.0.0: секция udp — опциональна; битый id = секция пропускается
+        var udp: Udp? = null
+        val udpObj = root.optJSONObject("udp")
+        if (udpObj != null) {
+            val udpId = normalizeId(udpObj.optString("id", ""))
+            if (udpId.isNotEmpty()) {
+                udp = Udp(
+                    id = udpId,
+                    name = udpObj.optString("name", udpId).trim().ifEmpty { udpId },
+                    ver = sanitizeVer(udpObj.optString("ver", "")),
+                    enabled = if (udpObj.has("enabled")) udpObj.optBoolean("enabled", true) else true,
+                )
+            }
+        }
+        lastUdp = udp
+        return Manifest(version, out, probe, dnsNames, camo, udp)
     }
 
     /**

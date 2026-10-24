@@ -172,7 +172,7 @@ class TunnelService : Service() {
         Thread {
             val r = SpeedTest.run()
                 val line = if (r.ok) {
-                val mbs = String.format(Locale.US, "%.2f", r.bytesPerSec / 1024.0 / 1024.0)
+                val mbs = String.format(Locale.US, "%.1f", r.bytesPerSec / 1024.0 / 1024.0)
                 getString(
                     R.string.log_speedtest_result,
                     mbs, r.pingMs,
@@ -183,9 +183,21 @@ class TunnelService : Service() {
                 getString(R.string.log_speedtest_failed, r.error ?: getString(R.string.speed_no_data))
             }
             pushLog(line, if (r.ok) LogKind.OK else LogKind.WARN)
+            // v1.0.0: карточке — своя строка БЕЗ префикса «speed test:»
+            // (было «Speed test: speed test: 15.26 MB/s …» — дубль слов)
+            val cardLine = if (r.ok) {
+                val mbsCard = String.format(Locale.US, "%.1f", r.bytesPerSec / 1024.0 / 1024.0)
+                getString(
+                    R.string.speedtest_card,
+                    mbsCard, r.pingMs,
+                    if (r.httpOk) getString(R.string.speed_http_ok, r.httpMs) else getString(R.string.speed_http_down),
+                )
+            } else {
+                getString(R.string.speedtest_failed_short, r.error ?: getString(R.string.speed_no_data))
+            }
             sendBroadcast(
                 Intent(ACTION_STATS).setPackage(packageName)
-                    .putExtra(EXTRA_SPEEDTEST_TEXT, line)
+                    .putExtra(EXTRA_SPEEDTEST_TEXT, cardLine)
             )
             speedTestBusy = false
         }.apply { isDaemon = true }.start()
@@ -221,6 +233,18 @@ class TunnelService : Service() {
                 // (применится будущей сессией — сервер помнит выбор).
                 val enabled = intent.getBooleanExtra(EXTRA_ENABLED, true)
                 Thread({ applyCamouflage(enabled) { msg -> updateStatus(STATE_INFO, msg) } }, "rrp-camo").start()
+                return START_STICKY
+            }
+            ACTION_UDP -> {
+                // v1.0.0: гейт UDP-релея галочкой владельца — живая сессия тоже
+                // (клиент отклоняет новые UDP_ASSOC немедленно)
+                val enabled = intent.getBooleanExtra(EXTRA_ENABLED, true)
+                prefs().edit().putBoolean(KEY_UDP_ENABLED, enabled).apply()
+                client?.udpEnabled = enabled
+                pushLog(
+                    getString(if (enabled) R.string.log_udp_on else R.string.log_udp_off),
+                    LogKind.INFO,
+                )
                 return START_STICKY
             }
             ACTION_ACCEPT_PIN -> {
@@ -664,7 +688,8 @@ class TunnelService : Service() {
     }
 
     private fun buildClient(cfg: RrpUriConfig, proto: String, validate: Boolean): RrpClient {
-        return RrpClient(
+        // v1.0.0: гейт UDP-релея — единая точка для боевого и валидационного клиентов
+        val client = RrpClient(
             host = cfg.host,
             port = cfg.ports.firstOrNull() ?: 4433,
             token = cfg.token,
@@ -679,6 +704,8 @@ class TunnelService : Service() {
             validateProbeTarget = if (validate) prefs().getString(KEY_PROBE_TARGET, DEFAULT_PROBE_TARGET) else null,
             initialCamCtl = camCtlFlag(),
         )
+        client.udpEnabled = prefs().getBoolean(KEY_UDP_ENABLED, true)
+        return client
     }
 
     /**
@@ -1142,6 +1169,7 @@ class TunnelService : Service() {
         // v0.9.5: выбор камуфляжа «API Mask» КЛИЕНТОМ (персистентно и локально,
         // и на сервере через кадр 0x2A — переживает офлайн).
         const val KEY_CAMO_OFF = "camouflage_off"
+        const val KEY_UDP_ENABLED = "udp_enabled" // v1.0.0: по умолчанию ВКЛ
         const val KEY_TRAFFIC_LIFETIME = "traffic_lifetime" // суммарный трафик за всё время
         const val PERIOD_DAY = "day"
         const val PERIOD_MONTH = "month"
@@ -1170,6 +1198,7 @@ class TunnelService : Service() {
 
         /** v0.9.5: управление камуфляжем «API Mask» из GUI (кадр 0x2A + pref). */
         const val ACTION_CAMO = "dev.stelgen.reverseray.action.CAMO"
+        const val ACTION_UDP = "dev.stelgen.reverseray.action.UDP" // v1.0.0: гейт UDP-релея
         const val EXTRA_ENABLED = "enabled"
         const val EXTRA_STATUS = "status"
         const val EXTRA_TX_RATE = "tx_rate"

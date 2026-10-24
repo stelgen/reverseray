@@ -903,9 +903,18 @@ class RrpClient(
 
     // ------------------------------------------------------------------ UDP (v0.7)
 
+    /** v1.0.0: гейт UDP-релея (галочка владельца в APK; живая сессия тоже). */
+    @Volatile var udpEnabled: Boolean = true
+
     /** S→C UDP_ASSOC: сервер просит поднять UDP-релей. Ответ — OPEN_OK c err_code. */
     private fun handleIncomingUdpAssoc(frame: RrpFrame.UdpAssoc) {
         val id = frame.streamId
+        if (!udpEnabled) {
+            // v1.0.0: UDP-модуль выключен галочкой владельца — ровно ноль дейтаграмм
+            sendOpenOk(id, ERR_CONNECT_FAILED)
+            log(Msgs.UDP_DISABLED.t())
+            return
+        }
         if (udpAssocs.size >= maxStreams) {
             sendOpenOk(id, ERR_TOO_MANY_STREAMS)
             return

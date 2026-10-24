@@ -551,11 +551,14 @@ class MainActivity : AppCompatActivity() {
             setOnTouchListener { v, ev ->
                 val springBack = {
                     v.animate().cancel()
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(200)
-                        .setInterpolator(android.view.animation.OvershootInterpolator(0.8f)).start()
+                    breathing?.cancel()
+                    // v1.0.0: возврат после нажатия = мягкий перезапуск дыхания
+                    // (applyButtonMode плавно вводит масштаб обратно в цикл)
+                    lastButtonMode?.let { applyButtonMode(it) }
                 }
                 when (ev.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
+                        breathing?.cancel()
                         v.animate().cancel()
                         v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(120)
                             .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
@@ -780,6 +783,24 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(32), 0, 0, dp(4))
             })
             modsCard.addView(camoRow)
+        }
+        // v1.0.0: модуль UDP-релей — галочка рядом с API Mask; гейт на клиенте
+        // (телефон — точка egress UDP): выкл → UDP_ASSOC отклоняется, ноль дейтаграмм
+        val udpCfg = Modules.lastUdp
+        if (udpCfg != null) {
+            val udpRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            udpRow.addView(CheckBox(this).apply {
+                text = getString(R.string.udp_toggle, udpCfg.name)
+                isChecked = prefs().getBoolean(TunnelService.KEY_UDP_ENABLED, true)
+                textSize = 13f
+                setOnCheckedChangeListener { _, checked ->
+                    val i = Intent(this@MainActivity, TunnelService::class.java)
+                        .setAction(TunnelService.ACTION_UDP)
+                        .putExtra(TunnelService.EXTRA_ENABLED, checked)
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                }
+            })
+            modsCard.addView(udpRow)
         }
         p.addView(card(modsCard))
 
@@ -1325,6 +1346,9 @@ class MainActivity : AppCompatActivity() {
     private var buttonColorAnimator: android.animation.ValueAnimator? = null
     private var ringMode: Mode? = null
 
+    /** v1.0.0: зацикленное «дыхание» кнопки (REVERSE-цикл, гасится плавно). */
+    private var breathing: android.animation.ValueAnimator? = null
+
     private fun applyButtonMode(mode: Mode) {
         bigButtonIsStart = mode.isStart
         // v0.9.9 (канон M2 «смена состояния — fade», M3 «без jump-cut»):
@@ -1377,23 +1401,35 @@ class MainActivity : AppCompatActivity() {
         // v0.9.3 (канон 2026): смена состояния — мягкий «поп» 3.5% и упругий
         // возврат (140+220мс). Только при РЕАЛЬНОЙ смене режима — без дёрганья
         // при повторных синхронизациях UI из сервиса.
+        // v1.0.0 (канон владельца): ДЫХАНИЕ — зацикленная плавная анимация
+        // (scale 1.00↔1.02, 1100 мс полуцикл, REVERSE, AccelerateDecelerate):
+        // мягкий вход с текущего масштаба, бесконечный цикл без обрывков;
+        // при смене состояния гасим обратно в 1.0 за 250 мс.
         if (mode != lastButtonMode) {
             lastButtonMode = mode
+            breathing?.cancel()
             bigButton.animate().cancel()
-            bigButton.scaleX = 1f
-            bigButton.scaleY = 1f
-            bigButton.animate()
-                .scaleX(1.035f).scaleY(1.035f)
-                .setDuration(140)
-                .setInterpolator(android.view.animation.DecelerateInterpolator())
-                .withEndAction {
-                    bigButton.animate()
-                        .scaleX(1f).scaleY(1f)
-                        .setDuration(220)
-                        .setInterpolator(android.view.animation.OvershootInterpolator(0.8f))
-                        .start()
+            if (mode == Mode.CONNECTED || mode == Mode.CONNECTING) {
+                val (lo, hi) = if (mode == Mode.CONNECTED) 1.0f to 1.025f else 0.985f to 1.015f
+                breathing = android.animation.ValueAnimator.ofFloat(lo, hi).apply {
+                    duration = 1100
+                    repeatMode = android.animation.ValueAnimator.REVERSE
+                    repeatCount = android.animation.ValueAnimator.INFINITE
+                    interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+                    addUpdateListener { a ->
+                        val s = a.animatedValue as Float
+                        bigButton.scaleX = s
+                        bigButton.scaleY = s
+                    }
+                    start()
                 }
-                .start()
+            } else {
+                bigButton.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .setDuration(250)
+                    .setInterpolator(android.view.animation.DecelerateInterpolator())
+                    .start()
+            }
         }
     }
 
