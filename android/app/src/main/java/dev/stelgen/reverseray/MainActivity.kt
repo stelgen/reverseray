@@ -772,11 +772,8 @@ class MainActivity : AppCompatActivity() {
 
         // Протоколы
         val protoCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        protoCard.addView(TextView(this).apply {
-            setText(R.string.proto_section)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-        })
+        // v0.9.7 (GUI-этап 2): единый заголовок карточки — как у всех остальных
+        protoCard.addView(sectionTitle(R.string.proto_section, null))
         protoLineViews.add(TextView(this).apply {
             textSize = 13f
             setPadding(0, dp(4), 0, dp(4))
@@ -1234,9 +1231,16 @@ class MainActivity : AppCompatActivity() {
     private fun outlined(textRes: Int) =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             setText(textRes)
+            // v0.9.7 (GUI-этап 2): эргономика — тач-таргет ≥ 48dp на всех кнопках
+            minHeight = dp(48)
+            minWidth = dp(88)
         }
 
-    private fun filled(textRes: Int) = MaterialButton(this).apply { setText(textRes) }
+    private fun filled(textRes: Int) = MaterialButton(this).apply {
+        setText(textRes)
+        // v0.9.7 (GUI-этап 2): эргономика — тач-таргет ≥ 48dp на всех кнопках
+        minHeight = dp(48)
+    }
 
     private fun describeLimit(bytes: Long, period: String, day: Int): String {
         if (bytes <= 0) return getString(R.string.limit_none)
