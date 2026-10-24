@@ -61,19 +61,23 @@ jobs:
         run: |
           mkdir -p assets/brand
           cp android/app/build/screenshot.png assets/brand/screenshot.png
-      - name: Git debug dump (on failure)
-        if: failure()
+      # v0.9.9: явный git-цикл вместо magic-action — каждая ошибка попадает
+      # в push.log, при фейле уезжает артефактом (без токена логи нечитаемы)
+      - name: Commit screenshot (explicit + push-log artifact on failure)
         run: |
-          { git status; git log --oneline -5; git remote -v; git config -l | grep -i remote || true; } > git-debug.txt 2>&1 || true
-      - uses: actions/upload-artifact@v6
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/brand/screenshot.png
+          if git diff --cached --quiet; then echo "PNG identical — nothing to commit"; exit 0; fi
+          git commit -m "[skip ci] docs: свежий скриншот APK (бот JVM-рендер, без эмулятора)"
+          git pull --rebase origin main || { git pull --rebase origin main; }
+          git push origin HEAD:main 2> push.log || { echo "::error::push failed"; cp push.log git-debug.txt; git log --oneline -5 >> git-debug.txt; git status >> git-debug.txt; exit 1; }
+      - name: Push failure artifact (on failure)
         if: failure()
+        uses: actions/upload-artifact@v6
         with:
-          name: screenshot-git-debug
-          path: git-debug.txt
+          name: screenshot-push-debug
+          path: |
+            push.log
+            git-debug.txt
           if-no-files-found: ignore
-      - uses: stefanzweifel/git-auto-commit-action@v6
-        with:
-          commit_message: "[skip ci] docs: свежий скриншот APK (бот JVM-рендер, без эмулятора)"
-          file_pattern: "assets/brand/screenshot.png"
-          branch: main
-          rebase: true
