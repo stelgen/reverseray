@@ -240,7 +240,7 @@ class TunnelService : Service() {
                 // (клиент отклоняет новые UDP_ASSOC немедленно)
                 val enabled = intent.getBooleanExtra(EXTRA_ENABLED, true)
                 prefs().edit().putBoolean(KEY_UDP_ENABLED, enabled).apply()
-                client?.udpEnabled = enabled
+                runners.forEach { r -> r.client?.udpEnabled = enabled }
                 pushLog(
                     getString(if (enabled) R.string.log_udp_on else R.string.log_udp_off),
                     LogKind.INFO,
