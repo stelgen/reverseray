@@ -1,6 +1,13 @@
 # ReverseRay
 
-> **«Никакой свободы врагам свободы»** — (С) Кровосток
+<p align="center">
+  <img src="assets/brand/app-icon.png" width="80" alt="ReverseRay"/>
+</p>
+
+<h1 align="center">ReverseRay</h1>
+
+<p align="center"><b>Личный прокси-сервер, выходящий через ваш Android-телефон.</b><br/>
+Сервер выглядит как обычный SOCKS5/HTTP-прокси — сайты видят резидентный IP вашего устройства.</p>
 
 <p align="center">
   <a href="https://github.com/stelgen/reverseray/releases"><img alt="Release" src="https://img.shields.io/github/v/release/stelgen/reverseray?display_name=tag&logo=github"></a>
@@ -8,58 +15,120 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/stelgen/reverseray"></a>
   <img alt="Go" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white">
-  <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B%20(API%2014%2B)-3DDC84?logo=android&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-147%20Go%20%2B%20195%20JVM-2E7D32">
-  <a href="https://github.com/stelgen/reverseray/pulls"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"></a>
+  <img alt="Android" src="https://img.shields.io/badge/Android-4.0%2B-3DDC84?logo=android&logoColor=white">
 </p>
 
-**ReverseRay** — личный прокси-сервер, у которого «выход в интернет» физически
-происходит через ваше Android-устройство. Сервер выглядит как обычный
-SOCKS5/HTTP-прокси, а целевые сайты видят резидентный IP вашего телефона.
-Нат/CGNAT не мешают: туннель инициирует сам телефон. VPS-провайдер с «чистым»
-IP не нужен — достаточно любого сервера, где можно запустить Docker.
-
 ---
 
-## Миссия
+## Возможности
 
-**Создать ультимативное решение для приватного бесплатного хостинга
-собственного VPN-подобного прокси** — без покупки VPN-подписок: интернет и
-связь уже есть у каждого, и этого достаточно, чтобы поднять свой личный канал
-на собственном железе и собственном телефоне.
-
-Проект предназначен **только для легитимного личного использования**. Мы
-против скрытного и неправомерного использования приложения в корыстных или
-вредоносных целях.
-
-Принципы, из которых не делаем исключений:
-
-| Принцип | Как исполняется |
-|---|---|
-| **Приватность** | Ни телеметрии, ни внешних хостов вне белого списка; hosts назначения не логируются (redact by default); privacy-audit — CI-гейт каждого PR |
-| **Открытость** | «Ничего не прячем»: каждое действие приложения и сервера с сетью и данными видно в консоли/логах/«О сети»/метриках; все механизмы документированы |
-| **Полная защищённость** | TLS 1.3 + строгий SPKI-pin (анти-MITM), HMAC-токены, anti-SSRF, WAN-hardening (сканер не получает ни байта), distroless-контейнер без capabilities |
-| **Совместимость** | Клиент работает на Android 4.0+ (API 14); сервер — Linux amd64/arm64/armv7 |
-| **Безопасность по умолчанию** | Безопасные дефолты везде: автоподключение выключено, inbound без пароля — только в LAN-сценарии владельца, токены хранятся только хэшами |
-| **Стабильность** | Экспоненциальный backoff, restart-governor, healthcheck обязателен, фоллбек протоколов, мусорные данные никогда не ломают стек |
-| **Бережное отношение к железу** | Дисциплина SSD/RAM: счётчики в RAM, запись на диск раз в минуту; APK не тратит батарею фоновыми пробами; сервер не изнашивает диск хоста |
-
----
-
-## 📱 Скриншоты
+- **Egress через телефон** — сервер инициирует исходящий трафик с резидентного IP; NAT/CGNAT не мешают
+- **Протоколы = DPI-маски** — rrp1, WireGuard, MTProto/2: туннель выглядит для DPI как заявленный протокол
+- **Мультипоточность** — N параллельных сессий через один порт; TCP-окна складываются
+- **Модули без переустановки** — единый манифест `modules.json` для APK и сервера
+- **Централизованное логирование** — ok зелёный / warn жёлтый / err красный на всех экранах
+- **Транспорт TCP / WebSocket из UI** — вторая DPI-маска на уровне транспорта
+- **WAN-hardening** — сканер не получает ни байта (tarpit + тишина)
+- **Android 4.0+ (API 14)** — полный функционал без ограничений
 
 <p align="center">
   <table>
     <tr>
-      <td align="center" width="45%"><img src="assets/brand/screenshot.png" alt="Приложение" width="260"/><br/><sub><b>APK</b> · Android 4.0+ · тёмная/светлая тема</sub></td>
-      <td align="center" width="55%"><img src="assets/brand/web.png" alt="Веб-панель" width="380"/><br/><sub><b>Веб-панель</b> · /ui · RT-график · карточки клиентов</sub></td>
+      <td align="center" width="45%"><img src="assets/brand/screenshot.png" alt="Приложение" width="260"/><br/><sub><b>APK</b> · Android 4.0+</sub></td>
+      <td align="center" width="55%"><img src="assets/brand/web.png" alt="Веб-панель" width="380"/><br/><sub><b>Веб-панель</b> · /ui</sub></td>
     </tr>
   </table>
 </p>
 
 ---
 
+## Быстрый старт
+
+**Сервер (одна команда):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stelgen/reverseray/main/deploy/rr.sh -o rr.sh
+sudo bash rr.sh
+```
+
+**Телефон:** скачайте APK из [Releases](https://github.com/stelgen/reverseray/releases) → вставьте строку подключения → Старт.
+
+**Проверка:**
+
+```bash
+curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
+# ответ — IP телефона
+```
+
+| Флаг rr.sh | Действие |
+|---|---|
+| *(нет)* | установка/обновление до последнего релиза |
+| `RR_SESSIONS=3` | N параллельных сессий для агрегации скорости |
+| `--reset` | обнулить состояние (токены/CA) |
+| `--no-ui` | закрыть веб-панель в localhost |
+
+---
+
 ## Как это работает
+
+```mermaid
+flowchart LR
+    subgraph LAN["Клиенты · LAN"]
+        APPS["Браузеры · Xray<br/>SOCKS5 / HTTP"]
+        ADMIN["Владелец<br/>rr.sh · /ui"]
+    end
+    subgraph VPS["Сервер · Docker"]
+        direction TB
+        HARD["WAN-hardening<br/>tarpit · сканер видит 0 байт"]
+        MIXED["mixed :1080<br/>SOCKS5 · HTTP · UDP"]
+        NEG["Согласование протоколов<br/>AUTO ↓ · явные WARN"]
+        RRP["RRP/1-сессия<br/>flow-control · keep-alive"]
+        SYNC["modules.json<br/>sync 24ч"]
+        UI["Веб-панель /ui"]
+    end
+    subgraph PHONE["Телефон · Android 4.0+"]
+        direction TB
+        APK["APK · тонкий движок<br/>LogStore ok / warn / err"]
+        GATE["Гейты<br/>SSRF-guard · лимит-король<br/>UDP-галочка"]
+        EGRESS["Egress<br/>TCP · UDP · DNS"]
+    end
+    subgraph MASKS["Протоколы = DPI-маски"]
+        WG["WireGuard/1<br/>Noise_IKpsk2"]
+        MT["MTProto/2<br/>DH · AES-256-IGE"]
+        R1["RRP/1<br/>базовый"]
+        NOISE["API Mask<br/>NOISE 0x26"]
+    end
+    DPI["DPI-блокировщик видит:<br/>WireGuard · MTProto · API-шум"]
+    SCAN["nmap · masscan"]
+    NET["Интернет<br/>egress = IP телефона"]
+    SCAN -."скан 4433" .-> HARD
+    APPS -- "SOCKS5/HTTP 1080" --> MIXED
+    MIXED -- "OPEN" --> RRP
+    RRP -- "DATA · UDP_DATA" <--> APK
+    APK -- "TCP · UDP" --> GATE
+    GATE --> EGRESS --> NET
+    P2["TLS 1.3<br/>SPKI-pin + HMAC"]
+    HARD --> P2 --> NEG
+    NEG --- WG
+    NEG --- MT
+    NEG --- R1
+    NOISE -."шум" .- APK
+    SYNC -."манифест" .-> NEG
+    SYNC -."галочки" .-> APK
+    RRP -."read-only" .-> UI
+    DPI -."видит только заявленные" .-> MASKS
+    classDef vps fill:#0b2545,stroke:#35B6FF,color:#EAF2FF
+    classDef phone fill:#0b3d2e,stroke:#2E7D32,color:#EAF2FF
+    classDef mask fill:#2a1a3e,stroke:#B26BFF,color:#F2EAFF
+    classDef net fill:#3a2a0b,stroke:#F9A825,color:#FFF8E1
+    class HARD,MIXED,NEG,RRP,SYNC,UI vps
+    class APK,GATE,EGRESS phone
+    class WG,MT,R1,NOISE mask
+    class NET,DPI,SCAN net
+```
+
+<details>
+<summary><b>Sequence — хендшейк и согласование протокола</b></summary>
 
 ```mermaid
 sequenceDiagram
@@ -90,261 +159,138 @@ sequenceDiagram
     S-->>A: данные
 ```
 
-```mermaid
-flowchart LR
-    subgraph LAN["🖥 Клиенты · LAN"]
-        APPS["Браузеры · Xray<br/>SOCKS5 / HTTP"]
-        ADMIN["Владелец<br/>rr.sh · /ui · /status"]
-    end
-    subgraph VPS["🖥 Сервер · Docker"]
-        direction TB
-        HARD["WAN-hardening<br/>tarpit · сканер видит 0 байт<br/>slowloris 30с · per-IP лимиты"]
-        MIXED["mixed-инбокс :1080<br/>SOCKS5 · HTTP · UDP"]
-        NEG["Согласование протоколов<br/>AUTO ↓ до rrp1<br/>явные WARN-статусы даунгрейда"]
-        RRP["RRP/1-сессия<br/>flow-control кредит ≤ буфер<br/>keep-alive · многостримность"]
-        SYNC["modules.json<br/>sync 24ч · по версии/хешу<br/>мусор не применяется"]
-        UI["Веб-панель /ui<br/>RT-график · карточки клиентов"]
-    end
-    subgraph PHONE["📱 Телефон · Android 4.0+"]
-        direction TB
-        APK["APK · тонкий движок<br/>LogStore ok зелёный / warn жёлтый / err красный"]
-        GATE["Гейты телефона<br/>SSRF-guard · лимит-король: ровно 0 байт<br/>UDP-галочка: выкл = ноль дейтаграмм"]
-        EGRESS["Egress<br/>TCP · UDP · DNS на телефоне"]
-    end
-    subgraph MASKS["🎭 Протоколы = DPI-маски"]
-        WG["WireGuard/1<br/>Noise_IKpsk2 · ChaCha20<br/>sliding-window 2048"]
-        MT["MTProto/2<br/>DH канона Telegram<br/>AES-256-IGE"]
-        R1["RRP/1<br/>базовый + фоллбек"]
-        NOISE["API Mask<br/>NOISE 0x26 внутри туннеля"]
-    end
-    DPI["👁 DPI-блокировщик видит:<br/>обычный WireGuard · MTProto · API-шум"]
-    SCAN["nmap · masscan"]
-    NET["🌐 Интернет · egress = IP телефона"]
-    SCAN -."скан 4433: первый байт не TLS" .-> HARD
-    APPS -- "SOCKS5/HTTP 1080" --> MIXED
-    MIXED -- "OPEN по стримам" --> RRP
-    RRP -- "DATA · UDP_DATA<br/>в конверте протокола" <--> APK
-    APK -- "TCP · UDP" --> GATE
-    GATE --> EGRESS --> NET
-    P2["TLS 1.3 · ALPN reverseray/1<br/>SPKI-pin + HMAC nonce"]
-    HARD --> P2 --> NEG
-    NEG --- WG
-    NEG --- MT
-    NEG --- R1
-    NOISE -."шум бюджетом 256 КБ/сут" .- APK
-    SYNC -."манифест APK и сервер" .-> NEG
-    SYNC -."галочки API Mask · UDP" .-> APK
-    RRP -."read-only" .-> UI
-    ADMIN -."управление" .-> MIXED
-    DPI -."видит только заявленные протоколы" .-> MASKS
-    classDef vps fill:#0b2545,stroke:#35B6FF,color:#EAF2FF
-    classDef phone fill:#0b3d2e,stroke:#2E7D32,color:#EAF2FF
-    classDef mask fill:#2a1a3e,stroke:#B26BFF,color:#F2EAFF
-    classDef net fill:#3a2a0b,stroke:#F9A825,color:#FFF8E1
-    class HARD,MIXED,NEG,RRP,SYNC,UI vps
-    class APK,GATE,EGRESS phone
-    class WG,MT,R1,NOISE mask
-    class NET,DPI,SCAN net
+</details>
 
-```
+---
 
-## Состав проекта
+<details>
+<summary><b>Состав проекта</b></summary>
 
 | Компонент | Что это | Где |
 |---|---|---|
-| Сервер | Go (ноль сторонних зависимостей): SOCKS5/HTTP-инбоксы (TCP+UDP), туннель RRP/1 + WebSocket, mtproto2, WAN-hardening, синхронизатор модулей, метрики, TLS-PKI | [`server/`](server/) |
-| Клиент | Kotlin (Android 4.0+): туннель (TCP/WS/mtproto2), модули, «лимит — король», единая консоль, честные вкладки | [`android/`](android/) |
-| Манифест модулей | Один `modules.json` для APK и сервера: реестр протоколов, модуль камуфляжа, политики | [`modules/`](modules/README.md) |
+| Сервер | Go (ноль сторонних зависимостей): SOCKS5/HTTP (TCP+UDP), RRP/1 + WebSocket, mtproto2, WAN-hardening, модули, метрики, TLS-PKI | [`server/`](server/) |
+| Клиент | Kotlin (Android 4.0+): туннель (TCP/WS/mtproto2), модули, лимит-король, LogStore | [`android/`](android/) |
+| Манифест | Один `modules.json` для APK и сервера | [`modules/`](modules/README.md) |
 | Протокол | Спецификация RRP/1 + UDP + WS + mtproto2 + NOISE | [`docs/protocol.md`](docs/protocol.md) |
-| Деплой | Автопилот `rr.sh`: установка/обновление/сброс одной командой | [`deploy/rr.sh`](deploy/rr.sh) |
-| CI-роботы | Тесты, приватность, модули, скриншот, секреты | `.github/workflows/` |
+| Деплой | Автопилот `rr.sh` | [`deploy/rr.sh`](deploy/rr.sh) |
+| CI | Тесты, приватность, модули, скриншоты, секреты | `.github/workflows/` |
 
-## Возможности (v1.0.0)
+</details>
 
-Только техника — пользовательский интерфейс сознательно не документируется.
+## Принципы
 
-Все модули-протоколы ниже — это **типы замаскированного обмена сервер↔телефон** для слома паттернов DPI-блокировщиков: туннель выглядит для DPI как заявленный протокол. Клиент и сервер используют их между собой, выбирая по плюсам и минусам (совместимость, скорость, узнаваемость). rrp1 — собственный базовый протокол и фоллбек.
+| Принцип | Как исполняется |
+|---|---|
+| **Приватность** | Ни телеметрии, ни внешних хостов вне белого списка; privacy-audit — CI-гейт каждого PR |
+| **Открытость** | «Ничего не прячем»: каждое действие видно в консоли / логах / метриках |
+| **Защищённость** | TLS 1.3 + SPKI-pin, HMAC-токены, anti-SSRF, distroless без capabilities |
+| **Совместимость** | Android 4.0+ (API 14); сервер — Linux amd64/arm64/armv7 |
+| **Безопасность по умолчанию** | Автоподключение выключено; токены — только хэши |
+| **Дисциплина железа** | Счётчики в RAM, запись раз в минуту; APK не тратит батарею |
+
+<details>
+<summary><b>Полный список возможностей</b></summary>
 
 | Возможность | Суть |
 |---|---|
-| **RRP/1** | Мультиплексирование, flow-control (кредит ≤ буферу приёма), лимиты кадров, keep-alive — спецификация в [`docs/protocol.md`](docs/protocol.md) |
-| **wireguard** | НАСТОЯЩАЯ криптография WireGuard (актуальный канон whitepaper) внутри приватного канала: Noise_IKpsk2-хендшейк (mac1, enc_static, enc_timestamp/TAI64N), транспортные пакеты `[type=4][receiver][counter][ChaCha20-Poly1305]` со sliding-window анти-реплеем 2048; PSK хендшейка = SHA256(token) — привязка к нашему ключу доверия; кросс-языковой KAT Go↔Kotlin байт-в-байт |
-| **mtproto2** | После приватного хендшейка ключи перегенерируются DH-обменом по канону MTProto 2.0 (официальный dh_prime Telegram, AES-256-IGE, msg_key SHA-256); кросс-языковой KAT Go↔Kotlin |
-| **AUTO-протокол** | Ссылка без `proto=` = режим AUTO: клиент запрашивает предпочтительный протокол, сервер согласует по общему реестру вниз до rrp1; явный `proto=` в ссылке всегда приоритетен; мусор никогда не ломает стек |
-| **WAN-hardening** | Туннельный порт отвечает только настоящим TLS-клиентам; первый байт не TLS → tarpit + тихое закрытие без единого байта ответа; глобальные и per-IP лимиты параллельности |
-| **Модульная система** | APK — тонкий движок; сервер и приложение парсят ОДИН манифест `modules.json`; обновления модулей без переустановки APK (по версии/хешу, мусор не применяется, даунгрейд запрещён); клиент фоллбечится на rrp1, сервер не откатывается никогда (анти-цикл) |
-| **API Mask + выбор клиента** | Камуфляж: фоновый обмен внутри туннеля выглядит как API бизнес-приложения; ноль внешних хостов; суточный бюджет из манифеста; кадр `0x2A` — выбор устройства персистентен НА СЕРВЕРЕ (переживает офлайн клиента) и учитывается в READY.features будущих сессий |
-| **UDP Relay** | Модуль UDP-релея: галочка рядом с API Mask; гейт на клиенте — выкл → `UDP_ASSOC` отклоняется, РОВНО НОЛЬ дейтаграмм; переключается в живой сессии |
-| **Централизованное логирование** | Единый LogStore — один источник сообщений; роли OK=зелёный / WARN=жёлтый / ERR=красный на всех экранах; экран «Лог» показывает всё, вкладки фильтруют свою часть |
-| **Явные статусы согласования** | Сервер согласовал ниже запрошенного — честный WARN («сервер не поддерживает X — согласован Y»), молчаливых даунгрейдов нет |
-| **Транспорт tcp/ws из UI** | Переключатель TCP / WebSocket в приложении; выбор пишется в ссылку (ссылка = источник правды) |
-| **Авто-синхронизация модулей** | Обновил APK — modules.json подтягивается сам, без ручного «Проверить модули» |
-| **Мультипоточность (v1.0.2)** | Ссылка с несколькими портами (`:4433,4433,4433`) = N параллельных RRP-сессий через тот же порт; сервер агрегирует их least-outstanding-хабом (кап 8/устройство) — TCP-окна складываются, скорость растёт на lossy-линках; `RR_SESSIONS=3 bash rr.sh` |
-| **Лимит трафика — король** | Суточный/месячный лимит с датой сброса; исчерпан → РОВНО НОЛЬ байт: туннель умирает, автоподключение умеет ждать дату сброса |
-| **Пин CA — один канон** | пин = SHA256(SPKI CA) у обеих сторон; ротация CA = один тап владельца (диалог с фактическим пином, «Принять» обновляет ссылку и реконнектит); молчаливого доверия нет никогда |
-| **Диагностика подключения** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена для сверки со строкой из rr.sh/enroll |
-| **Веб-панель `/ui`** | Read-only дашборд: график трафика реального времени (окно 90 с), карточки клиентов с полной телеметрией сессии (relay-байты/трафик телефона, стримы, RTT, uptime, UDP/DNS-счётчики, статус крипты протокола), выборы камуфляжа клиентов; опрос 2 с, vanilla JS без зависимостей |
-| **Docker** | Distroless БЕЗ шелла (restart-governor в самом бинаре), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy) |
-## Быстрый старт — одна команда (автопилот)
+| **RRP/1** | Мультиплексирование, flow-control (кредит ≤ буферу), keep-alive — [protocol.md](docs/protocol.md) |
+| **wireguard** | Настоящий канон whitepaper: Noise_IKpsk2, ChaCha20-Poly1305, sliding-window 2048; PSK = SHA256(token); KAT Go↔Kotlin |
+| **mtproto2** | DH-канон MTProto 2.0 (официальный dh_prime Telegram, AES-256-IGE); кросс-языковой KAT |
+| **AUTO-протокол** | Ссылка без `proto=` = AUTO; сервер согласует вниз до rrp1; даунгрейд = явный WARN |
+| **WAN-hardening** | Tarpit, ноль байт сканеру, per-IP лимиты |
+| **Модульная система** | Один `modules.json` для APK и сервера; обновления без переустановки; мусор не применяется |
+| **API Mask** | Фоновый шум как API бизнес-приложения; ноль внешних хостов; бюджет из манифеста |
+| **UDP Relay** | Галочка рядом с API Mask; выкл → ноль дейтаграмм; переключается в живой сессии |
+| **Централизованное логирование** | LogStore: кольцо 2000; роли ok/warn/error; экраны фильтруют свою часть |
+| **Явные статусы согласования** | Даунгрейд = честный WARN, молчаливых нет |
+| **Транспорт tcp/ws из UI** | Переключатель TCP/WebSocket; пишется в ссылку |
+| **Авто-синхронизация модулей** | Обновил APK → modules.json подтягивается сам |
+| **Мультипоточность** | N сессий через один порт; TCP-окна складываются |
+| **Лимит трафика — король** | Исчерпан → ровно ноль байт; автоподключение ждёт сброса |
+| **Пин CA — один канон** | SHA256(SPKI CA) у обеих сторон; ротация = один тап |
+| **Диагностика подключения** | `auth failed` = честный статус; IP-локаут не маскируется |
+| **Веб-панель /ui** | RT-график, телеметрия клиентов, камуфляж; vanilla JS |
+| **Docker** | Distroless без шелла, governor в бинаре, cap_drop ALL, healthcheck |
+| **Мультипоточность** | N сессий через один порт; агрегатный статус |
 
-Из любого каталога: скрипт создаёт подпапку `reverseray/` (compose, state,
-.env), скачивает образ, ставит/обновляет, ждёт healthcheck и печатает готовую
-строку подключения:
+</details>
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/stelgen/reverseray/main/deploy/rr.sh -o rr.sh
-sudo bash rr.sh
-```
+<details>
+<summary><b>CI-роботы</b></summary>
 
-| Флаг | Действие |
+| Робот | Что делает |
 |---|---|
-| *(нет)* | установка/обновление до последнего релиза |
-| `--tag v1.0.0` | конкретная версия |
-| `--reset` | обнулить состояние (токены/CA) и пере-enroll |
-| `--no-ui` | закрыть веб-морду в localhost |
+| `go` | gofmt / vet / test-race / coverage |
+| `android` | Сборка + unit-тесты (Robolectric 21/31, evil-сервер, KAT, i18n-гейты) |
+| `modules` | Канон-чек манифеста + парсеры обеих сторон |
+| `privacy-audit` | Ни телеметрии, ни внешних хостов вне белого списка |
+| `govulncheck` | Известные уязвимости stdlib/зависимостей |
+| `gitleaks` | Секреты |
+| `screenshot-apk` | JVM-рендер → `assets/brand/screenshot.png` |
+| `screenshot-web` | Веб-панель из образа → `assets/brand/web.png` |
+| `assets` | Детерминизм брендинга |
+| `docker` | Сборка образа + healthcheck |
+| `codeql` | Стат-анализ безопасности |
+| `dependency-review` | PR-гейт зависимостей |
 
-Автообновления контейнера **запрещены** — обновление только этой командой
-или вручную (канон: владелец решает, что едет на прод).
+</details>
 
-## Телефон
-
-1. Скачайте `reverseray-<версия>.apk` со страницы
-   [Releases](https://github.com/stelgen/reverseray/releases) — или обновите
-   в приложении (вкладка «Обновление»).
-2. Вкладка «Связь»: вставьте строку подключения — приложение само её
-   почистит, покажет зелёное «Ссылка сохранена ✓» и тост. «Очистить» —
-   с подтверждением.
-3. Вкладка «Главная»: одна круглая кнопка «Старт». Статус, график, пакеты,
-   IP/страна/оператор/DNS, спидтест — в карточке; единая консоль ниже.
-
-Проверка прокси:
-
-```bash
-curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
-# ответ — IP телефона
-```
-
-## Если не подключается
+<details>
+<summary><b>Если не подключается</b></summary>
 
 | Шаг | Что делать |
 |---|---|
-| 1 | Вкладка «Лог»: весь журнал; кнопки «Копировать весь лог» и «Поделиться» |
-| 2 | Порты **4433/tcp** и **1080/tcp+udp** должны быть открыты в файрволе облака |
-| 3 | Строгий пин: пин = SHA256(SPKI CA) у обеих сторон; если CA перегенерировали — APK покажет диалог «Сервер сменил сертификат»: «Принять новый пин» обновит ссылку и реконнектит (анти-MITM: молча не доверяем никогда) |
+| 1 | Вкладка «Лог»: весь журнал; кнопки «Копировать» и «Поделиться» |
+| 2 | Порты **4433/tcp** и **1080/tcp+udp** должны быть открыты в файрволе |
+| 3 | Строгий пин: ротация CA → APK покажет диалог «Сервер сменил сертификат» |
 | 4 | `sudo bash rr.sh --reset` — чистое состояние за минуту |
-| 5 | Сканеры в метриках `reverseray_hardening_*` — это нормально: порт молчит по дизайну |
-| 6 | `ERROR 1: auth failed` — токен ссылки устарел (сервер переустанавливали или `--reset`): возьмите свежую строку из вывода `rr.sh`/`enroll` и вставьте заново; не долбите сервер — после 5 неудач он лочит IP, и клиент видит «TLS handshake_failure(40)» вместо причины |
+| 5 | `ERROR 1: auth failed` — токен устарел: возьмите свежую строку из `rr.sh` |
+| 6 | Сканеры в метриках `reverseray_hardening_*` — норма: порт молчит по дизайну |
+
+</details>
+
+---
 
 ## Интеграция с Xray
 
 ```json
-{
-  "protocol": "socks",
-  "settings": { "servers": [{ "address": "SERVER_IP", "port": 1080 }] }
-}
+{ "protocol": "socks", "settings": { "servers": [{ "address": "SERVER_IP", "port": 1080 }] } }
 ```
 
 ## Безопасность
 
-Кратко: TLS 1.3 + ALPN + SPKI-pin (несовпадение заданного пина = отказ —
-анти-MITM; TOFU только при первой дружбе); HMAC с одноразовым nonce;
-anti-SSRF на байтах адресов; WAN-hardening (анти-скан с tarpit и нулём
-ответных байтов); mtproto2 — канон MTProto 2.0 поверх приватного хендшейка;
-admin API — только localhost/unix; контейнер distroless + governor.
-Полная модель угроз — [`SECURITY.md`](SECURITY.md), свежий аудит —
-[`docs/security-audit-2026-10.md`](docs/security-audit-2026-10.md).
+TLS 1.3 + ALPN + SPKI-pin (анти-MITM), HMAC с одноразовым nonce, anti-SSRF,
+WAN-hardening (tarpit), mtproto2 — канон MTProto 2.0, admin API — localhost,
+distroless + governor. Полная модель — [`SECURITY.md`](SECURITY.md),
+аудит — [`docs/security-audit-2026-10.md`](docs/security-audit-2026-10.md).
 
-## CI-роботы
+<details>
+<summary><b>English</b></summary>
 
-| Робот | Что делает |
-|---|---|
-| `go` | gofmt/vet/test-race/coverage — 147 тестов |
-| `android` | сборка + 195 JVM-тестов (Robolectric 21/31, evil-сервер, KAT MTProto, фоллбек, тема, SHA256SUMS, камуфляж, UX-скролл, i18n-гейты) |
-| `modules` | канон-чек манифеста (включая секцию camouflage) + парсеры обеих сторон согласны |
-| `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
-| `govulncheck` | известные уязвимости stdlib/зависимостей |
-| `gitleaks` | секреты |
-| `screenshot-apk` | отдельный воркфлоу после релиза: JVM-рендер MainActivity (Robolectric NATIVE graphics, без эмулятора) → `assets/brand/screenshot.png`; явный git-цикл коммита |
-| `screenshot-web` | отдельный воркфлоу после релиза: веб-панель /ui из опубликованного образа (headless-chromium) → `assets/brand/web.png`; явный git-цикл коммита |
-| `assets` | детерминизм брендинга, живой banner.gif |
-| `docker` | сборка образа + healthcheck |
-| `codeql` | стат-анализ безопасности |
-| `dependency-review` | PR-гейт зависимостей |
+**ReverseRay** turns an Android device into the egress node of a personal proxy.
+The server (Docker) exposes a standard SOCKS5/HTTP inbound, but all traffic
+physically exits through your phone: the device initiates the TLS 1.3 tunnel
+itself — no inbound ports or port forwarding required. Works behind NAT/CGNAT.
 
----
+**Mission:** the ultimate self-hosted, free, private proxy — no VPN subscriptions;
+your existing internet connection is enough. Legitimate personal use only.
 
-## English
-
-**ReverseRay** turns an Android device into the egress node of a personal
-proxy. The server (Docker) exposes a standard SOCKS5/HTTP inbound, but all
-traffic physically exits through your phone: the device initiates the TLS 1.3
-tunnel itself, so no inbound ports or port forwarding are required. It works
-behind NAT/CGNAT and yields a residential IP instead of a datacenter one.
-
-**Mission:** the ultimate self-hosted, free, private personal proxy — no VPN
-subscriptions to buy; your existing internet connection is enough. Built for
-legitimate personal use only; we do not support covert or malicious use.
-Nothing the app or the server does with the network or your data is hidden —
-everything is visible in statuses, logs and the About panels.
-
-### Quick start (one command — autopilot)
+### Quick start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/stelgen/reverseray/main/deploy/rr.sh -o rr.sh
 sudo bash rr.sh
 ```
 
-Flags: `--tag vX.Y.Z` · `--reset` (wipe tokens/CA and re-enroll) · `--no-ui`.
-
-### Phone
-
-1. Grab `reverseray-<version>.apk` from
-   [Releases](https://github.com/stelgen/reverseray/releases) — or update in-app.
-2. Paste the connection string — the app auto-fixes it, shows a green
-   “Link saved ✓” and a toast.
-3. Tap the single round «Start» button — tunnel up (live traffic graph,
-   honest network facts, 5s speed test).
-
-Verify:
+**Phone:** grab the APK from [Releases](https://github.com/stelgen/reverseray/releases),
+paste the connection string, tap Start.
 
 ```bash
 curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 # returns the phone's IP
 ```
 
-### Highlights (technical only — UI is intentionally not documented)
-
-All protocol modules below are **types of masked server↔phone exchange designed to break DPI
-blockers' patterns**: the tunnel looks to DPI like the declared protocol. Client and server use
-them between themselves, weighing their pros and cons (compatibility, speed, recognizability).
-rrp1 is the own base protocol and the fallback. Transport is a mask too: `transport=ws` looks
-like a regular WebSocket site.
-
-| Feature | Summary |
-|---|---|
-| RRP/1 | multiplexing, flow-control (credit ≤ receive buffer), frame limits, keep-alive — spec in docs/protocol.md |
-| wireguard | REAL WireGuard crypto (current whitepaper canon) inside the private channel: Noise_IKpsk2 handshake (mac1, TAI64N), transport packets with ChaCha20-Poly1305 and a 2048 sliding-window anti-replay; handshake PSK = SHA256(token); byte-exact Go↔Kotlin KAT |
-| mtproto2 | DH key regeneration per Telegram canon (official dh_prime); AES-256-IGE payload envelope; cross-language KAT |
-| AUTO protocol | link without `proto=` = AUTO: client asks for the preferred protocol, server negotiates down to rrp1; explicit `proto=` always wins |
-| WAN hardening | tunnel port speaks only to real TLS clients; scanners get a tarpit and zero response bytes |
-| Modules | APK is a thin engine — server and app parse the SAME `modules.json`; updates without reinstall; client falls back to rrp1, server never rolls back |
-| API Mask + client choice | in-tunnel API-like chatter; frame `0x2A` persists the device choice on the SERVER (survives offline) and gates READY.features of future sessions |
-| **UDP Relay** | UDP-relay module: a toggle next to API Mask; client-side gate — off means `UDP_ASSOC` is rejected, literally zero datagrams; switches in a live session |
-| **Centralized logging** | Single LogStore — one source of messages; roles OK=green / WARN=amber / ERR=red on every screen; the Log tab shows everything, tabs filter their own slice |
-| **Explicit negotiation statuses** | Server negotiated lower than requested — an honest WARN («server does not support X — negotiated Y»), no silent downgrades |
-| **Transport tcp/ws from UI** | TCP / WebSocket switch inside the app; the choice is written into the link (link = source of truth) |
-| **Auto module sync** | Updated the APK — modules.json syncs itself, no manual «Check modules» |
-| **Multiplexing (v1.0.2)** | A link with several ports (`:4433,4433,4433`) = N parallel RRP sessions over the same port; the server aggregates them with its least-outstanding hub (cap 8/device) — TCP windows add up, speed grows on lossy links; `RR_SESSIONS=3 bash rr.sh` |
-| Traffic limit is king | exhausted → exactly zero bytes; auto-reconnect can wait for the reset date |
-| Connection diagnostics (v0.9.4) | server `auth failed` → auto-reconnect stops with a clear status; AUTH log prints the token prefix (6 chars) |
-| Web panel `/ui` (v0.9.5) | read-only dashboard: real-time traffic chart, per-client session telemetry (relay/phone bytes, streams, RTT, uptime, UDP/DNS counters, crypto state), 2 s poll, zero JS dependencies |
-| Docker | distroless without shell (in-binary restart governor), cap_drop ALL, healthcheck (CI waits for healthy) |
-### Compatibility
-
-| Component | Min | Tested |
-|---|---|---|
-| Server | Linux, Go 1.24+ | amd64 / arm64 / armv7 |
-| Client | Android 4.0 (API 14) | Robolectric 21/31, manual smoke 14–20 |
+</details>
 
 ---
 
@@ -352,16 +298,13 @@ like a regular WebSocket site.
   <a href="SECURITY.md">Security</a> ·
   <a href="docs/protocol.md">Protocol</a> ·
   <a href="modules/README.md">Modules</a> ·
-  <a href="docs/WORKFLOW.md">Workflow &amp; policies</a> ·
+  <a href="docs/WORKFLOW.md">Workflow</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="https://stelgen.github.io/reverseray/">Landing</a>
 </p>
 
-## Лицензия и авторство
+## Лицензия
 
-**BSD 2-Clause** — см. [LICENSE](LICENSE). Владелец авторских прав —
-STELGEN, автор идеи и проекта: https://github.com/stelgen/reverseray.
-
-Лицензия **обязывает сохранять указание авторства** в любом редистрибутиве
-(копирайт-строка и LICENSE-файл): форки, статьи и сборки должны ссылаться на
-автора. Документация/брендинг по желанию — на условиях CC-BY-4.0.
+**BSD 2-Clause** — [LICENSE](LICENSE). Владелец — STELGEN.
+Лицензия обязывает сохранять авторство в редистрибутивах.
+Брендинг/документация — [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/).
