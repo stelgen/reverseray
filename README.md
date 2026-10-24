@@ -1,5 +1,7 @@
 # ReverseRay
 
+> **«Никакой свободы врагам свободы»** — (С) Кровосток
+
 <h1 align="center">ReverseRay</h1>
 
 <p align="center"><b>Личный прокси-сервер, выходящий через ваш Android-телефон.</b><br/>
@@ -40,7 +42,7 @@
 
 ## Быстрый старт
 
-**Сервер (одна команда):**
+**Сервер:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/stelgen/reverseray/main/deploy/rr.sh -o rr.sh
