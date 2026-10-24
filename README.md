@@ -55,40 +55,89 @@ IP не нужен — достаточно любого сервера, где 
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant A as Приложения / Xray
     participant S as Сервер (Docker)
     participant P as Телефон (Android)
     participant N as Интернет
 
     A->>S: SOCKS5/HTTP CONNECT example.com:443
-    S->>P: OPEN example.com:443 (по туннелю RRP/1)
-    P->>P: SSRF-гвард по байтам резолвнутых адресов
+    S->>P: TLS 1.3 · SPKI-pin · ALPN reverseray/1
+    P->>S: HELLO — proto, protocols, device, caps
+    S-->>P: HELLO_OK — nonce, tunnel_window
+    P->>S: AUTH — HMAC-SHA256 от токена
+    S-->>P: READY — итоговый proto, features, max_streams
+    Note over S,P: AUTO — сервер согласует вниз до rrp1<br/>явный proto= приоритетен<br/>даунгрейд = явный WARN в APK
+    S->>P: PROBE — валидация реального egress
+    P-->>S: PROBE OK — egress через телефон подтверждён
+    opt proto = mtproto2 / wireguard
+        S->>P: KEY_REQ — DH канона Telegram / Noise_IKpsk2
+        P-->>S: KEY_RESP — ключи сессии
+    end
+    S->>P: OPEN example.com:443
+    P->>P: SSRF-guard по байтам резолвнутых адресов
     P->>N: TCP/UDP (DNS на телефоне)
     N-->>P: данные
-    P-->>S: DATA / UDP_DATA (TLS 1.3, mtproto2 — в MTProto-конверте)
+    P-->>S: DATA / UDP_DATA (в конверте протокола)
     S-->>A: данные
 ```
 
 ```mermaid
-flowchart TB
-    subgraph WAN["Интернет / WAN"]
-        SCAN["nmap · masscan · пробники"] -. "первый байт ≠ TLS — tarpit + тишина (0 байт)" .-> S
-        A["Xray / приложения"] -- "SOCKS5/HTTP" --> S
+flowchart LR
+    subgraph LAN["🖥 Клиенты · LAN"]
+        APPS["Браузеры · Xray<br/>SOCKS5 / HTTP"]
+        ADMIN["Владелец<br/>rr.sh · /ui · /status"]
     end
-    subgraph TLS["Приватный хендшейк"]
-        S["Сервер · hardening gate"] -- "TLS 1.3 + SPKI-pin + HMAC nonce" --> P
-        P -- "proto=mtproto2 — DH + MTProto 2.0 конверт" --> P
+    subgraph VPS["🖥 Сервер · Docker"]
+        direction TB
+        HARD["WAN-hardening<br/>tarpit · сканер видит 0 байт<br/>slowloris 30с · per-IP лимиты"]
+        MIXED["mixed-инбокс :1080<br/>SOCKS5 · HTTP · UDP"]
+        NEG["Согласование протоколов<br/>AUTO ↓ до rrp1<br/>явные WARN-статусы даунгрейда"]
+        RRP["RRP/1-сессия<br/>flow-control кредит ≤ буфер<br/>keep-alive · многостримность"]
+        SYNC["modules.json<br/>sync 24ч · по версии/хешу<br/>мусор не применяется"]
+        UI["Веб-панель /ui<br/>RT-график · карточки клиентов"]
     end
-    P["Телефон · egress + лимит-король"] -- "TCP/UDP (SSRF-guard)" --> N["Сеть телефона"]
-    subgraph MODS["Модули (общий манифест)"]
-        M["modules.json — GitHub → APK + сервер"]
+    subgraph PHONE["📱 Телефон · Android 4.0+"]
+        direction TB
+        APK["APK · тонкий движок<br/>LogStore ok зелёный / warn жёлтый / err красный"]
+        GATE["Гейты телефона<br/>SSRF-guard · лимит-король: ровно 0 байт<br/>UDP-галочка: выкл = ноль дейтаграмм"]
+        EGRESS["Egress<br/>TCP · UDP · DNS на телефоне"]
     end
-    M -. "реестр протоколов/политики" .-> S
-    M -. "реестр протоколов/политики" .-> P
-    classDef server fill:#0b2545,stroke:#35B6FF
-    classDef phone fill:#0b3d2e,stroke:#2E7D32
-    class S,SCAN server
-    class P,MODS phone
+    subgraph MASKS["🎭 Протоколы = DPI-маски"]
+        WG["WireGuard/1<br/>Noise_IKpsk2 · ChaCha20<br/>sliding-window 2048"]
+        MT["MTProto/2<br/>DH канона Telegram<br/>AES-256-IGE"]
+        R1["RRP/1<br/>базовый + фоллбек"]
+        NOISE["API Mask<br/>NOISE 0x26 внутри туннеля"]
+    end
+    DPI["👁 DPI-блокировщик видит:<br/>обычный WireGuard · MTProto · API-шум"]
+    SCAN["nmap · masscan"]
+    NET["🌐 Интернет · egress = IP телефона"]
+    SCAN -."скан 4433: первый байт не TLS" .-> HARD
+    APPS -- "SOCKS5/HTTP 1080" --> MIXED
+    MIXED -- "OPEN по стримам" --> RRP
+    RRP -- "DATA · UDP_DATA<br/>в конверте протокола" <--> APK
+    APK -- "TCP · UDP" --> GATE
+    GATE --> EGRESS --> NET
+    P2["TLS 1.3 · ALPN reverseray/1<br/>SPKI-pin + HMAC nonce"]
+    HARD --> P2 --> NEG
+    NEG --- WG
+    NEG --- MT
+    NEG --- R1
+    NOISE -."шум бюджетом 256 КБ/сут" .- APK
+    SYNC -."манифест APK и сервер" .-> NEG
+    SYNC -."галочки API Mask · UDP" .-> APK
+    RRP -."read-only" .-> UI
+    ADMIN -."управление" .-> MIXED
+    DPI -."видит только заявленные протоколы" .-> MASKS
+    classDef vps fill:#0b2545,stroke:#35B6FF,color:#EAF2FF
+    classDef phone fill:#0b3d2e,stroke:#2E7D32,color:#EAF2FF
+    classDef mask fill:#2a1a3e,stroke:#B26BFF,color:#F2EAFF
+    classDef net fill:#3a2a0b,stroke:#F9A825,color:#FFF8E1
+    class HARD,MIXED,NEG,RRP,SYNC,UI vps
+    class APK,GATE,EGRESS phone
+    class WG,MT,R1,NOISE mask
+    class NET,DPI,SCAN net
+
 ```
 
 ## Состав проекта
@@ -102,7 +151,7 @@ flowchart TB
 | Деплой | Автопилот `rr.sh`: установка/обновление/сброс одной командой | [`deploy/rr.sh`](deploy/rr.sh) |
 | CI-роботы | Тесты, приватность, модули, скриншот, секреты | `.github/workflows/` |
 
-## Возможности (v0.9.5)
+## Возможности (v1.0.0)
 
 Только техника — пользовательский интерфейс сознательно не документируется.
 
@@ -111,16 +160,21 @@ flowchart TB
 | Возможность | Суть |
 |---|---|
 | **RRP/1** | Мультиплексирование, flow-control (кредит ≤ буферу приёма), лимиты кадров, keep-alive — спецификация в [`docs/protocol.md`](docs/protocol.md) |
-| **wireguard (v0.9.5)** | НАСТОЯЩАЯ криптография WireGuard (актуальный канон whitepaper) внутри приватного канала: Noise_IKpsk2-хендшейк (mac1, enc_static, enc_timestamp/TAI64N), транспортные пакеты `[type=4][receiver][counter][ChaCha20-Poly1305]` со sliding-window анти-реплеем 2048; PSK хендшейка = SHA256(token) — привязка к нашему ключу доверия; кросс-языковой KAT Go↔Kotlin байт-в-байт |
+| **wireguard** | НАСТОЯЩАЯ криптография WireGuard (актуальный канон whitepaper) внутри приватного канала: Noise_IKpsk2-хендшейк (mac1, enc_static, enc_timestamp/TAI64N), транспортные пакеты `[type=4][receiver][counter][ChaCha20-Poly1305]` со sliding-window анти-реплеем 2048; PSK хендшейка = SHA256(token) — привязка к нашему ключу доверия; кросс-языковой KAT Go↔Kotlin байт-в-байт |
 | **mtproto2** | После приватного хендшейка ключи перегенерируются DH-обменом по канону MTProto 2.0 (официальный dh_prime Telegram, AES-256-IGE, msg_key SHA-256); кросс-языковой KAT Go↔Kotlin |
-| **AUTO-протокол (v0.9.5)** | Ссылка без `proto=` = режим AUTO: клиент запрашивает предпочтительный протокол, сервер согласует по общему реестру вниз до rrp1; явный `proto=` в ссылке всегда приоритетен; мусор никогда не ломает стек |
+| **AUTO-протокол** | Ссылка без `proto=` = режим AUTO: клиент запрашивает предпочтительный протокол, сервер согласует по общему реестру вниз до rrp1; явный `proto=` в ссылке всегда приоритетен; мусор никогда не ломает стек |
 | **WAN-hardening** | Туннельный порт отвечает только настоящим TLS-клиентам; первый байт не TLS → tarpit + тихое закрытие без единого байта ответа; глобальные и per-IP лимиты параллельности |
 | **Модульная система** | APK — тонкий движок; сервер и приложение парсят ОДИН манифест `modules.json`; обновления модулей без переустановки APK (по версии/хешу, мусор не применяется, даунгрейд запрещён); клиент фоллбечится на rrp1, сервер не откатывается никогда (анти-цикл) |
-| **API Mask + выбор клиента (v0.9.5)** | Камуфляж: фоновый обмен внутри туннеля выглядит как API бизнес-приложения; ноль внешних хостов; суточный бюджет из манифеста; кадр `0x2A` — выбор устройства персистентен НА СЕРВЕРЕ (переживает офлайн клиента) и учитывается в READY.features будущих сессий |
+| **API Mask + выбор клиента** | Камуфляж: фоновый обмен внутри туннеля выглядит как API бизнес-приложения; ноль внешних хостов; суточный бюджет из манифеста; кадр `0x2A` — выбор устройства персистентен НА СЕРВЕРЕ (переживает офлайн клиента) и учитывается в READY.features будущих сессий |
+| **UDP Relay** | Модуль UDP-релея: галочка рядом с API Mask; гейт на клиенте — выкл → `UDP_ASSOC` отклоняется, РОВНО НОЛЬ дейтаграмм; переключается в живой сессии |
+| **Централизованное логирование** | Единый LogStore — один источник сообщений; роли OK=зелёный / WARN=жёлтый / ERR=красный на всех экранах; экран «Лог» показывает всё, вкладки фильтруют свою часть |
+| **Явные статусы согласования** | Сервер согласовал ниже запрошенного — честный WARN («сервер не поддерживает X — согласован Y»), молчаливых даунгрейдов нет |
+| **Транспорт tcp/ws из UI** | Переключатель TCP / WebSocket в приложении; выбор пишется в ссылку (ссылка = источник правды) |
+| **Авто-синхронизация модулей** | Обновил APK — modules.json подтягивается сам, без ручного «Проверить модули» |
 | **Лимит трафика — король** | Суточный/месячный лимит с датой сброса; исчерпан → РОВНО НОЛЬ байт: туннель умирает, автоподключение умеет ждать дату сброса |
 | **Пин CA — один канон** | пин = SHA256(SPKI CA) у обеих сторон; ротация CA = один тап владельца (диалог с фактическим пином, «Принять» обновляет ссылку и реконнектит); молчаливого доверия нет никогда |
-| **Диагностика подключения (v0.9.4)** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена для сверки со строкой из rr.sh/enroll |
-| **Веб-панель `/ui` (v0.9.5)** | Read-only дашборд: график трафика реального времени (окно 90 с), карточки клиентов с полной телеметрией сессии (relay-байты/трафик телефона, стримы, RTT, uptime, UDP/DNS-счётчики, статус крипты протокола), выборы камуфляжа клиентов; опрос 2 с, vanilla JS без зависимостей |
+| **Диагностика подключения** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена для сверки со строкой из rr.sh/enroll |
+| **Веб-панель `/ui`** | Read-only дашборд: график трафика реального времени (окно 90 с), карточки клиентов с полной телеметрией сессии (relay-байты/трафик телефона, стримы, RTT, uptime, UDP/DNS-счётчики, статус крипты протокола), выборы камуфляжа клиентов; опрос 2 с, vanilla JS без зависимостей |
 | **Docker** | Distroless БЕЗ шелла (restart-governor в самом бинаре), read-only rootfs, `cap_drop: ALL`; healthcheck обязателен (CI поднимает контейнер с родным entrypoint и ждёт healthy) |
 ## Быстрый старт — одна команда (автопилот)
 
@@ -136,7 +190,7 @@ sudo bash rr.sh
 | Флаг | Действие |
 |---|---|
 | *(нет)* | установка/обновление до последнего релиза |
-| `--tag v0.8.3` | конкретная версия |
+| `--tag v1.0.0` | конкретная версия |
 | `--reset` | обнулить состояние (токены/CA) и пере-enroll |
 | `--no-ui` | закрыть веб-морду в localhost |
 
@@ -167,7 +221,7 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 |---|---|
 | 1 | Вкладка «Лог»: весь журнал; кнопки «Копировать весь лог» и «Поделиться» |
 | 2 | Порты **4433/tcp** и **1080/tcp+udp** должны быть открыты в файрволе облака |
-| 3 | Строгий пин (v0.9.0): пин = SHA256(SPKI CA) у обеих сторон; если CA перегенерировали — APK покажет диалог «Сервер сменил сертификат»: «Принять новый пин» обновит ссылку и реконнектит (анти-MITM: молча не доверяем никогда) |
+| 3 | Строгий пин: пин = SHA256(SPKI CA) у обеих сторон; если CA перегенерировали — APK покажет диалог «Сервер сменил сертификат»: «Принять новый пин» обновит ссылку и реконнектит (анти-MITM: молча не доверяем никогда) |
 | 4 | `sudo bash rr.sh --reset` — чистое состояние за минуту |
 | 5 | Сканеры в метриках `reverseray_hardening_*` — это нормально: порт молчит по дизайну |
 | 6 | `ERROR 1: auth failed` — токен ссылки устарел (сервер переустанавливали или `--reset`): возьмите свежую строку из вывода `rr.sh`/`enroll` и вставьте заново; не долбите сервер — после 5 неудач он лочит IP, и клиент видит «TLS handshake_failure(40)» вместо причины |
@@ -260,12 +314,17 @@ like a regular WebSocket site.
 | Feature | Summary |
 |---|---|
 | RRP/1 | multiplexing, flow-control (credit ≤ receive buffer), frame limits, keep-alive — spec in docs/protocol.md |
-| wireguard (v0.9.5) | REAL WireGuard crypto (current whitepaper canon) inside the private channel: Noise_IKpsk2 handshake (mac1, TAI64N), transport packets with ChaCha20-Poly1305 and a 2048 sliding-window anti-replay; handshake PSK = SHA256(token); byte-exact Go↔Kotlin KAT |
+| wireguard | REAL WireGuard crypto (current whitepaper canon) inside the private channel: Noise_IKpsk2 handshake (mac1, TAI64N), transport packets with ChaCha20-Poly1305 and a 2048 sliding-window anti-replay; handshake PSK = SHA256(token); byte-exact Go↔Kotlin KAT |
 | mtproto2 | DH key regeneration per Telegram canon (official dh_prime); AES-256-IGE payload envelope; cross-language KAT |
-| AUTO protocol (v0.9.5) | link without `proto=` = AUTO: client asks for the preferred protocol, server negotiates down to rrp1; explicit `proto=` always wins |
+| AUTO protocol | link without `proto=` = AUTO: client asks for the preferred protocol, server negotiates down to rrp1; explicit `proto=` always wins |
 | WAN hardening | tunnel port speaks only to real TLS clients; scanners get a tarpit and zero response bytes |
 | Modules | APK is a thin engine — server and app parse the SAME `modules.json`; updates without reinstall; client falls back to rrp1, server never rolls back |
-| API Mask + client choice (v0.9.5) | in-tunnel API-like chatter; frame `0x2A` persists the device choice on the SERVER (survives offline) and gates READY.features of future sessions |
+| API Mask + client choice | in-tunnel API-like chatter; frame `0x2A` persists the device choice on the SERVER (survives offline) and gates READY.features of future sessions |
+| **UDP Relay** | UDP-relay module: a toggle next to API Mask; client-side gate — off means `UDP_ASSOC` is rejected, literally zero datagrams; switches in a live session |
+| **Centralized logging** | Single LogStore — one source of messages; roles OK=green / WARN=amber / ERR=red on every screen; the Log tab shows everything, tabs filter their own slice |
+| **Explicit negotiation statuses** | Server negotiated lower than requested — an honest WARN («server does not support X — negotiated Y»), no silent downgrades |
+| **Transport tcp/ws from UI** | TCP / WebSocket switch inside the app; the choice is written into the link (link = source of truth) |
+| **Auto module sync** | Updated the APK — modules.json syncs itself, no manual «Check modules» |
 | Traffic limit is king | exhausted → exactly zero bytes; auto-reconnect can wait for the reset date |
 | Connection diagnostics (v0.9.4) | server `auth failed` → auto-reconnect stops with a clear status; AUTH log prints the token prefix (6 chars) |
 | Web panel `/ui` (v0.9.5) | read-only dashboard: real-time traffic chart, per-client session telemetry (relay/phone bytes, streams, RTT, uptime, UDP/DNS counters, crypto state), 2 s poll, zero JS dependencies |

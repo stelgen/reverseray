@@ -27,7 +27,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | Modules integrity | канон-чек `modules/modules.json` + тесты парсеров обеих сторон (Go+Kotlin) |
 | Privacy audit | `scripts/privacy_audit.py`: ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных/токенов в доках |
 | Govulncheck | известные уязвимости stdlib/зависимостей |
-| Screenshot bots | ДВА полностью независимых воркфлоу, асинхронно ПОСЛЕ релиза (workflow_run Release=success + cron + dispatch), НИКОГДА не блокируют релиз и друг друга: `screenshot-apk.yml` — JVM-рендер MainActivity (Robolectric NATIVE graphics, эмулятор удалён) → `assets/brand/screenshot.png`; `screenshot-web.yml` — веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; каждый коммитит только свой файл |
+| Screenshot bots | ДВА полностью независимых воркфлоу, асинхронно ПОСЛЕ релиза (workflow_run Release=success + cron + dispatch), НИКОГДА не блокируют релиз и друг друга: `screenshot-apk.yml` — JVM-рендер MainActivity (Robolectric NATIVE graphics, эмулятор удалён) → `assets/brand/screenshot.png`; `screenshot-web.yml` — веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; каждый коммитит только свой файл; APK-бот — явный git-цикл (без magic-action): ошибки пуша уезжают артефактом `screenshot-push-debug` |
 | CodeQL | стат-анализ безопасности |
 
 ## Политики тулчейна
@@ -52,6 +52,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | Фоллбек протоколов | откатывается ТОЛЬКО клиент (3 неудачи → rrp1, запись в журнал); сервер не откатывается никогда |
 | Апдейтер | APK сверяется с SHA256SUMS релиза; несовпадение — установка отменяется |
 | API Mask | шум ходит ТОЛЬКО внутри туннеля; суточный бюджет из манифеста; байты шума — в счётчик трафика; клиент шлёт NOISE только при подтверждённой сервером возможности. Свои ~200 строк без зависимостей |
+| UDP-модуль (v1.0.0) | галочка в APK рядом с API Mask; гейт на клиенте (телефон — точка egress UDP): выкл → `UDP_ASSOC` отклоняется, РОВНО НОЛЬ дейтаграмм; переключается в живой сессии; секция `udp` манифеста additive — старые APK/серверы игнорируют |
 | AUTO-протокол | пустой `proto=` = AUTO: клиент просит предпочтительный, сервер согласует вниз до rrp1; явный `proto=` приоритетен; serialize пишет proto= ТОЛЬКО явно; встроенные протоколы известны всегда (isKnown ⊇ BUNDLED) |
 | WireGuard — настоящий канон | актуальный WG whitepaper (Noise_IKpsk2, blake2s/curve25519/chacha20poly1305, mac1, TAI64N, sliding-window 2048); PSK = SHA256(token); любой крипто-протокол обязан иметь кросс-языковой KAT Go↔Kotlin байт-в-байт и e2e через настоящий rrp.Session |
 | Выбор модуля клиентом — персистентен на сервере | кадр 0x2A CAM_CTL: сервер хранит выбор в state/camouflage.json; переживает офлайн; выключенный клиентом apimask сам не включается; мусорный кадр не рвёт сессию |
