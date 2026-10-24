@@ -286,19 +286,12 @@ class MainActivity : AppCompatActivity() {
         // Главная обновляется статус-броадкастами (renderServiceLogs).
         LogStore.onEntry = { e ->
             runOnUiThread {
-                val line = StatusConsole.Line(
-                    e.text,
-                    when (e.kind) {
-                        LogKind.OK -> StatusConsole.Role.OK
-                        LogKind.WARN -> StatusConsole.Role.WARN
-                        LogKind.ERR -> StatusConsole.Role.ERR
-                        else -> StatusConsole.Role.INFO
-                    },
-                )
+                val line = StatusConsole.Line(e.text, StatusConsole.roleOf(e.kind))
                 if (e.channel == LogStore.Channel.UPDATE) {
                     updateConsole.append(line)
                 }
-                if (isLogTabOpen() && e.channel == LogStore.Channel.STATUS) {
+                // v0.9.7: вкладка «Лог» — ВСЕ каналы в реалтайме (канон: полный лог)
+                if (isLogTabOpen()) {
                     logConsole.append(line)
                 }
             }
@@ -1472,28 +1465,19 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Сеть/статус
 
-    private fun toConsoleLines(entries: List<LogStore.Entry>): List<StatusConsole.Line> = entries.map { l ->
-        StatusConsole.Line(
-            l.text,
-            when (l.kind) {
-                LogKind.OK -> StatusConsole.Role.OK
-                LogKind.WARN -> StatusConsole.Role.WARN
-                LogKind.ERR -> StatusConsole.Role.ERR
-                else -> StatusConsole.Role.INFO
-            },
-        )
-    }
+    private fun toConsoleLines(entries: List<LogStore.Entry>): List<StatusConsole.Line> =
+        entries.map { l -> StatusConsole.Line(l.text, StatusConsole.roleOf(l.kind)) }
 
     /**
-     * v0.9.6 (канон единого лога): каждое окно берёт из LogStore сообщения
+     * v0.9.7 (фильтрация по экранам LogStore.Screen): каждое окно берёт из LogStore сообщения
      * СВОЕГО типа — главная: статусы подключения (цвета: подключено —
      * зелёный, ошибка/отключено — красный, реконнект — тёмно-жёлтый),
      * обновление: канал UPDATE, полный лог: всё без исключений.
      */
     private fun renderServiceLogs() {
-        homeConsole.render(toConsoleLines(LogStore.snapshot(LogStore.Channel.STATUS)))
-        updateConsole.render(toConsoleLines(UpdateLogger.snapshot()))
-        logConsole.render(toConsoleLines(LogStore.snapshot(null)))
+        homeConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.HOME)))
+        updateConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.UPDATE)))
+        logConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.LOG)))
     }
 
     /** Открыта ли сейчас вкладка полного лога (для реалтайм-дорисовки). */
@@ -1755,19 +1739,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshUpdateConsole() {
-        // v0.8.2: строки журнала обновлений несут цветовую роль (как в консоли туннеля)
-        val lines = UpdateLogger.snapshot().map { l ->
-            StatusConsole.Line(
-                l.text,
-                when (l.kind) {
-                    LogKind.OK -> StatusConsole.Role.OK
-                    LogKind.WARN -> StatusConsole.Role.WARN
-                    LogKind.ERR -> StatusConsole.Role.ERR
-                    else -> StatusConsole.Role.INFO
-                },
-            )
-        }
-        updateConsole.render(lines)
+        // v0.9.7: единый маппинг цветов (StatusConsole.roleOf), источник — LogStore (канал UPDATE)
+        updateConsole.render(toConsoleLines(UpdateLogger.snapshot()))
     }
 
     /** v0.8: применить сохранённый манифест модулей при старте. */
@@ -1826,7 +1799,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 conn.disconnect()
                 val body = baos.toString("UTF-8")
-                UpdateLogger.add(getString(R.string.upd_modules_received, fmtBytes(total)))
+                UpdateLogger.add(getString(R.string.upd_modules_received, fmtBytes(total)), LogKind.OK)
                 val m = Modules.parse(body)
                 UpdateLogger.add(
                     getString(
@@ -1909,14 +1882,14 @@ class MainActivity : AppCompatActivity() {
         Thread {
             val info = UpdateChecker().check(current)
             if (info == null) {
-                UpdateLogger.add(getString(R.string.upd_check_none))
+                UpdateLogger.add(getString(R.string.upd_check_none), LogKind.OK)
                 if (showIfUpToDate) {
                     runOnUiThread { Toast.makeText(this, R.string.update_latest, Toast.LENGTH_SHORT).show() }
                 }
             } else {
                 UpdateLogger.add(getString(R.string.upd_check_available, info.latestTag, info.apkUrl.substringAfterLast('/')), LogKind.OK)
                 if (info.sumsUrl.isNotEmpty()) {
-                    UpdateLogger.add(getString(R.string.upd_sums_found))
+                    UpdateLogger.add(getString(R.string.upd_sums_found), LogKind.OK)
                 } else {
                     UpdateLogger.add(getString(R.string.upd_sums_missing), LogKind.WARN)
                 }

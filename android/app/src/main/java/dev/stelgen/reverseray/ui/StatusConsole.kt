@@ -16,6 +16,8 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 
+import dev.stelgen.reverseray.core.LogKind
+
 /**
  * Единое окно статуса/лога (v0.8) — один и тот же компонент на всех
  * вкладках: Главная, Обновление, Лог. Канон консистентности UI:
@@ -38,6 +40,20 @@ class StatusConsole @JvmOverloads constructor(
 
     /** Роль строки: цвет по канону. */
     enum class Role { INFO, OK, WARN, ERR }
+
+    companion object {
+        /**
+         * Единственная точка маппинга LogKind → цветовая роль (v0.9.7):
+         * OK — зелёный, WARN — тёмно-жёлтый, ERR — красный, INFO — обычная.
+         * Одинаковая на всех экранах (канон централизованного логирования).
+         */
+        fun roleOf(kind: LogKind): Role = when (kind) {
+            LogKind.OK -> Role.OK
+            LogKind.WARN -> Role.WARN
+            LogKind.ERR -> Role.ERR
+            else -> Role.INFO
+        }
+    }
 
     class Line(val text: String, val role: Role = Role.INFO)
 
