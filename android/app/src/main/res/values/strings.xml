@@ -87,6 +87,12 @@
     <string name="proto_current">Protocol: %1$s</string>
     <string name="proto_current_list">Protocol: %1$s · server supports: %2$s</string>
     <string name="proto_rollback_toast">New protocol failed validation — rolled back to the last working one</string>
+    <string name="transport_switch">Transport</string>
+    <string name="transport_current">Transport: %1$s</string>
+    <string name="transport_tcp_label">TCP — plain TLS stream</string>
+    <string name="transport_ws_label">WebSocket — looks like a regular website</string>
+    <string name="transport_applied">transport set to %1$s (applies on next Start)</string>
+    <string name="transport_same">Transport already selected</string>
 
     <!-- Update -->
     <string name="version_row">Version: %1$s (code %2$d)</string>

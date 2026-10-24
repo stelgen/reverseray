@@ -51,6 +51,7 @@ import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
+import dev.stelgen.reverseray.core.RrpUriConfig
 import dev.stelgen.reverseray.core.SecurityFacts
 import dev.stelgen.reverseray.core.ThemeMode
 import dev.stelgen.reverseray.ui.Formats
@@ -131,6 +132,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Строки «текущий протокол» живут на двух вкладках — обновляем все. */
     private val protoLineViews = mutableListOf<TextView>()
+    private val transportLineViews = mutableListOf<TextView>()
     /** Сводка лимита трафика — на главной и в настройках. */
     private val usageViews = mutableListOf<TextView>()
 
@@ -393,7 +395,7 @@ class MainActivity : AppCompatActivity() {
             2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
             3 -> renderServiceLogs()
             4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
-            1 -> refreshProtoLine()
+            1 -> { refreshProtoLine(); refreshTransportLine() }
         }
     }
 
@@ -777,6 +779,16 @@ class MainActivity : AppCompatActivity() {
         protoCard.addView(protoLineViews.last())
         protoCard.addView(outlined(R.string.proto_switch).apply {
             setOnClickListener { showProtocolPicker() }
+        })
+        // v0.9.7 (роадмап): транспорт tcp/ws из UI — вторая DPI-маска на уровне
+        // транспорта; выбор пишется в ссылку (канон «ссылка = источник правды»)
+        transportLineViews.add(TextView(this).apply {
+            textSize = 13f
+            setPadding(0, dp(4), 0, dp(4))
+        })
+        protoCard.addView(transportLineViews.last())
+        protoCard.addView(outlined(R.string.transport_switch).apply {
+            setOnClickListener { showTransportPicker() }
         })
         p.addView(card(protoCard))
 
@@ -1366,6 +1378,7 @@ class MainActivity : AppCompatActivity() {
         setUiState(TunnelService.lastState)
         // протокол и его известность — из ссылки + реестра сервера
         refreshProtoLine()
+        refreshTransportLine()
         // история графика живёт в сервисе — восстанавливаем целиком
         val (buf, head, valid) = TunnelService.graphHistory()
         trafficGraph.setHistory(buf, head, valid)
@@ -1415,6 +1428,70 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
     }
 
+    /** v0.9.7: текущий транспорт из ссылки (tcp по умолчанию, ws = WebSocket). */
+    private fun currentTransport(): String = try {
+        RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").transport
+    } catch (_: Exception) {
+        RrpUri.TRANSPORT_TCP
+    }
+
+    private fun refreshTransportLine() {
+        val t = currentTransport()
+        val label = getString(
+            if (t == RrpUri.TRANSPORT_WS) R.string.transport_ws_label else R.string.transport_tcp_label,
+        )
+        transportLineViews.forEach { it.text = getString(R.string.transport_current, label) }
+    }
+
+    /**
+     * v0.9.7 (роадмап): выбор транспорта tcp/ws из UI. Параметр уже был
+     * в ссылке — теперь есть переключатель; ссылка остаётся источником правды.
+     * Применение — при следующем Старте (сервис читает транспорт при старте).
+     */
+    private fun showTransportPicker() {
+        val cfg = try {
+            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "")
+        } catch (_: Exception) {
+            null
+        }
+        if (cfg == null) {
+            Toast.makeText(this, R.string.link_status_bad, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val options = arrayOf(
+            getString(R.string.transport_tcp_label),
+            getString(R.string.transport_ws_label),
+        )
+        val checked = if (cfg.transport == RrpUri.TRANSPORT_WS) 1 else 0
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.transport_switch)
+            .setSingleChoiceItems(options, checked) { dialog, which ->
+                dialog.dismiss()
+                val picked = if (which == 1) RrpUri.TRANSPORT_WS else RrpUri.TRANSPORT_TCP
+                if (picked == cfg.transport) {
+                    Toast.makeText(this, R.string.transport_same, Toast.LENGTH_SHORT).show()
+                    return@setSingleChoiceItems
+                }
+                applyTransport(cfg, picked)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyTransport(cfg: RrpUriConfig, transport: String) {
+        val label = getString(
+            if (transport == RrpUri.TRANSPORT_WS) R.string.transport_ws_label else R.string.transport_tcp_label,
+        )
+        val canonical = cfg.copy(transport = transport).serialize()
+        configView.setText(canonical)
+        configView.setSelection(canonical.length)
+        prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+        refreshTransportLine()
+        val msg = getString(R.string.transport_applied, label)
+        LogStore.push(msg, LogKind.INFO, LogStore.Channel.STATUS)
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+
     // ================================================================= Ссылка (авто-починка)
 
     /** Вставили/ввели ссылку → приложение САМО чинит, сохраняет и подтверждает. */
@@ -1426,6 +1503,7 @@ class MainActivity : AppCompatActivity() {
             configView.setSelection(canonical.length)
             prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
             setLinkStatus(getString(R.string.link_status_ok))
+            refreshTransportLine()
             if (announce) {
                 Toast.makeText(this, R.string.link_saved, Toast.LENGTH_SHORT).show()
             }

@@ -83,6 +83,12 @@
 <string name="modules_hint">Вкл/выкл одним чекбоксом; выбор синхронизируется с сервером и переживает офлайн.</string>
     <string name="modules_camo_desc">Фоновый обмен API-подобными кадрами внутри туннеля.</string>
 <string name="proto_switch">Сменить протокол</string>
+    <string name="transport_switch">Транспорт</string>
+    <string name="transport_current">Транспорт: %1$s</string>
+    <string name="transport_tcp_label">TCP — обычный TLS-поток</string>
+    <string name="transport_ws_label">WebSocket — выглядит как обычный сайт</string>
+    <string name="transport_applied">транспорт изменён на %1$s (применится при следующем Старте)</string>
+    <string name="transport_same">Транспорт уже выбран</string>
     <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
     <string name="proto_current">Протокол: %1$s</string>
     <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>

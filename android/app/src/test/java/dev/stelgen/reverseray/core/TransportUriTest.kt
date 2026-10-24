@@ -42,4 +42,17 @@ class TransportUriTest {
         assertEquals(RrpUri.TRANSPORT_TCP, cfg.transport)
         assertEquals(RrpUri.TRANSPORT_WS, RrpUri.parse("rrp://tok@h:4433/?transport=ws").transport)
     }
+
+    @Test
+    fun `transport switch rewrites link canonically (UI picker flow)`() {
+        // v0.9.7: пикер делает cfg.copy(transport=…) → serialize — канон «ссылка = источник правды»
+        val ws = RrpUri.parse("rrp://tok@h:4433/?pin=p&name=Home&transport=ws")
+        val backToTcp = ws.copy(transport = RrpUri.TRANSPORT_TCP).serialize()
+        assertTrue(!backToTcp.contains("transport"))
+        assertTrue(backToTcp.contains("pin=p"))
+        assertEquals(ws.copy(transport = RrpUri.TRANSPORT_TCP), RrpUri.parse(backToTcp))
+        val toWs = RrpUri.parse("rrp://tok@h:4433/?pin=p").copy(transport = RrpUri.TRANSPORT_WS).serialize()
+        assertTrue(toWs.contains("transport=ws"))
+        assertTrue(toWs.contains("pin=p"))
+    }
 }
