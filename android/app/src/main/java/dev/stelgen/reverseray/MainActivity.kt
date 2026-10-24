@@ -613,6 +613,12 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(2), 0, 0)
         })
         inner.addView(protoLineViews.last())
+        // v0.9.7 (GUI-ревизия, этап 1): маска транспорта видна на главной рядом с протоколом
+        transportLineViews.add(TextView(this).apply {
+            textSize = 12f
+            setPadding(0, dp(2), 0, 0)
+        })
+        inner.addView(transportLineViews.last())
         p.addView(card(inner))
 
         // Единое консольное окно статуса (листается, live-кнопка в баре)
@@ -1190,9 +1196,9 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(12), 0, dp(4))
         })
         val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val bSystem = outlinedLang(R.string.lang_system)
-        val bRu = outlinedLang(R.string.lang_ru)
-        val bEn = outlinedLang(R.string.lang_en)
+        val bSystem = outlined(R.string.lang_system)
+        val bRu = outlined(R.string.lang_ru)
+        val bEn = outlined(R.string.lang_en)
         bSystem.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         bRu.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             .apply { setMargins(dp(6), 0, 0, 0) }
@@ -1224,11 +1230,6 @@ class MainActivity : AppCompatActivity() {
         paint()
         return box
     }
-
-    private fun outlinedLang(textRes: Int) =
-        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(textRes)
-        }
 
     private fun outlined(textRes: Int) =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
