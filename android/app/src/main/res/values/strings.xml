@@ -95,7 +95,7 @@
     <string name="transport_same">Transport already selected</string>
     <string name="conn_line">Connection: %1$s · %2$s</string>
     <string name="upd_auto_modules">app updated — syncing protocol modules</string>
-    <string name="udp_toggle">UDP relay (%1$s)</string>
+    <string name="udp_toggle">UDP relay (DNS+, QUIC)</string>
     <string name="log_udp_on">udp relay enabled — datagrams flow again</string>
     <string name="log_udp_off">udp relay disabled by toggle — datagrams rejected (zero-byte rule)</string>
 

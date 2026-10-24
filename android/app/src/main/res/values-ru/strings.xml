@@ -91,7 +91,7 @@
     <string name="transport_same">Транспорт уже выбран</string>
     <string name="conn_line">Соединение: %1$s · %2$s</string>
     <string name="upd_auto_modules">приложение обновлено — синхронизирую модули протоколов</string>
-    <string name="udp_toggle">UDP-релей (%1$s)</string>
+    <string name="udp_toggle">UDP-релей (DNS+, QUIC)</string>
     <string name="log_udp_on">UDP-релей включён — дейтаграммы снова ходят</string>
     <string name="log_udp_off">UDP-релей выключен галочкой — дейтаграммы отклоняются (правило нуля байт)</string>
     <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>

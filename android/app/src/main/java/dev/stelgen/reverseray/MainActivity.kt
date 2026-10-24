@@ -550,17 +550,16 @@ class MainActivity : AppCompatActivity() {
             // ровно один клик (performClick — паттерн a11y, как в StatusConsole).
             setOnTouchListener { v, ev ->
                 val springBack = {
-                    v.animate().cancel()
-                    breathing?.cancel()
-                    // v1.0.0: возврат после нажатия = мягкий перезапуск дыхания
-                    // (applyButtonMode плавно вводит масштаб обратно в цикл)
-                    lastButtonMode?.let { applyButtonMode(it) }
+                    // v1.0.1: нажатие сжимает СБОРКУ (кольцо+кнопка), дыхание
+                    // кнопки живёт непрерывно — цикл не разрывается
+                    buttonBox.animate().cancel()
+                    buttonBox.animate().scaleX(1f).scaleY(1f).setDuration(200)
+                        .setInterpolator(android.view.animation.OvershootInterpolator(0.8f)).start()
                 }
                 when (ev.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
-                        breathing?.cancel()
-                        v.animate().cancel()
-                        v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(120)
+                        buttonBox.animate().cancel()
+                        buttonBox.animate().scaleX(0.97f).scaleY(0.97f).setDuration(120)
                             .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
                     }
                     android.view.MotionEvent.ACTION_UP -> {
@@ -790,7 +789,7 @@ class MainActivity : AppCompatActivity() {
         if (udpCfg != null) {
             val udpRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             udpRow.addView(CheckBox(this).apply {
-                text = getString(R.string.udp_toggle, udpCfg.name)
+                text = getString(R.string.udp_toggle)
                 isChecked = prefs().getBoolean(TunnelService.KEY_UDP_ENABLED, true)
                 textSize = 13f
                 setOnCheckedChangeListener { _, checked ->
@@ -1348,6 +1347,7 @@ class MainActivity : AppCompatActivity() {
 
     /** v1.0.0: зацикленное «дыхание» кнопки (REVERSE-цикл, гасится плавно). */
     private var breathing: android.animation.ValueAnimator? = null
+    private var breathMode: Mode? = null
 
     private fun applyButtonMode(mode: Mode) {
         bigButtonIsStart = mode.isStart
@@ -1401,34 +1401,40 @@ class MainActivity : AppCompatActivity() {
         // v0.9.3 (канон 2026): смена состояния — мягкий «поп» 3.5% и упругий
         // возврат (140+220мс). Только при РЕАЛЬНОЙ смене режима — без дёрганья
         // при повторных синхронизациях UI из сервиса.
-        // v1.0.0 (канон владельца): ДЫХАНИЕ — зацикленная плавная анимация
-        // (scale 1.00↔1.02, 1100 мс полуцикл, REVERSE, AccelerateDecelerate):
-        // мягкий вход с текущего масштаба, бесконечный цикл без обрывков;
-        // при смене состояния гасим обратно в 1.0 за 250 мс.
+        // v1.0.1 (канон владельца): ДЫХАНИЕ — запускается ОДИН раз при входе
+        // в активное состояние и живёт бесконечно (REVERSE-цикл 1100 мс,
+        // AccelerateDecelerate); повторные синхронизации его НЕ трогают —
+        // цикл непрерывен от начала до конца; выход только при смене режима —
+        // плавное затухание в 1.0 (300 мс). Нажатие сжимает сборку (buttonBox),
+        // не разрывая дыхание.
         if (mode != lastButtonMode) {
             lastButtonMode = mode
-            breathing?.cancel()
-            bigButton.animate().cancel()
             if (mode == Mode.CONNECTED || mode == Mode.CONNECTING) {
-                val (lo, hi) = if (mode == Mode.CONNECTED) 1.0f to 1.025f else 0.985f to 1.015f
-                breathing = android.animation.ValueAnimator.ofFloat(lo, hi).apply {
-                    duration = 1100
-                    repeatMode = android.animation.ValueAnimator.REVERSE
-                    repeatCount = android.animation.ValueAnimator.INFINITE
-                    interpolator = android.view.animation.AccelerateDecelerateInterpolator()
-                    addUpdateListener { a ->
-                        val s = a.animatedValue as Float
-                        bigButton.scaleX = s
-                        bigButton.scaleY = s
+                if (breathMode != mode) {
+                    breathMode = mode
+                    breathing?.cancel()
+                    val (lo, hi) = if (mode == Mode.CONNECTED) 1.0f to 1.03f else 0.985f to 1.02f
+                    breathing = android.animation.ValueAnimator.ofFloat(lo, hi).apply {
+                        duration = 1100
+                        repeatMode = android.animation.ValueAnimator.REVERSE
+                        repeatCount = android.animation.ValueAnimator.INFINITE
+                        interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+                        addUpdateListener { a ->
+                            val s = a.animatedValue as Float
+                            bigButton.scaleX = s
+                            bigButton.scaleY = s
+                        }
+                        start()
                     }
-                    start()
                 }
-            } else {
-                bigButton.animate()
-                    .scaleX(1f).scaleY(1f)
-                    .setDuration(250)
-                    .setInterpolator(android.view.animation.DecelerateInterpolator())
-                    .start()
+            } else if (breathMode != null) {
+                breathMode = null
+                val b = breathing
+                breathing = null
+                b?.cancel()
+                bigButton.animate().cancel()
+                bigButton.animate().scaleX(1f).scaleY(1f).setDuration(300)
+                    .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
             }
         }
     }
