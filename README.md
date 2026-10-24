@@ -44,9 +44,17 @@ IP не нужен — достаточно любого сервера, где 
 | **Стабильность** | Экспоненциальный backoff, restart-governor, healthcheck обязателен, фоллбек протоколов, мусорные данные никогда не ломают стек |
 | **Бережное отношение к железу** | Дисциплина SSD/RAM: счётчики в RAM, запись на диск раз в минуту; APK не тратит батарею фоновыми пробами; сервер не изнашивает диск хоста |
 
+---
+
+## 📱 Скриншоты
+
 <p align="center">
-  <img src="assets/brand/screenshot.png" alt="Интерфейс приложения" width="280"/>
-  <img src="assets/brand/web.png" alt="Веб-панель" width="720"/>
+  <table>
+    <tr>
+      <td align="center" width="45%"><img src="assets/brand/screenshot.png" alt="Приложение" width="260"/><br/><sub><b>APK</b> · Android 4.0+ · тёмная/светлая тема</sub></td>
+      <td align="center" width="55%"><img src="assets/brand/web.png" alt="Веб-панель" width="380"/><br/><sub><b>Веб-панель</b> · /ui · RT-график · карточки клиентов</sub></td>
+    </tr>
+  </table>
 </p>
 
 ---
@@ -256,8 +264,8 @@ admin API — только localhost/unix; контейнер distroless + gover
 | `privacy-audit` | ни телеметрии, ни внешних хостов вне белого списка, ни приватных данных в доках |
 | `govulncheck` | известные уязвимости stdlib/зависимостей |
 | `gitleaks` | секреты |
-| `screenshot-apk` | отдельный воркфлоу после релиза: APK с эмулятора (adb полным путём, boot 4×450 с, гейты /dev/kvm+system-image+AVD) → `assets/brand/screenshot.png` |
-| `screenshot-web` | отдельный воркфлоу после релиза: веб-панель /ui из образа релиза (pull×3, healthy 240 с, healthz-ретраи 15×2 с) → `assets/brand/web.png` |
+| `screenshot-apk` | отдельный воркфлоу после релиза: JVM-рендер MainActivity (Robolectric NATIVE graphics, без эмулятора) → `assets/brand/screenshot.png`; явный git-цикл коммита |
+| `screenshot-web` | отдельный воркфлоу после релиза: веб-панель /ui из опубликованного образа (headless-chromium) → `assets/brand/web.png`; явный git-цикл коммита |
 | `assets` | детерминизм брендинга, живой banner.gif |
 | `docker` | сборка образа + healthcheck |
 | `codeql` | стат-анализ безопасности |
