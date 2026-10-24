@@ -251,6 +251,12 @@ curl --proxy socks5h://127.0.0.1:1080 https://ifconfig.me
 
 ### Highlights (technical only — UI is intentionally not documented)
 
+All protocol modules below are **types of masked server↔phone exchange designed to break DPI
+blockers' patterns**: the tunnel looks to DPI like the declared protocol. Client and server use
+them between themselves, weighing their pros and cons (compatibility, speed, recognizability).
+rrp1 is the own base protocol and the fallback. Transport is a mask too: `transport=ws` looks
+like a regular WebSocket site.
+
 | Feature | Summary |
 |---|---|
 | RRP/1 | multiplexing, flow-control (credit ≤ receive buffer), frame limits, keep-alive — spec in docs/protocol.md |
