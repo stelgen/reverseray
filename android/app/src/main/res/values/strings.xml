@@ -42,7 +42,7 @@
     <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
     <string name="rate_b">%1$d B/s</string>
     <string name="rate_kb">%1$.1f KB/s</string>
-    <string name="rate_mb">%1$.2f MB/s</string>
+    <string name="rate_mb">%1$.1f MB/s</string>
     <string name="export_config">Export to file</string>
     <string name="import_config">Import from file</string>
     <string name="config_saved">Config saved to file</string>
@@ -93,6 +93,8 @@
     <string name="transport_ws_label">WebSocket — looks like a regular website</string>
     <string name="transport_applied">transport set to %1$s (applies on next Start)</string>
     <string name="transport_same">Transport already selected</string>
+    <string name="conn_line">Connection: %1$s · %2$s</string>
+    <string name="upd_auto_modules">app updated — syncing protocol modules</string>
 
     <!-- Update -->
     <string name="version_row">Version: %1$s (code %2$d)</string>

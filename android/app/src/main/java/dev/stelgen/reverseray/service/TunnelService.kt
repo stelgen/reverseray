@@ -144,6 +144,7 @@ class TunnelService : Service() {
                 if (client.mtProtoActive) {
                     pushLog(getString(R.string.log_mtp_keys), LogKind.OK)
                 }
+                lastNegotiatedProto = client.negotiatedProto
                 sendBroadcast(
                     Intent(ACTION_STATUS).setPackage(packageName)
                         .putExtra(EXTRA_STATUS, client.negotiatedProto)
@@ -170,7 +171,6 @@ class TunnelService : Service() {
         pushLog(getString(R.string.log_speedtest_plan, SpeedTest.plan().joinToString(" · ")))
         Thread {
             val r = SpeedTest.run()
-            r.endpoints.forEach { pushLog(getString(R.string.log_speedtest_line, it)) }
                 val line = if (r.ok) {
                 val mbs = String.format(Locale.US, "%.2f", r.bytesPerSec / 1024.0 / 1024.0)
                 getString(
@@ -1204,6 +1204,13 @@ class TunnelService : Service() {
         /** v0.9.2 (R3): последнее состояние/протокол — для мгновенной
          * синхронизации UI после пересоздания Activity (кнопка/статус). */
         @Volatile var lastState: String = STATE_STOPPED
+
+        /** v0.9.9: актуальный согласованный протокол сессии (UI переживает recreate). */
+        @Volatile var lastNegotiatedProto: String = ""
+
+        /** v0.9.9: живая ли сессия (для показа согласованного протокола в UI). */
+        fun isSessionState(s: String): Boolean =
+            s == STATE_CONNECTED || s == STATE_PROTO
         @Volatile var lastProto: String = ""
 
         /** v0.9.2 (R4): буфер графика живёт В СЕРВИСЕ (переживает recreate).

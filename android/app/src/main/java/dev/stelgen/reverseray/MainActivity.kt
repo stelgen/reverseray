@@ -131,8 +131,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var homeConsole: StatusConsole
 
     /** Строки «текущий протокол» живут на двух вкладках — обновляем все. */
-    private val protoLineViews = mutableListOf<TextView>()
-    private val transportLineViews = mutableListOf<TextView>()
+    private val connLineViews = mutableListOf<TextView>()
+
+    /** Актуальный согласованный протокол сессии (EXTRA_PROTO); пусто = не подключались. */
+    @Volatile private var lastNegotiatedProto = ""
     /** Сводка лимита трафика — на главной и в настройках. */
     private val usageViews = mutableListOf<TextView>()
 
@@ -239,15 +241,21 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     when (state) {
-                        TunnelService.STATE_CONNECTED, TunnelService.STATE_RETRY -> {
+                        TunnelService.STATE_CONNECTED, TunnelService.STATE_RETRY, TunnelService.STATE_PROTO -> {
+                            // v0.9.9 ФИКС ГЛАВНОГО ЭЛЕМЕНТА: STATE_PROTO — финальное
+                            // «подключено с протоколом X»; раньше проваливался в
+                            // else → DISCONNECTED и кнопка откатывалась в «Start»
+                            // при живом туннеле (канон M2: смена состояния — fade).
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { p ->
-                                setProtoText(getString(R.string.proto_current, RrpProtocols.labelWithVer(p)))
+                                lastNegotiatedProto = p
+                                refreshConnLine()
                             }
                             setUiState(state)
                         }
                         TunnelService.STATE_PROTO_ROLLBACK -> {
                             intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { old ->
-                                setProtoText(getString(R.string.proto_current, RrpProtocols.labelWithVer(old)))
+                                lastNegotiatedProto = old
+                                refreshConnLine()
                                 Toast.makeText(
                                     this@MainActivity,
                                     R.string.proto_rollback_toast,
@@ -277,10 +285,19 @@ class MainActivity : AppCompatActivity() {
         // v0.9.2 (R3/R4): мгновенная синхронизация из сервиса — кнопка, статус,
         // протокол и ИСТОРИЯ графика переживают пересоздание Activity.
         syncUiFromService()
+        // v0.9.9: приложение обновилось → модули подтягиваются САМИ
+        // (не нужно жать «Проверить модули» после каждого обновления APK)
+        val apkVer = currentVersion()
+        val prevVer = prefs().getString("last_apk_ver", "") ?: ""
+        if (prevVer.isNotBlank() && prevVer != apkVer) {
+            UpdateLogger.add(getString(R.string.upd_auto_modules), LogKind.INFO)
+            syncModulesAsync(false)
+        }
+        prefs().edit().putString("last_apk_ver", apkVer).apply()
         // v0.9.2 (R9): реестр обновился (модуль нового протокола прилетел) —
         // строки протокола перерисовываются СРАЗУ, не дожидаясь статуса.
         RrpProtocols.onRegistryChanged = {
-            runOnUiThread { refreshProtoLine() }
+            runOnUiThread { refreshConnLine() }
         }
         // v0.8.2: журнал обновлений льётся в консоль СРАЗУ (реалтайм),
         // а не только при перерендере вкладки
@@ -396,7 +413,7 @@ class MainActivity : AppCompatActivity() {
             2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
             3 -> renderServiceLogs()
             4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
-            1 -> { refreshProtoLine(); refreshTransportLine() }
+            1 -> refreshConnLine()
         }
     }
 
@@ -609,17 +626,12 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF6B7280.toInt())
         }
         inner.addView(speedTestView)
-        protoLineViews.add(TextView(this).apply {
+        // v0.9.9 (UX): ОДНА строка — актуальный протокол + транспорт
+        connLineViews.add(TextView(this).apply {
             textSize = 12f
             setPadding(0, dp(2), 0, 0)
         })
-        inner.addView(protoLineViews.last())
-        // v0.9.7 (GUI-ревизия, этап 1): маска транспорта видна на главной рядом с протоколом
-        transportLineViews.add(TextView(this).apply {
-            textSize = 12f
-            setPadding(0, dp(2), 0, 0)
-        })
-        inner.addView(transportLineViews.last())
+        inner.addView(connLineViews.last())
         p.addView(card(inner))
 
         // Единое консольное окно статуса (листается, live-кнопка в баре)
@@ -775,22 +787,15 @@ class MainActivity : AppCompatActivity() {
         val protoCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // v0.9.7 (GUI-этап 2): единый заголовок карточки — как у всех остальных
         protoCard.addView(sectionTitle(R.string.proto_section, null))
-        protoLineViews.add(TextView(this).apply {
+        connLineViews.add(TextView(this).apply {
             textSize = 13f
             setPadding(0, dp(4), 0, dp(4))
             setText(R.string.proto_unknown)
         })
-        protoCard.addView(protoLineViews.last())
+        protoCard.addView(connLineViews.last())
         protoCard.addView(outlined(R.string.proto_switch).apply {
             setOnClickListener { showProtocolPicker() }
         })
-        // v0.9.7 (роадмап): транспорт tcp/ws из UI — вторая DPI-маска на уровне
-        // транспорта; выбор пишется в ссылку (канон «ссылка = источник правды»)
-        transportLineViews.add(TextView(this).apply {
-            textSize = 13f
-            setPadding(0, dp(4), 0, dp(4))
-        })
-        protoCard.addView(transportLineViews.last())
         protoCard.addView(outlined(R.string.transport_switch).apply {
             setOnClickListener { showTransportPicker() }
         })
@@ -1296,7 +1301,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun setUiState(state: String) {
         val mode = when (state) {
-            TunnelService.STATE_CONNECTED -> Mode.CONNECTED
+            TunnelService.STATE_CONNECTED, TunnelService.STATE_PROTO -> Mode.CONNECTED
             TunnelService.STATE_CONNECTING, TunnelService.STATE_RETRY, TunnelService.STATE_PROTO_ROLLBACK -> Mode.CONNECTING
             TunnelService.STATE_ERROR, TunnelService.STATE_LIMIT_REACHED, TunnelService.STATE_PIN_MISMATCH -> Mode.ERROR
             else -> Mode.DISCONNECTED // STOPPED / INFO
@@ -1322,7 +1327,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyButtonMode(mode: Mode) {
         bigButtonIsStart = mode.isStart
-        bigButton.setText(mode.labelRes)
+        // v0.9.9 (канон M2 «смена состояния — fade», M3 «без jump-cut»):
+        // кроссфейд подписи Старт/Подключение/Стоп, синхронный плавному цвету
+        val newLabel = getString(mode.labelRes)
+        if (bigButton.text.toString() != newLabel) {
+            bigButton.animate().cancel()
+            bigButton.animate().alpha(0f).setDuration(120)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .withEndAction {
+                    bigButton.setText(mode.labelRes)
+                    bigButton.animate().alpha(1f).setDuration(160)
+                        .setInterpolator(android.view.animation.DecelerateInterpolator())
+                        .start()
+                }.start()
+        }
         val current = (bigButton.backgroundTintList?.defaultColor ?: mode.color)
         if (current != mode.color) {
             buttonColorAnimator?.cancel()
@@ -1388,8 +1406,7 @@ class MainActivity : AppCompatActivity() {
     private fun syncUiFromService() {
         setUiState(TunnelService.lastState)
         // протокол и его известность — из ссылки + реестра сервера
-        refreshProtoLine()
-        refreshTransportLine()
+        refreshConnLine()
         // история графика живёт в сервисе — восстанавливаем целиком
         val (buf, head, valid) = TunnelService.graphHistory()
         trafficGraph.setHistory(buf, head, valid)
@@ -1433,7 +1450,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestProtoSwitch(proto: String) {
-        setProtoText(getString(R.string.proto_switching, RrpProtocols.labelWithVer(proto)))
+        setConnText(getString(R.string.proto_switching, RrpProtocols.labelWithVer(proto)))
         val i = Intent(this, TunnelService::class.java)
             .setAction(TunnelService.ACTION_SWITCH_PROTO)
             .putExtra(TunnelService.EXTRA_PROTO, proto)
@@ -1445,14 +1462,6 @@ class MainActivity : AppCompatActivity() {
         RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").transport
     } catch (_: Exception) {
         RrpUri.TRANSPORT_TCP
-    }
-
-    private fun refreshTransportLine() {
-        val t = currentTransport()
-        val label = getString(
-            if (t == RrpUri.TRANSPORT_WS) R.string.transport_ws_label else R.string.transport_tcp_label,
-        )
-        transportLineViews.forEach { it.text = getString(R.string.transport_current, label) }
     }
 
     /**
@@ -1498,7 +1507,7 @@ class MainActivity : AppCompatActivity() {
         configView.setText(canonical)
         configView.setSelection(canonical.length)
         prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
-        refreshTransportLine()
+        refreshConnLine()
         val msg = getString(R.string.transport_applied, label)
         LogStore.push(msg, LogKind.INFO, LogStore.Channel.STATUS)
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -1515,7 +1524,7 @@ class MainActivity : AppCompatActivity() {
             configView.setSelection(canonical.length)
             prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
             setLinkStatus(getString(R.string.link_status_ok))
-            refreshTransportLine()
+            refreshConnLine()
             if (announce) {
                 Toast.makeText(this, R.string.link_saved, Toast.LENGTH_SHORT).show()
             }
@@ -1595,28 +1604,35 @@ class MainActivity : AppCompatActivity() {
         usageViews.forEach { it.text = text }
     }
 
-    private fun setProtoText(text: String) {
-        protoLineViews.forEach { it.text = text }
+    /**
+     * v0.9.9 (UX): ОДНА строка «Соединение: <протокол> · <транспорт>».
+     * Протокол — АКТУАЛЬНЫЙ согласованный (TunnelService.lastNegotiatedProto),
+     * пока сессии нет — из ссылки. Список «сервер поддерживает» убран (шум).
+     */
+    private fun setConnText(text: String) {
+        connLineViews.forEach { it.text = text }
     }
 
-    private fun refreshProtoLine() {
-        val current = try {
-            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
-        } catch (_: Exception) {
-            RrpProtocols.DEFAULT
+    private fun refreshConnLine() {
+        val negotiated = TunnelService.lastNegotiatedProto
+        val proto = if (negotiated.isNotBlank() && TunnelService.isSessionState(TunnelService.lastState)) {
+            negotiated
+        } else {
+            try {
+                RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
+            } catch (_: Exception) {
+                ""
+            }.ifBlank { RrpProtocols.DEFAULT }
         }
-        val known = RrpProtocols.serverProtocols()
-        setProtoText(
-            if (known.isEmpty()) {
-                getString(R.string.proto_current, RrpProtocols.labelWithVer(current))
-            } else {
-                getString(
-                    R.string.proto_current_list,
-                    RrpProtocols.labelWithVer(current),
-                    known.joinToString(", ") { RrpProtocols.labelWithVer(it) },
-                )
-            }
-        )
+        val t = currentTransport()
+        val transportShort = if (t == RrpUri.TRANSPORT_WS) "WS" else "TCP"
+        connLineViews.forEach {
+            it.text = getString(
+                R.string.conn_line,
+                RrpProtocols.labelWithVer(RrpProtocols.normalize(proto)),
+                transportShort,
+            )
+        }
     }
 
     /** Внешний IP/страна/оператор + локальный IP + DNS-факты (честно). */
@@ -1925,7 +1941,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 runOnUiThread {
                     refreshModulesInfo()
-                    refreshProtoLine()
+                    refreshConnLine()
                 }
             } catch (e: Exception) {
                 UpdateLogger.add(getString(R.string.modules_failed, e.message ?: "?"), LogKind.ERR)

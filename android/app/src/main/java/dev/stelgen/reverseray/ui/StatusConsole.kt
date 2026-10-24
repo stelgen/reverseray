@@ -118,6 +118,9 @@ class StatusConsole @JvmOverloads constructor(
         header.addView(headerIcon)
         header.addView(headerTitle)
         header.addView(liveBtn)
+        // v0.9.9 (UX): текст «tunnel status · realtime» убран — остались только
+        // спиннер/иконка состояния и кнопка live
+        headerTitle.visibility = View.GONE
         addView(header, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         scroll.addView(body)
         addView(

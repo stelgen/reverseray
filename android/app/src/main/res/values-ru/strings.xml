@@ -42,7 +42,7 @@
     <string name="traffic_rates">↓ %1$s · ↑ %2$s</string>
     <string name="rate_b">%1$d Б/с</string>
     <string name="rate_kb">%1$.1f КБ/с</string>
-    <string name="rate_mb">%1$.2f МБ/с</string>
+    <string name="rate_mb">%1$.1f МБ/с</string>
     <string name="export_config">Экспорт в файл</string>
     <string name="import_config">Импорт из файла</string>
     <string name="config_saved">Конфиг сохранён в файл</string>
@@ -89,6 +89,8 @@
     <string name="transport_ws_label">WebSocket — выглядит как обычный сайт</string>
     <string name="transport_applied">транспорт изменён на %1$s (применится при следующем Старте)</string>
     <string name="transport_same">Транспорт уже выбран</string>
+    <string name="conn_line">Соединение: %1$s · %2$s</string>
+    <string name="upd_auto_modules">приложение обновлено — синхронизирую модули протоколов</string>
     <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
     <string name="proto_current">Протокол: %1$s</string>
     <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>
