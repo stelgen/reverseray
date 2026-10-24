@@ -101,6 +101,10 @@ class TunnelService : Service() {
     }
 
     private val runners = mutableListOf<Runner>()
+
+    // v1.0.2 (мультипоточность): состояние каждой сессии (ключ = порт) + ключ потока
+    private val sessionStates = java.util.concurrent.ConcurrentHashMap<Int, String>()
+    private val runnerStateKey = ThreadLocal<Int>()
     private val rnd = Random()
     private val lastNetKick = AtomicLong(0)
     @Volatile private var statsThread: Thread? = null
@@ -362,7 +366,14 @@ class TunnelService : Service() {
         for (port in cfg.ports) {
             val r = Runner(Target(cfg.host, port))
             synchronized(runners) { runners.add(r) }
-            Thread({ runLoop(r, proto) }, "rrp-conn-$port").start()
+            Thread({
+                runnerStateKey.set(port)
+                try {
+                    runLoop(r, proto)
+                } finally {
+                    sessionStates.remove(port)
+                }
+            }, "rrp-conn-$port").start()
         }
     }
 
@@ -1111,10 +1122,22 @@ class TunnelService : Service() {
 
     private fun updateStatus(state: String, text: String) {
         lastStatus = text
-        // v0.9.2 (R3): источник истины для UI — сервис (переживает recreate):
-        // MainActivity синхронизируется из lastState/lastStatus/lastProto
-        // сразу после пересоздания, не дожидаясь очередного broadcast.
-        lastState = state
+        // v0.9.2 (R3): источник истины для UI — сервис (переживает recreate).
+        // v1.0.2 (мультипоточность): N сессий на устройство — АГРЕГАТНЫЙ статус
+        // (кнопка/уведомление не дёргаются разнобоем сессий; лог — честный,
+        // по факту конкретной сессии). Приоритет агрегата: PIN > LIMIT >
+        // CONNECTED > CONNECTING > ERROR.
+        val key = runnerStateKey.get()
+        if (key != null) sessionStates[key] = state
+        val agg = if (key == null || sessionStates.size <= 1) state else when {
+            sessionStates.values.any { it == STATE_PIN_MISMATCH } -> STATE_PIN_MISMATCH
+            sessionStates.values.any { it == STATE_LIMIT_REACHED } -> STATE_LIMIT_REACHED
+            sessionStates.values.any { it == STATE_CONNECTED || it == STATE_PROTO } -> STATE_CONNECTED
+            sessionStates.values.any { it == STATE_CONNECTING || it == STATE_RETRY || it == STATE_PROTO_ROLLBACK } -> STATE_CONNECTING
+            sessionStates.values.any { it == STATE_ERROR } -> STATE_ERROR
+            else -> state
+        }
+        lastState = agg
         lastProto = claimedProto()
         // цветовая роль по состоянию (канон единого консольного окна v0.8)
         val kind = when (state) {
@@ -1128,9 +1151,8 @@ class TunnelService : Service() {
             Intent(ACTION_STATUS)
                 .setPackage(packageName)
                 .putExtra(EXTRA_STATUS, text)
-                .putExtra(EXTRA_STATE, state)
+                .putExtra(EXTRA_STATE, agg)
         )
-        sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_STATUS, text))
         try {
             (applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(NOTIF_ID, buildNotification(text))

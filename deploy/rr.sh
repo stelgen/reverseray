@@ -23,7 +23,7 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v1.0.0"
+DEFAULT_TAG="v1.0.2"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
 UI_LAN=1 # 1 = открывать веб-морду (/ui) в локальной сети; --no-ui закрывает в localhost
@@ -162,6 +162,18 @@ fi
 # --- строка подключения ---
 # v0.7.3: строка БЕЗ ведущих пробелов/переносов — новичок копирует как есть
 LINE=$(grep -o '^rrp://[^[:space:]]*' "$ENROLL_OUT" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+# v1.0.2: мультипоточность — RR_SESSIONS=N (2-8) дублирует порт в ссылке:
+# N параллельных RRP-сессий через ТОТ же порт, сервер агрегирует
+# (least-outstanding хаб, кап 8 туннелей/устройство) — скорость складывается
+SESSIONS="${RR_SESSIONS:-1}"
+case "$SESSIONS" in
+  [2-8])
+    P=$(printf '%s' "$LINE" | sed 's|^rrp://[^@]*@[^:]*:||; s|/.*||')
+    MULTI=$(for i in $(seq 1 "$SESSIONS"); do printf '%s,' "$P"; done | sed 's/,$//')
+    LINE=$(printf '%s' "$LINE" | sed "s|:$P/|:$MULTI/|")
+    echo " Мультипоточность: $SESSIONS сессий (порты $MULTI) — скорость агрегируется"
+    ;;
+esac
 rm -f "${ENROLL_OUT:-/nonexistent}" 2>/dev/null || true
 # LAN-IP хоста (роутер/машина с докером), не IP докер-бриджа — для Xray-аутбаунда
 LAN_IP=$(ip -4 route get 1.0.0.0 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' | head -1)

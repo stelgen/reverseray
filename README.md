@@ -171,6 +171,7 @@ flowchart LR
 | **Явные статусы согласования** | Сервер согласовал ниже запрошенного — честный WARN («сервер не поддерживает X — согласован Y»), молчаливых даунгрейдов нет |
 | **Транспорт tcp/ws из UI** | Переключатель TCP / WebSocket в приложении; выбор пишется в ссылку (ссылка = источник правды) |
 | **Авто-синхронизация модулей** | Обновил APK — modules.json подтягивается сам, без ручного «Проверить модули» |
+| **Мультипоточность (v1.0.2)** | Ссылка с несколькими портами (`:4433,4433,4433`) = N параллельных RRP-сессий через тот же порт; сервер агрегирует их least-outstanding-хабом (кап 8/устройство) — TCP-окна складываются, скорость растёт на lossy-линках; `RR_SESSIONS=3 bash rr.sh` |
 | **Лимит трафика — король** | Суточный/месячный лимит с датой сброса; исчерпан → РОВНО НОЛЬ байт: туннель умирает, автоподключение умеет ждать дату сброса |
 | **Пин CA — один канон** | пин = SHA256(SPKI CA) у обеих сторон; ротация CA = один тап владельца (диалог с фактическим пином, «Принять» обновляет ссылку и реконнектит); молчаливого доверия нет никогда |
 | **Диагностика подключения** | `auth failed` — токен ссылки устарел: авто-реконнект останавливается честным статусом (ретраи дают IP-локаут и «TLS handshake_failure(40)» вместо причины); в журнале AUTH печатается префикс токена для сверки со строкой из rr.sh/enroll |
@@ -325,6 +326,7 @@ like a regular WebSocket site.
 | **Explicit negotiation statuses** | Server negotiated lower than requested — an honest WARN («server does not support X — negotiated Y»), no silent downgrades |
 | **Transport tcp/ws from UI** | TCP / WebSocket switch inside the app; the choice is written into the link (link = source of truth) |
 | **Auto module sync** | Updated the APK — modules.json syncs itself, no manual «Check modules» |
+| **Multiplexing (v1.0.2)** | A link with several ports (`:4433,4433,4433`) = N parallel RRP sessions over the same port; the server aggregates them with its least-outstanding hub (cap 8/device) — TCP windows add up, speed grows on lossy links; `RR_SESSIONS=3 bash rr.sh` |
 | Traffic limit is king | exhausted → exactly zero bytes; auto-reconnect can wait for the reset date |
 | Connection diagnostics (v0.9.4) | server `auth failed` → auto-reconnect stops with a clear status; AUTH log prints the token prefix (6 chars) |
 | Web panel `/ui` (v0.9.5) | read-only dashboard: real-time traffic chart, per-client session telemetry (relay/phone bytes, streams, RTT, uptime, UDP/DNS counters, crypto state), 2 s poll, zero JS dependencies |
