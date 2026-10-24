@@ -26,6 +26,7 @@ import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.Msgs
+import dev.stelgen.reverseray.core.Negotiation
 import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpAuthException
 import dev.stelgen.reverseray.core.RrpClient
@@ -746,6 +747,9 @@ class TunnelService : Service() {
         var lastError = "?"
         // v0.8.1: подряд идущие неудачи на ТЕКУЩЕМ протоколе (для фоллбека)
         var failStreak = 0
+        // v0.9.7: дедуп уведомления о согласовании — одна и та же пара
+        // «просили → дали» не спамит при каждом реконнекте
+        var lastNegotiationNotice: String? = null
         while (!stopping) {
             val cfg = config ?: break
             // v0.9.2 (R1): ГЕЙТ смены протокола — во время валидационного
@@ -785,6 +789,15 @@ class TunnelService : Service() {
             r.client = client
             try {
                 client.connect()
+                // v0.9.7 (канон «явные статусы согласования»): сервер ответил
+                // ДРУГИМ протоколом, чем запрошен (AUTO-предпочтение или явный
+                // proto=) — честный WARN вместо молчаливого даунгрейда.
+                Negotiation.notice(useProto, client.negotiatedProto, claimed)?.let { notice ->
+                    if (notice != lastNegotiationNotice) {
+                        lastNegotiationNotice = notice
+                        pushLog(notice, LogKind.WARN)
+                    }
+                }
                 failStreak = 0
                 attempt = 0
                 updateStatus(STATE_CONNECTED, getString(R.string.status_connected, r.target.port))

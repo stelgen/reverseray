@@ -344,6 +344,16 @@ object Msgs {
         "модуль протокола %s не даёт подключиться (%s неудачи подряд) — клиент фоллбечится на %s; сервер не откатываем (анти-цикл): он поднимет новый протокол, когда обновится сам",
     )
 
+    // ── Negotiation: явные статусы согласования (v0.9.7) ─────────────
+    val PROTO_AUTO_DOWNGRADED = Msg(
+        "server does not support %s — negotiated %s",
+        "сервер не поддерживает %s — согласован %s",
+    )
+    val PROTO_NOT_GRANTED = Msg(
+        "server did not confirm %s — running on %s",
+        "сервер не подтвердил %s — работаю на %s",
+    )
+
     // ── RrpProtocols: суффиксы меток ─────────────────────────────────────
     val LABEL_STABLE = Msg(" · stable", " · стабильный")
     val LABEL_PAYLOAD_ENC = Msg(" · payload encryption", " · шифрование payload")
