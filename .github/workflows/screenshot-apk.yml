@@ -61,6 +61,16 @@ jobs:
         run: |
           mkdir -p assets/brand
           cp android/app/build/screenshot.png assets/brand/screenshot.png
+      - name: Git debug dump (on failure)
+        if: failure()
+        run: |
+          { git status; git log --oneline -5; git remote -v; git config -l | grep -i remote || true; } > git-debug.txt 2>&1 || true
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: screenshot-git-debug
+          path: git-debug.txt
+          if-no-files-found: ignore
       - uses: stefanzweifel/git-auto-commit-action@v6
         with:
           commit_message: "[skip ci] docs: свежий скриншот APK (бот JVM-рендер, без эмулятора)"
