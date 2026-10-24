@@ -39,7 +39,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # скриншот рендерим ИЗ ПОСЛЕДНЕГО КОДА main (бот документирует прод)
+          # fetch-depth: 0 — rebase:true в auto-commit рвётся на shallow-клоне,
+          # когда main уходит вперёд за время рендера (Release #42, гонка с web-ботом)
           ref: main
+          fetch-depth: 0
       - uses: actions/setup-java@v6
         with:
           distribution: temurin

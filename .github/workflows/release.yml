@@ -127,6 +127,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          # digest-коммит ребейзится на живой main (main уходит за время multi-arch);
+          # shallow-клон рвал этот rebase — digest v0.9.7 молча пропал (continue-on-error)
+          fetch-depth: 0
       - uses: actions/download-artifact@v7
         with:
           path: dist
@@ -156,7 +160,8 @@ jobs:
           RR_REPO: ${{ github.repository }}
           RR_DIGEST: ${{ needs.docker.outputs.image_digest }}
         run: |
-          python3 - <<'PY'          echo "RR_TAG=$RR_TAG RR_REPO=$RR_REPO RR_DIGEST_LEN=${#RR_DIGEST}" | tee release-digests-debug.txt
+          echo "RR_TAG=$RR_TAG RR_REPO=$RR_REPO RR_DIGEST_LEN=${#RR_DIGEST}" | tee release-digests-debug.txt
+          python3 - <<'PY'
 
           import os, pathlib
           tag = os.environ["RR_TAG"]

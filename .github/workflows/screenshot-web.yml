@@ -43,6 +43,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          # fetch-depth: 0 — rebase:true в auto-commit требует полной истории
+          fetch-depth: 0
       - name: Resolve released image tag
         id: tag
         run: |
