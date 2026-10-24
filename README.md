@@ -1,9 +1,5 @@
 # ReverseRay
 
-<p align="center">
-  <img src="assets/brand/app-icon.png" width="80" alt="ReverseRay"/>
-</p>
-
 <h1 align="center">ReverseRay</h1>
 
 <p align="center"><b>Личный прокси-сервер, выходящий через ваш Android-телефон.</b><br/>
