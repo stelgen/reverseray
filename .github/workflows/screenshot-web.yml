@@ -166,9 +166,13 @@ jobs:
           name: screenshot-git-debug
           path: git-debug.txt
           if-no-files-found: ignore
-      - uses: stefanzweifel/git-auto-commit-action@v6
-        with:
-          commit_message: "[skip ci] docs: свежий скриншот веб-панели (бот, независимый воркфлоу после релиза)"
-          file_pattern: "assets/brand/web.png"
-          branch: main
-          rebase: true
+      # v1.0.1: явный git-цикл вместо magic-action (magic падал на дивергенции main)
+      - name: Commit web screenshot (explicit git-cycle)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/brand/web.png
+          if git diff --cached --quiet; then echo "web.png identical — nothing to commit"; exit 0; fi
+          git commit -m "[skip ci] docs: свежий скриншот веб-панели (бот, независимый воркфлоу после релиза)"
+          git pull --rebase origin main
+          git push origin HEAD:main 2> push.log || { echo "::error::web push failed"; cat push.log; exit 1; }
