@@ -50,7 +50,7 @@ jobs:
           CGO_ENABLED=0 go build -trimpath \
             -ldflags="-s -w -X main.version=${V}" \
             -o "../reverseray-linux-${{ matrix.suffix }}" .
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.suffix }}
           path: reverseray-linux-*
@@ -112,7 +112,7 @@ jobs:
           ./gradlew :app:assembleRelease --no-daemon "-PversionName=${GITHUB_REF_NAME#v}"
           # имя артефакта: reverseray-<версия>.apk (не «app-release»)
           mv app/build/outputs/apk/release/app-release.apk              app/build/outputs/apk/release/reverseray-${GITHUB_REF_NAME#v}.apk
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: apk
           path: android/app/build/outputs/apk/release/reverseray-*.apk
@@ -131,12 +131,12 @@ jobs:
           # digest-коммит ребейзится на живой main (main уходит за время multi-arch);
           # shallow-клон рвал этот rebase — digest v0.9.7 молча пропал (continue-on-error)
           fetch-depth: 0
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
           pattern: bin-*
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -192,7 +192,7 @@ jobs:
           PY
       - name: Upload digests debug (always)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-digests-debug
           path: release-digests-debug.txt

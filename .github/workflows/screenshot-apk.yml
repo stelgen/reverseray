@@ -74,7 +74,7 @@ jobs:
           git push origin HEAD:main 2> push.log || { echo "::error::push failed"; cp push.log git-debug.txt; git log --oneline -5 >> git-debug.txt; git status >> git-debug.txt; exit 1; }
       - name: Push failure artifact (on failure)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: screenshot-push-debug
           path: |
