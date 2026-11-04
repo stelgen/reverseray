@@ -3,7 +3,6 @@ package serverapp
 import (
 	"bytes"
 	"crypto/sha256"
-	"sync/atomic"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -12,6 +11,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 

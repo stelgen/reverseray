@@ -49,6 +49,7 @@ import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.RrpClient
+import dev.stelgen.reverseray.core.RrpFrame
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
