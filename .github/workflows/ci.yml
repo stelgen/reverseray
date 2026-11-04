@@ -113,7 +113,7 @@ jobs:
           sudo rm -rf state
       - name: Upload compose smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: compose-smoke-diagnostics
           path: diag/
@@ -145,7 +145,7 @@ jobs:
           ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon --build-cache
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: android-test-reports
           path: android/app/build/test-results/
@@ -210,7 +210,7 @@ jobs:
           [ "$ok" = "1" ] || { echo "::error::govulncheck упал 3 раза — см. артефакт govulncheck-log"; exit 1; }
       - name: Upload govulncheck log
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: govulncheck-log
           path: server/govulncheck.log
