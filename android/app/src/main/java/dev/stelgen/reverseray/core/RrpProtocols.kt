@@ -29,7 +29,7 @@ object RrpProtocols {
     const val PREFERRED_AUTO = Wg.PROTO_ID
 
     /** Встроенные (манифест может расширить/выключить — кроме rrp1). */
-    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID)
+    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID)
 
     /**
      * v0.9.2: протоколы, которые КЛИЕНТ УМЕЕТ ИСПОЛНЯТЬ (код конвертов
@@ -39,7 +39,7 @@ object RrpProtocols {
      * исполнять (зеркало server/internal/rrp: Negotiate смотрит только
      * исполняемые). Будущая реализация протокола добавляет себя сюда.
      */
-    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID)
+    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID)
 
     /** Умеет ли клиент исполнять протокол (не только показывать в GUI). */
     fun isExecutable(id: String?): Boolean {
@@ -61,10 +61,12 @@ object RrpProtocols {
     }
 
     /** Встроенные метки/версии — зеркало modules/modules.json (v0.8.1). */
-    val BUNDLED_LABELS: Map<String, String> =
-        mapOf(DEFAULT to "RRP/1", MtProto.PROTO_ID to "MTProto/2", Wg.PROTO_ID to "WireGuard/1")
+    val BUNDLED_LABELS: Map<String, String> = mapOf(
+        DEFAULT to "RRP/1", MtProto.PROTO_ID to "MTProto/2",
+        Wg.PROTO_ID to "WireGuard/1", Torrent.PROTO_ID to "BitTorrent/1",
+    )
     val BUNDLED_VERS: Map<String, String> =
-        mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0", Wg.PROTO_ID to "1")
+        mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0", Wg.PROTO_ID to "1", Torrent.PROTO_ID to "1")
 
     // ---- динамический реестр (манифест модулей) ----
 
@@ -211,17 +213,28 @@ object RrpProtocols {
         return registryVers[clean] ?: ""
     }
 
-    /** Строка статуса: "MTProto/2 (v2.0)" или просто "Future/1" без версии. */
+    /**
+     * Строка статуса: "MTProto/2 (v2.0)" или просто "Future/1" без версии.
+     *
+     * v0.10 ФИКС ДУБЛЕЙ ВЕРСИЙ (меню «Смена протокола»): метка УЖЕ несёт
+     * публичную версию ("RRP/1", "BitTorrent/1") — не приписываем её второй
+     * раз скобками ("RRP/1 (v1)" было дублированием). Версия добавляется
+     * только если её нет в метке ("Future (v1)").
+     */
     fun labelWithVer(id: String): String {
         val l = label(id)
         val v = ver(id)
-        return if (v.isEmpty()) l else "$l (v$v)"
+        if (v.isEmpty()) return l
+        // версия уже в метке (канон "Name/Ver") — не дублируем
+        if (l.endsWith("/$v")) return l
+        return "$l (v$v)"
     }
 
     /** Человекочитаемое имя для UI-переключателя (кнопка = метка + версия). */
     fun displayName(id: String): String = when (id) {
         DEFAULT -> labelWithVer(id) + Msgs.LABEL_STABLE.t()
         MtProto.PROTO_ID -> labelWithVer(id) + Msgs.LABEL_PAYLOAD_ENC.t()
+        Torrent.PROTO_ID -> labelWithVer(id) + Msgs.LABEL_BT_MASK.t()
         else -> labelWithVer(id)
     }
 }

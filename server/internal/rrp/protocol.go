@@ -50,6 +50,15 @@ var ProtocolMTProto2 = Protocol{ID: "mtproto2", Name: "MTProto/2", Ver: "2.0", D
 // WG transport-пакеты (type=4 + sliding-window анти-реплей).
 var ProtocolWG = Protocol{ID: "wireguard", Name: "WireGuard/1", Ver: "1", Default: false}
 
+// ProtocolBT — BitTorrent MSE/PE-конверт payload'ов DATA/UDP_DATA (v0.10,
+// модуль protocol.bittorrent): после приватного хендшейка (TLS+HMAC)
+// выполняется канонный хендшейк Message Stream Encryption (DH 768-bit RFC
+// 2409 group 1, req1/req2⊕req3, VC, RC4-drop1024) с SKEY = SHA1("reverseray-bt:"+
+// SHA256(token)); после обмена payload'ы — peer-wire piece-сообщения
+// ([len BE4][type 7][index][begin][block]) — для DPI байт-в-байт как
+// зашифрованный BitTorrent (libtorrent/qBittorrent/Deluge).
+var ProtocolBT = Protocol{ID: "bittorrent", Name: "BitTorrent/1", Ver: "1", Default: false}
+
 // regMu защищает реестр: модули (modules.Syncer) применяют манифест
 // на горячую, параллельно идут хендшейки (v0.8).
 var regMu sync.RWMutex
@@ -58,7 +67,7 @@ var regMu sync.RWMutex
 // по умолчанию (пользовательский запрос: «сервер должен принимать все
 // протоколы по умолчанию»). Наполняется встроенными + манифестом модулей
 // (SetRegistry). rrp1 присутствует ВСЕГДА — это фундамент.
-var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG}
+var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT}
 
 // registryVersion — версия реестра (берётся из манифеста модулей; пусто = встроенная).
 var registryVersion = ""
@@ -70,7 +79,7 @@ var registryVersion = ""
 // (v0.9.2: иначе сессия молча работала бы как rrp1, обе стороны думая,
 // что идёт заявленный протокол — прод-риск).
 // Будущий протокол добавляется кодом сюда — реестр подхватит из манифеста.
-var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG}
+var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT}
 
 // ExecutableIDs — протоколы, исполняемые этой сборкой сервера.
 func ExecutableIDs() []string {

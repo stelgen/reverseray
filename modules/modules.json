@@ -18,6 +18,11 @@
       "id": "wireguard",
       "name": "WireGuard/1",
       "ver": "1"
+    },
+    {
+      "id": "bittorrent",
+      "name": "BitTorrent/1",
+      "ver": "1"
     }
   ],
   "camouflage": {

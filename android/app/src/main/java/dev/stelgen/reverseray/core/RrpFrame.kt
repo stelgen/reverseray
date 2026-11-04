@@ -475,10 +475,12 @@ sealed class RrpFrame(val type: Int) {
         val p: String = "",
         val g: Int = 0,
         val gA: String = "",
-        /** v0.9.5: kind протокола ("wireguard") — непустой ⇒ WG-хендшейк. */
+        /** v0.9.5: kind протокола ("wireguard"/"bittorrent") — непустой ⇒ соответствующий хендшейк. */
         val kind: String = "",
         /** v0.9.5: WG static public сервера (b64url 32 Б) для kind=wireguard. */
         val sPub: String = "",
+        /** v0.10: MSE DH public сервера (b64url 96 Б) для kind=bittorrent. */
+        val yb: String = "",
     ) : RrpFrame(TYPE_KEY_REQ) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "p" to MiniJson.q(p),
@@ -486,6 +488,7 @@ sealed class RrpFrame(val type: Int) {
             "g_a" to MiniJson.q(gA),
             "kind" to MiniJson.q(kind),
             "spub" to MiniJson.q(sPub),
+            "yb" to MiniJson.q(yb),
         ).toByteArray(Charsets.UTF_8)
 
         companion object {
@@ -493,7 +496,7 @@ sealed class RrpFrame(val type: Int) {
                 val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_REQ_BAD_JSON.t())
                 return KeyReq(
                     m["p"] ?: "", m["g"]?.toIntOrNull() ?: 0, m["g_a"] ?: "",
-                    m["kind"] ?: "", m["spub"] ?: "",
+                    m["kind"] ?: "", m["spub"] ?: "", m["yb"] ?: "",
                 )
             }
         }
@@ -528,6 +531,56 @@ sealed class RrpFrame(val type: Int) {
 
         companion object {
             internal fun fromPayload(p: ByteArray): WgResp = WgResp(p)
+        }
+    }
+
+    /** 0x29 C→S (bittorrent): бинарный payload — канонные MSE packet1||packet3. */
+    class BtInit(val raw: ByteArray) : RrpFrame(TYPE_BT_INIT) {
+        override fun buildPayload(): ByteArray = raw
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): BtInit = BtInit(p)
+        }
+    }
+
+    /** 0x2B S→C (bittorrent): бинарный payload — канонный MSE packet4. */
+    class BtResp(val raw: ByteArray) : RrpFrame(TYPE_BT_RESP) {
+        override fun buildPayload(): ByteArray = raw
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): BtResp = BtResp(p)
+        }
+    }
+
+    /**
+     * 0x2C (v0.10): бесшовная смена протокола без разрыва связи.
+     * C→S: {"proto":id,"nonce":n}; S→C: {"ok":bool,"proto":id,"nonce":n,"reason":""}.
+     * После ok=true обе стороны паркуют payload-кадры и переносят обмен ключами
+     * целевого протокола; крипта подменяется атомарно (см. RrpClient.switchProto).
+     */
+    class ProtoSwitch(
+        val proto: String,
+        val nonce: String = "",
+        val ok: Boolean = true,
+        val reason: String = "",
+    ) : RrpFrame(TYPE_PROTO_SWITCH) {
+        override fun buildPayload(): ByteArray = MiniJson.obj(
+            "proto" to MiniJson.q(proto),
+            "nonce" to MiniJson.q(nonce),
+            "ok" to ok.toString(),
+            "reason" to MiniJson.q(reason),
+        ).toByteArray(Charsets.UTF_8)
+
+        companion object {
+            internal fun fromPayload(p: ByteArray): ProtoSwitch {
+                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_REQ_BAD_JSON.t())
+                return ProtoSwitch(
+                    m["proto"] ?: "",
+                    m["nonce"] ?: "",
+                    m["ok"] == "true",
+                    m["reason"] ?: "",
+                )
+            }
         }
     }
 
@@ -606,6 +659,13 @@ sealed class RrpFrame(val type: Int) {
         const val TYPE_WG_RESP = 0x28
         // v0.9.5: управление камуфляжем с клиента (персистентный выбор устройства)
         const val TYPE_CAM_CTL = 0x2A
+        // v0.10: протокол bittorrent — канонные кадры MSE/PE внутри приватного
+        // канала: BT_INIT (C→S, packet1||packet3) → BT_RESP (S→C, packet4);
+        // после обмена payload'ы DATA/UDP_DATA — peer-wire piece-сообщения.
+        const val TYPE_BT_INIT = 0x29
+        const val TYPE_BT_RESP = 0x2B
+        // v0.10: бесшовная смена протокола без разрыва связи (0x2C, двунаправленный)
+        const val TYPE_PROTO_SWITCH = 0x2C
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
@@ -614,6 +674,8 @@ sealed class RrpFrame(val type: Int) {
         fun maxPayloadFor(type: Int): Int = when (type) {
             TYPE_DATA, TYPE_UDP_DATA -> MAX_DATA_PAYLOAD
             TYPE_WG_INIT, TYPE_WG_RESP -> 256 // wg msg1=148 Б / msg2=92 Б (запас)
+            TYPE_BT_INIT -> 1280 // MSE packet1(96+512) + packet3(40+8+4+2+512+2)
+            TYPE_BT_RESP -> 640 // MSE packet4 = RC4(8+4+2+512)
             else -> MAX_CONTROL_PAYLOAD
         }
 
@@ -661,6 +723,9 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_NOISE -> Noise.fromPayload(payload)
                 TYPE_WG_INIT -> WgInit(payload)
                 TYPE_WG_RESP -> WgResp(payload)
+                TYPE_BT_INIT -> BtInit(payload)
+                TYPE_BT_RESP -> BtResp(payload)
+                TYPE_PROTO_SWITCH -> ProtoSwitch.fromPayload(payload)
                 TYPE_CAM_CTL -> CamCtl.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)

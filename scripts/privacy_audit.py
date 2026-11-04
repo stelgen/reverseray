@@ -16,6 +16,9 @@ import re
 import sys
 
 ALLOWED_HOSTS = {
+    # Лицензионная ссылка README (BSD 2-Clause → CC-BY-4.0 брендинг):
+    # статическая документационная ссылка, не сетевое обращение из кода.
+    "creativecommons.org",
     # GitHub: апдейтер APK, модули, проверки релизов
     "api.github.com",
     "raw.githubusercontent.com",

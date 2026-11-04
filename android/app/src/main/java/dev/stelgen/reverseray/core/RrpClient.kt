@@ -248,12 +248,30 @@ class RrpClient(
      * Дедлайн — серверный key-timer убьёт сессию, если ответа не будет.
      */
 
-    /** Активен ли крипто-конверт протокола (mtproto2 или wireguard). */
-    val tunnelCryptoActive: Boolean get() = mtCrypto != null || wgCrypto != null
+    /** Активен ли крипто-конверт протокола (mtproto2/wireguard/bittorrent). */
+    val tunnelCryptoActive: Boolean get() = mtCrypto != null || wgCrypto != null || btCrypto != null
 
     /** v0.9.6: незавершённый WG-хендшейк (msg1 отправлен, ждём WG_RESP). */
     @Volatile private var wgHandshake: Wg.ClientHandshake? = null
     @Volatile private var wgPsk: ByteArray? = null
+
+    /** v0.10: крипто-контекст bittorrent (не null после MSE-хендшейка). */
+    @Volatile private var btCrypto: Torrent.Transport? = null
+    @Volatile private var btHandshake: Torrent.ClientHandshake? = null
+
+    /** Активен ли BitTorrent MSE-конверт в этой сессии. */
+    val btActive: Boolean get() = btCrypto != null
+
+    // ---- v0.10: бесшовная смена протокола (0x2C) ----
+
+    /** Паркинг payload-кадров на время смены: контрольные кадры идут свободно. */
+    private val parkLock = Any()
+    private val parkedFrames = java.util.ArrayDeque<RrpFrame>()
+    @Volatile private var parked = false
+
+    /** Ожидаемый ответ 0x2C (протокол-цель, nonce); null — запроса нет. */
+    @Volatile private var protoSwitchAck: RrpFrame.ProtoSwitch? = null
+    @Volatile private var protoSwitchNonce: String = ""
 
     /**
      * v0.9.5: начальный выбор камуфляжа для этого устройства (кадр 0x2A после
@@ -280,6 +298,15 @@ class RrpClient(
     // v0.9.2 (R6): адаптивный keepalive — время отправки последнего PING и RTT
     private val lastPingSentAt = AtomicLong(0)
     private val lastRttMs = AtomicLong(0)
+
+    // ---- v0.10: пробник качества (тестирование скважности) ----
+    // Постоянное тестирование связи: PING каждые ~5с + PROBE каждые 30с;
+    // окно потерь 60с — данные для AutoBalancer (смена только по гистерезису).
+    private val pingResults = java.util.ArrayDeque<Pair<Long, Boolean>>() // (atMs, ok)
+    @Volatile private var rttEwmaMs: Long = 0
+    @Volatile private var lastProbeOk: Boolean? = null
+    @Volatile private var lastPingCounted = false // потерю этого пинга уже учли
+    @Volatile private var lastProberTickMs = 0L
 
     private val pingExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-ping").apply { isDaemon = true } }
@@ -418,6 +445,7 @@ class RrpClient(
             setState(State.READY)
             lastPongMs.set(System.currentTimeMillis())
             scheduleNextPing()
+            scheduleProber() // v0.10: постоянный тест качества связи
             log("RECV READY tunnel=${rd.tunnelId} role=${rd.role} proto=${rd.proto} (${RrpProtocols.labelWithVer(rd.proto)}) protocols=${rd.protocols.joinToString(",") { RrpProtocols.labelWithVer(it) }} maxStreams=${rd.maxStreams} window=${rd.tunnelWindow} → State.READY")
             // v0.8.2: камуфляж «API Mask» — только если сервер подтвердил
             // возможность (features) и модуль включён манифестом
@@ -515,8 +543,14 @@ class RrpClient(
                 val sentAt = lastPingSentAt.get()
                 if (sentAt > 0) {
                     val rtt = System.currentTimeMillis() - sentAt
-                    if (rtt in 1..300_000) lastRttMs.set(rtt)
+                    if (rtt in 1..300_000) {
+                        lastRttMs.set(rtt)
+                        // v0.10: EWMA RTT (0.25) — сглаживание для балансера
+                        rttEwmaMs = if (rttEwmaMs == 0L) rtt else (rttEwmaMs * 3 + rtt) / 4
+                    }
                 }
+                lastPingCounted = true
+                recordPingResult(true)
             }
             is RrpFrame.Stats -> log("STATS: ${frame.json}")
             is RrpFrame.ProbeResp -> {
@@ -526,6 +560,9 @@ class RrpClient(
             is RrpFrame.ProbeReq -> log(Msgs.PROBE_UNEXPECTED.t())
             is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8/v0.9.5: mtproto2 DH | wireguard WG_INIT
             is RrpFrame.KeyResp -> log(Msgs.KEY_RESP_UNEXPECTED.t())
+            is RrpFrame.BtResp -> finishBtHandshake(frame)
+            is RrpFrame.BtInit -> log("bt: BT_INIT от сервера — нарушение порядка (клиент инициатор)")
+            is RrpFrame.ProtoSwitch -> handleProtoSwitchAck(frame)
             is RrpFrame.WgResp -> {
                 // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов.
                 // v0.9.6: дедлок-фикс — consume ЗДЕСЬ (reader-поток), а не в
@@ -571,8 +608,12 @@ class RrpClient(
      * долю, шлём KEY_RESP и включаем MTProto-конверт на DATA/UDP_DATA.
      */
     private fun handleKeyReq(frame: RrpFrame.KeyReq) {
-        if (mtCrypto != null || wgCrypto != null) {
+        if (mtCrypto != null || wgCrypto != null || btCrypto != null) {
             log(Msgs.KEY_REQ_IGNORED.t())
+            return
+        }
+        if (frame.kind == Torrent.PROTO_ID) {
+            handleBtKeyReq(frame)
             return
         }
         if (frame.kind.isNotBlank() && frame.kind != MtProto.PROTO_ID) {
@@ -606,7 +647,11 @@ class RrpClient(
             )
             log(Msgs.MTPROTO_KEYS_OK.t())
             listener?.onState(this, State.READY) // уведомить UI о включении крипто
+            // v0.10: при бесшовной смене порядок строгий: КЛЮЧЕВОЙ ОТВЕТ уходит
+            // РАНЬШЕ снятия паркинга (сервер коммитит крипту при Complete(KEY_RESP)
+            // и должен успеть до первого нового-envelope DATA).
             sendFrame(RrpFrame.KeyResp(MtProto.b64url(gB)))
+            unparkAndFlush()
         } catch (e: Exception) {
             log(Msgs.MTPROTO_EXCHANGE_FAILED.t(e.message))
             close()
@@ -617,24 +662,27 @@ class RrpClient(
     /** Активный конверт: wireguard (v0.9.5) имеет приоритет, затем mtproto2. */
     private fun activeMaxPlainData(): Int? = when {
         wgCrypto != null -> Wg.MAX_PLAIN_DATA
+        btCrypto != null -> Torrent.MAX_PLAIN_DATA
         mtCrypto != null -> MtProto.SessionCrypto.MAX_PLAIN_DATA
         else -> null
     }
 
     private fun encryptDown(bytes: ByteArray): ByteArray {
         wgCrypto?.let { return it.seal(bytes) }
+        btCrypto?.let { return it.seal(bytes) }
         mtCrypto?.let { return it.encryptDown(bytes) }
         return bytes
     }
 
     private fun decryptUpEnvelope(payload: ByteArray): ByteArray {
         wgCrypto?.let { return it.open(payload) }
+        btCrypto?.let { return it.open(payload) }
         mtCrypto?.let { return it.decryptUp(payload) }
         return payload
     }
 
     private fun decryptPayload(frame: RrpFrame.Data): RrpFrame.Data? {
-        if (mtCrypto == null && wgCrypto == null) return frame
+        if (mtCrypto == null && wgCrypto == null && btCrypto == null) return frame
         return try {
             RrpFrame.Data(frame.streamId, frame.flags, decryptUpEnvelope(frame.bytes))
         } catch (e: Exception) {
@@ -646,7 +694,7 @@ class RrpClient(
 
     /** Расшифровка UDP_DATA-конверта. */
     private fun decryptUdpPayload(frame: RrpFrame.UdpData): RrpFrame.UdpData? {
-        if (mtCrypto == null && wgCrypto == null) return frame
+        if (mtCrypto == null && wgCrypto == null && btCrypto == null) return frame
         return try {
             RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, decryptUpEnvelope(frame.bytes))
         } catch (e: Exception) {
@@ -699,10 +747,120 @@ class RrpClient(
             wgPsk = null
             log(Msgs.WG_KEYS_AGREED.t())
             listener?.onState(this, State.READY) // UI: статус крипты
+            unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное
         } catch (e: Exception) {
             // битый msg2 — нарушение протокола: сессия закрыта честной причиной
             throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)
         }
+    }
+
+    // ------------------------------------------------------------------ BitTorrent MSE/PE (v0.10)
+
+    /**
+     * KEY_REQ(kind=bittorrent): MSE DH public сервера (Yb, 96 Б). Клиент —
+     * инициатор MSE: packet1 = Ya+pad; packet3 = req1+req2⊕req3+RC4(keyA)(...);
+     * шлём BT_INIT (packet1||packet3) БЕЗ ожидания — BT_RESP догревает dispatch
+     * (тот же дедлок-фикс, что WG в v0.9.6).
+     */
+    private fun handleBtKeyReq(frame: RrpFrame.KeyReq) {
+        try {
+            val yb = MtProto.b64urlDecode(frame.yb)
+            if (yb.size != Torrent.KEY_SIZE) {
+                throw Torrent.TorrentException("bt: yb len ${yb.size} != ${Torrent.KEY_SIZE}")
+            }
+            val skey = Torrent.skey(Torrent.tokenHash(token))
+            val (p1, hs) = Torrent.newClientInit(skey)
+            val p3 = hs.buildPacket3(yb)
+            log(Msgs.BT_INIT_SENT.t(p1.size, p3.size, Torrent.KEY_DROP))
+            btHandshake = hs
+            sendFrame(RrpFrame.BtInit(hs.init(p3)))
+        } catch (e: Exception) {
+            throw RrpClientException(Msgs.BT_FAILED.t(e.message ?: "?"), e)
+        }
+    }
+
+    /** BT_RESP (packet4) — финал MSE-хендшейка: активируем BT-конверт. */
+    private fun finishBtHandshake(frame: RrpFrame.BtResp) {
+        val hs = btHandshake ?: run {
+            log("bt: BT_RESP без хендшейка — игнор")
+            return
+        }
+        try {
+            hs.consumeResponse(frame.raw)
+            btCrypto = hs.transport()
+            btHandshake = null
+            log(Msgs.BT_KEYS_AGREED.t())
+            listener?.onState(this, State.READY) // UI: статус крипты
+            unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное
+        } catch (e: Exception) {
+            throw RrpClientException(Msgs.BT_FAILED.t(e.message ?: "?"), e)
+        }
+    }
+
+    // ------------------------------------------------------------------ бесшовная смена протокола (v0.10)
+
+    @Volatile private var pendingSwitchTarget: String? = null
+
+    /**
+     * Бесшовная смена протокола в живой сессии (кадр 0x2C): просим сервер,
+     * ждём ok, паркуем payload-кадры до завершения перехендшейка.
+     * @return true — сервер согласился (крипта сменится после обмена ключами);
+     *         false — отказ/таймаут (паркинг снят, старая крипта жива).
+     */
+    fun switchProto(target: String): Boolean {
+        if (state != State.READY) return false
+        val nonce = ByteArray(8).also { rnd.nextBytes(it) }
+            .joinToString("") { String.format("%02x", it) }
+        protoSwitchNonce = nonce
+        protoSwitchAck = null
+        pendingSwitchTarget = target
+        log(Msgs.PSW_REQUEST.t(RrpProtocols.labelWithVer(target), nonce))
+        sendFrame(RrpFrame.ProtoSwitch(target, nonce))
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline) {
+            protoSwitchAck?.let { ack ->
+                if (ack.nonce != nonce) return@let // чужой/старый ответ
+                if (!ack.ok) {
+                    log(Msgs.PSW_DENIED.t(ack.reason.ifEmpty { "?" }))
+                    pendingSwitchTarget = null
+                    return false
+                }
+                log(Msgs.PSW_GRANTED.t(RrpProtocols.labelWithVer(ack.proto)))
+                parkForSwitch()
+                return true
+            }
+            try { Thread.sleep(50) } catch (_: InterruptedException) { break }
+        }
+        log(Msgs.PSW_TIMEOUT.t())
+        pendingSwitchTarget = null
+        return false
+    }
+
+    /** Ответ сервера на наш 0x2C (или серверный запрос — не поддерживаем: клиент инициатор). */
+    private fun handleProtoSwitchAck(frame: RrpFrame.ProtoSwitch) {
+        protoSwitchAck = frame
+        if (!frame.ok) {
+            // отказ сервера — ничего не паркуем (парковки ещё нет)
+            pendingSwitchTarget = null
+        }
+    }
+
+    /** Паркинг payload-кадров на время перехендшейка (контрольные — свободно). */
+    private fun parkForSwitch() {
+        synchronized(parkLock) { parked = true }
+    }
+
+    /** Снятие паркинга + отправка накопленных payload-кадров (уже новым конвертом). */
+    private fun unparkAndFlush() {
+        val queued: MutableList<RrpFrame>
+        synchronized(parkLock) {
+            if (!parked) return
+            parked = false
+            queued = ArrayList(parkedFrames)
+            parkedFrames.clear()
+        }
+        if (queued.isNotEmpty()) log(Msgs.PSW_FLUSHED.t(queued.size))
+        for (f in queued) sendFrame(f)
     }
 
     /** v0.9.5: выбор камуфляжа устройством — кадр 0x2A немедленно (если READY). */
@@ -1071,10 +1229,90 @@ class RrpClient(
         }
     }
 
+    // ------------------------------------------------------------------ prober (v0.10)
+
+    private fun recordPingResult(ok: Boolean) {
+        synchronized(pingResults) {
+            pingResults.addLast(System.currentTimeMillis() to ok)
+            val horizon = System.currentTimeMillis() - HEALTH_WINDOW_MS
+            while (pingResults.isNotEmpty() && pingResults.first().first < horizon) pingResults.removeFirst()
+        }
+    }
+
+    /**
+     * Пробник качества — «тестирование скважности, соединения постоянно»:
+     * тик каждые 5с (потери по unanswered PING), PROBE каждые 30с (реальный
+     * egress до реального хоста). Данные НЕ рвут сессию и НЕ меняют протокол
+     * сами — решение (с гистерезисом/кулдауном) принимает AutoBalancer.
+     */
+    private fun scheduleProber() {
+        if (!running.get()) return
+        try {
+            pingExecutor.schedule({
+                if (!running.get()) return@schedule
+                val now = System.currentTimeMillis()
+                // 1) потери: пинг висит дольше PING_LOSS_AFTER_MS без Pong
+                val sentAt = lastPingSentAt.get()
+                if (sentAt > 0 && !lastPingCounted && now - sentAt >= PING_LOSS_AFTER_MS) {
+                    lastPingCounted = true
+                    recordPingResult(false)
+                }
+                // 2) PROBE — раз в PROBER_INTERVAL_MS (скважность ~90/10)
+                if (now - lastProberTickMs >= PROBER_INTERVAL_MS) {
+                    lastProberTickMs = now
+                    val target = validateProbeTarget ?: DEFAULT_PROBE_TARGET
+                    val pr = try { probeOnce(target, PROBE_TIMEOUT_MS) } catch (_: Exception) { null }
+                    lastProbeOk = pr?.ok
+                    val (loss, rtt) = healthWindow()
+                    log(Msgs.PROBE_LOSS.t(loss * 100.0, rtt, 60))
+                }
+                scheduleProber()
+            }, MONITOR_TICK_MS, TimeUnit.MILLISECONDS)
+        } catch (_: RejectedExecutionException) {
+        }
+    }
+
+    /** Снимок окна качества: (доля потерь 0..1 за 60с, EWMA RTT). */
+    fun healthWindow(): Pair<Double, Long> {
+        val now = System.currentTimeMillis()
+        synchronized(pingResults) {
+            val horizon = now - HEALTH_WINDOW_MS
+            while (pingResults.isNotEmpty() && pingResults.first().first < horizon) pingResults.removeFirst()
+            val total = pingResults.size
+            val fails = pingResults.count { !it.second }
+            val loss = if (total == 0) 0.0 else fails.toDouble() / total
+            return loss to rttEwmaMs
+        }
+    }
+
+    /** Снимок для AutoBalancer.onSample. */
+    fun healthSample(): AutoBalancer.Sample {
+        val (loss, rtt) = healthWindow()
+        return AutoBalancer.Sample(
+            atMs = System.currentTimeMillis(),
+            rttMs = if (rtt > 0) rtt else null,
+            lossRatio = loss,
+            probeOk = lastProbeOk,
+        )
+    }
+
     // ------------------------------------------------------------------ frame IO
 
     private fun sendFrame(frame: RrpFrame) {
         val out = wireOut ?: throw RrpClientException(Msgs.NO_CONNECTION.t())
+        // v0.10: во время бесшовной смены протокола payload-кадры копятся
+        // и уходят новым конвертом после завершения перехендшейка.
+        when (frame) {
+            is RrpFrame.Data, is RrpFrame.UdpData -> {
+                synchronized(parkLock) {
+                    if (parked) {
+                        parkedFrames.add(frame)
+                        return
+                    }
+                }
+            }
+            else -> {}
+        }
         var wire: RrpFrame = frame
         when (frame) {
             is RrpFrame.Data -> {
@@ -1389,6 +1627,12 @@ class RrpClient(
 
         /** Таймаут валидационного PROBE, мс (сервер клампит в 1..15 с). */
         const val PROBE_TIMEOUT_MS = 5_000L
+        // v0.10: пробник качества (скважность) — тик/интервалы/окно
+        const val MONITOR_TICK_MS = 5_000L
+        const val PROBER_INTERVAL_MS = 30_000L
+        const val PING_LOSS_AFTER_MS = 15_000L
+        const val HEALTH_WINDOW_MS = 60_000L
+        const val DEFAULT_PROBE_TARGET = "1.1.1.1:443"
 
         /** v0.9.2 (R6): границы адаптивного keepalive (см. pingIntervalMs). */
         private const val MIN_PING_INTERVAL_MS = 20_000L

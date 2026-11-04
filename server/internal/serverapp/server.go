@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/stelgen/reverseray/server/internal/auth"
+	"github.com/stelgen/reverseray/server/internal/bt"
 	"github.com/stelgen/reverseray/server/internal/config"
 	"github.com/stelgen/reverseray/server/internal/hardening"
 	"github.com/stelgen/reverseray/server/internal/hub"
@@ -573,6 +574,24 @@ func (a *App) handleTunnel(conn net.Conn) {
 			}
 		}
 	}
+	// v0.10: bittorrent — канонный MSE/PE-хендшейк внутри приватного канала.
+	// SKEY = SHA1("reverseray-bt:"+tokenHash) — «инфо-хеш торрента» устройства;
+	// payload'ы — peer-wire piece-сообщения (для DPI — как BitTorrent).
+	if proto == bt.ProtoID {
+		if th := a.store.HashOf(device); len(th) == 32 {
+			if plan, err := bt.NewServerPlan(sid, th, a.log); err == nil {
+				scfg.KeyPlan = plan
+			}
+		}
+	}
+	// v0.10: бесшовная смена протокола (кадр 0x2C) — план целевого протокола
+	// строится на месте, крипта подменяется атомарно по завершении обмена;
+	// соединение и стримы переживают смену (паркинг payload-кадров).
+	scfg.TokenHash = a.store.HashOf(device)
+	scfg.Switchable = true
+	scfg.SwitchPlanner = func(target string) (rrp.KeyPlan, error) {
+		return a.switchKeyPlan(sid, device, target)
+	}
 	// v0.9.5: управление камуфляжем с клиента (0x2A) — персистентный выбор.
 	scfg.CamCtl = func(enabled bool) {
 		a.setCamouflageOverride(device, enabled)
@@ -608,7 +627,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	// DATA/UDP_DATA уходят в MTProto 2.0-конверте (AES-256-IGE). Обмен ключами
 	// и включение крипты теперь живут в rrp.Session (KeyPlan): рукопожатие
 	// завершено, reject «protocol error» из-за гонки PROBE/KEY_RESP невозможен.
-	if proto == mtproto.ProtoID || proto == wg.ProtoID {
+	if proto == mtproto.ProtoID || proto == wg.ProtoID || proto == bt.ProtoID {
 		scfg.Logf = func(format string, args ...any) {
 			a.log.Info(fmt.Sprintf(format, args...), "device", device, "session", sid)
 		}

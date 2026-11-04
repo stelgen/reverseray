@@ -23,3 +23,6 @@ android/local.properties
 __pycache__/
 *.pyc
 !android/app/rr-release.keystore
+
+# graphify (локальный code graph — не для репо)
+graphify-out/

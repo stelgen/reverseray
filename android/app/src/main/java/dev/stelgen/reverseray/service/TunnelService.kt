@@ -24,6 +24,7 @@ import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.L10nUi
 import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
+import dev.stelgen.reverseray.core.AutoBalancer
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.Msgs
 import dev.stelgen.reverseray.core.Negotiation
@@ -121,6 +122,113 @@ class TunnelService : Service() {
 
     /** Идёт ли сейчас валидационная смена протокола. */
     @Volatile private var switchingProto = false
+
+    // ---------- v0.10: умный балансер протоколов (auto-режим) ----------
+
+    /** Решатель смены протоколов: гистерезис/кулдауны/round-robin. */
+    private val balancer = AutoBalancer()
+    @Volatile private var balancerThread: Thread? = null
+    @Volatile private var lastLiveSwitchBusy = false
+
+    private fun startBalancerLoop() {
+        if (balancerThread?.isAlive == true) return
+        balancer.reset(System.currentTimeMillis())
+        balancer.current = currentLiveProto()
+        val t = Thread({
+            while (!stopping) {
+                try {
+                    Thread.sleep(BAL_TICK_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                try {
+                    balancerTick()
+                } catch (_: Exception) {
+                }
+            }
+        }, "rrp-balancer").apply { isDaemon = true; start() }
+        balancerThread = t
+    }
+
+    /** Фактический протокол живой сессии (первого раннера). */
+    private fun currentLiveProto(): String {
+        val c = synchronized(runners) { runners.firstOrNull()?.client } ?: return RrpProtocols.PREFERRED_AUTO
+        return if (c.state == RrpClient.State.READY) c.negotiatedProto else RrpProtocols.PREFERRED_AUTO
+    }
+
+    /** Тик балансера: пробник → решение → бесшовная смена (без разрыва). */
+    private fun balancerTick() {
+        if (lastLiveSwitchBusy || switchingProto) return
+        val client = synchronized(runners) { runners.firstOrNull()?.client } ?: return
+        if (client.state != RrpClient.State.READY) return
+        // кандидаты для ЖИВОЙ смены: исполняемые клиентом ∩ реестр сервера,
+        // кроме rrp1 (возврат на rrp1 только через reconnect-путь)
+        balancer.candidates = RrpProtocols.EXECUTABLE.filter {
+            it != RrpProtocols.DEFAULT && client.serverProtocols.contains(it)
+        }
+        balancer.current = currentLiveProto()
+        when (val d = balancer.onSample(client.healthSample())) {
+            is AutoBalancer.Decision.Switch -> {
+                pushLog(
+                    Msgs.BAL_DEGRADED.t(
+                        d.reason, RrpProtocols.labelWithVer(balancer.current),
+                        RrpProtocols.labelWithVer(d.target),
+                    ),
+                )
+                lastLiveSwitchBusy = true
+                try {
+                    val ok = switchProtoLive(d.target)
+                    balancer.onSwitchResult(System.currentTimeMillis(), d.target, ok)
+                    if (ok) {
+                        val msg = getString(R.string.status_switch_done, RrpProtocols.labelWithVer(d.target))
+                        sendBroadcast(
+                            Intent(ACTION_STATUS).setPackage(packageName)
+                                .putExtra(EXTRA_STATE, STATE_CONNECTED)
+                                .putExtra(EXTRA_STATUS, msg)
+                                .putExtra(EXTRA_PROTO, d.target),
+                        )
+                    } else {
+                        pushLog(
+                            Msgs.BAL_FAIL_MARKED.t(
+                                RrpProtocols.labelWithVer(d.target),
+                                balancer.cooldownLeftSec(System.currentTimeMillis()),
+                            ),
+                        )
+                    }
+                } finally {
+                    lastLiveSwitchBusy = false
+                }
+            }
+            is AutoBalancer.Decision.Wait -> {
+                // деградация есть, но гистерезис/кулдаун молчат — DEBUG-канон,
+                // не спамим журнал: в лог попадает только реальная смена
+            }
+            AutoBalancer.Decision.Nothing -> {}
+        }
+    }
+
+    /**
+     * Бесшовная смена протокола во ВСЕХ живых сессиях (кадр 0x2C — согласование
+     * без разрыва связи). Ссылка НЕ меняется (AUTO остаётся AUTO — сервер
+     * переговорит при реконнекте сам). false — хоть одна сессия отказала.
+     */
+    private fun switchProtoLive(target: String): Boolean {
+        var all = true
+        val list = synchronized(runners) { runners.toList() }
+        for (r in list) {
+            val c = r.client
+            if (c == null) {
+                all = false
+                continue
+            }
+            try {
+                if (c.state == RrpClient.State.READY && !c.switchProto(target)) all = false
+            } catch (_: Exception) {
+                all = false
+            }
+        }
+        return all
+    }
     /** Спидтест не молотит при каждом READY. */
     @Volatile private var speedTestBusy = false
     /** Ждун сброса лимита для авто-переподключения. */
@@ -357,6 +465,10 @@ class TunnelService : Service() {
         registerNetworkWatching()
         resetGraphHistory()
         startStatsLoop()
+        // v0.10: auto-режим (ссылка без proto=) — умный балансер протоколов:
+        // мониторит качество (скважность/потери/RTT) и ротирует протоколы
+        // round-robin'ом по гистерезису, без «скакания» каждые 100 мс/5 с.
+        if (claimedProto().isBlank()) startBalancerLoop()
         updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, cfg.host))
     }
 
@@ -940,6 +1052,8 @@ class TunnelService : Service() {
 
     private fun stopTunnel() {
         stopping = true
+        balancerThread?.interrupt()
+        balancerThread = null
         val active: List<Runner>
         synchronized(runners) {
             active = runners.toList()
@@ -1237,6 +1351,8 @@ class TunnelService : Service() {
         const val EXTRA_USAGE_LIMIT = "usage_limit"
         const val EXTRA_SPEEDTEST_TEXT = "speedtest_text" // v0.8: строка спидтеста
         private const val STATS_INTERVAL_MS = 500L
+        /** v0.10: тик умного балансера (5с — только СБОР данных, решение — по гистерезису). */
+        private const val BAL_TICK_MS = 5_000L
         private const val ERROR_HOLD_MS = 1_500L
         private const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
         private const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту

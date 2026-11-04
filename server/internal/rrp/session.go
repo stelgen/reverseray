@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,13 @@ type SessionConfig struct {
 	// персистенции (сервер без state). Выбор хранится ПЕРМАНЕНТНО на сервере:
 	// действует для будущих сессий, переживает офлайн клиента.
 	CamCtl func(enabled bool)
+	// v0.10: бесшовная смена протокола в живой сессии (кадр 0x2C).
+	// TokenHash — хеш токена устройства (32 Б) для планов wg/bt;
+	// SwitchPlanner — фабрика планов (живёт в serverapp: импортирует
+	// mtproto/wg/bt; rrp не может — цикл импорта); Switchable — гейт.
+	TokenHash     []byte
+	SwitchPlanner func(proto string) (KeyPlan, error)
+	Switchable    bool
 }
 
 func DefaultSessionConfig() SessionConfig {
@@ -131,6 +139,13 @@ type Session struct {
 	crypto   PayloadCrypto
 	keyPlan  KeyPlan
 	keyTimer *time.Timer
+
+	// v0.10: бесшовная смена протокола: пока смена идёт,
+	// payload-кадры паркуются (writeAsync ждёт снятия), контрольные кадры
+	// хендшейка идут свободно; pendingProto коммитится вместе с crypto.
+	parked       bool
+	parkGate     chan struct{}
+	pendingProto string
 
 	done chan struct{}
 }
@@ -308,6 +323,12 @@ func (s *Session) handle(f *Frame) error {
 		return nil
 	case TypeWgInit:
 		s.handleWgInit(f)
+		return nil
+	case TypeBtInit:
+		s.handleBtInit(f)
+		return nil
+	case TypeProtoSwitch:
+		s.handleProtoSwitch(f)
 		return nil
 	case TypeCamCtl:
 		s.handleCamCtl(f)
@@ -623,12 +644,81 @@ func (s *Session) writeAsync(f *Frame) {
 		return
 	default:
 	}
+	// v0.10: во время бесшовной смены протокола payload-кадры ждут коммита
+	// нового крипто-конверта (иначе в полёте встречаются конверты двух
+	// протоколов). Контрольные кадры хендшейка идут свободно.
+	if isPayloadFrame(f.Type) && !s.parkWait() {
+		return
+	}
 	select {
 	case s.outq <- outItem{frame: f}:
 	case <-time.After(10 * time.Second):
 		go s.shutdown(errors.New("writer backlog"))
 	case <-s.done:
 	}
+}
+
+// parkWait блокирует payload-отправителя до снятия паркинга.
+func (s *Session) parkWait() bool {
+	s.mu.Lock()
+	if !s.parked {
+		s.mu.Unlock()
+		return true
+	}
+	gate := s.parkGate
+	s.mu.Unlock()
+	if gate == nil {
+		return true
+	}
+	select {
+	case <-gate:
+		return true
+	case <-s.done:
+		return false
+	case <-time.After(15 * time.Second):
+		go s.shutdown(errors.New("proto switch park timeout"))
+		return false
+	}
+}
+
+// unparkPayload снимает паркинг (все ожидающие отправители проходят).
+func (s *Session) unparkPayload() {
+	s.mu.Lock()
+	if s.parked {
+		s.parked = false
+		gate := s.parkGate
+		s.parkGate = nil
+		if gate != nil {
+			close(gate)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// parkPayloadLocked — включить паркинг (ВЫЗЫВАТЬ ПОД s.mu).
+func (s *Session) parkPayloadLocked() {
+	if !s.parked {
+		s.parked = true
+		s.parkGate = make(chan struct{})
+	}
+}
+
+// commitCrypto — точка атомарного коммита нового крипто-конверта:
+// свап + коммит целевого протокола бесшовной смены + снятие паркинга.
+// Вызывается ТОЛЬКО из читающей горутины (Run) — гонок нет.
+func (s *Session) commitCrypto(pc PayloadCrypto) {
+	s.mu.Lock()
+	s.crypto = pc
+	if s.pendingProto != "" {
+		s.Proto = s.pendingProto
+		s.pendingProto = ""
+	}
+	if s.keyTimer != nil {
+		s.keyTimer.Stop()
+		s.keyTimer = nil
+	}
+	s.mu.Unlock()
+	s.unparkPayload()
 }
 
 func (s *Session) writeLoop() {
@@ -718,12 +808,8 @@ func (s *Session) handleKeyResp(f *Frame) {
 		s.shutdown(fmt.Errorf("key exchange: %w", err))
 		return
 	}
-	s.crypto = crypto
-	if s.keyTimer != nil {
-		s.keyTimer.Stop()
-		s.keyTimer = nil
-	}
 	s.mu.Unlock()
+	s.commitCrypto(crypto)
 	s.logf("rrp: payload crypto engaged (session %s, proto %s)", s.ID, s.Proto)
 }
 
@@ -966,14 +1052,128 @@ func (s *Session) handleWgInit(f *Frame) {
 		return
 	}
 	s.writeAsync(&Frame{Type: respType, Payload: respPayload})
+	s.commitCrypto(crypto)
+	s.logf("rrp: payload crypto engaged (session %s, proto %s)", s.ID, s.Proto)
+}
+
+// handleBtInit: бинарный кадр BT_INIT (v0.10, bittorrent/MSE) — маршрутизация
+// в план обмена ключами (rrp.InitResponder). Вызывается из Run — гонок нет.
+func (s *Session) handleBtInit(f *Frame) {
 	s.mu.Lock()
-	s.crypto = crypto
-	if s.keyTimer != nil {
-		s.keyTimer.Stop()
-		s.keyTimer = nil
+	if s.crypto != nil || s.keyPlan == nil {
+		s.mu.Unlock()
+		return // повторный/неожиданный INIT — игнор (анти-мусор)
+	}
+	ir, ok := s.keyPlan.(InitResponder)
+	if !ok || ir.ClientInitFrameType() != TypeBtInit {
+		s.mu.Unlock()
+		s.logf("rrp: unexpected BT_INIT for proto %s", s.Proto)
+		s.shutdown(fmt.Errorf("unexpected frame 0x29"))
+		return
 	}
 	s.mu.Unlock()
+	respType, respPayload, crypto, err := ir.OnClientInit(f.Payload)
+	if err != nil {
+		s.logf("rrp: key exchange failed: %v", err)
+		s.shutdown(fmt.Errorf("key exchange: %w", err))
+		return
+	}
+	// Канонный порядок: RESP уходит в очередь ДО свапа крипты (клиент
+	// декодирует старым конвертом всё, что придёт до RESP).
+	s.writeAsync(&Frame{Type: respType, Payload: respPayload})
+	s.commitCrypto(crypto)
 	s.logf("rrp: payload crypto engaged (session %s, proto %s)", s.ID, s.Proto)
+}
+
+// ---- бесшовная смена протокола (v0.10, кадр 0x2C) ----
+
+type protoSwitchMsg struct {
+	Proto  string `json:"proto"`
+	Nonce  string `json:"nonce,omitempty"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func encodeProtoSwitch(proto, nonce string, ok bool, reason string) []byte {
+	b, _ := json.Marshal(protoSwitchMsg{Proto: proto, Nonce: nonce, OK: ok, Reason: reason})
+	return b
+}
+
+// handleProtoSwitch — клиент просит сменить протокол без разрыва связи:
+// валидация цели → ответ ok → ПАРКОВКА payload'ов → перехендшейк целевого
+// протокола (KEY_REQ → INIT/RESP) → атомарный свап крипто-конверта.
+func (s *Session) handleProtoSwitch(f *Frame) {
+	var req protoSwitchMsg
+	if err := json.Unmarshal(f.Payload, &req); err != nil || strings.TrimSpace(req.Proto) == "" {
+		s.logf("rrp: proto-switch garbage ignored")
+		return // мусор не рвёт сессию (канон)
+	}
+	fail := func(reason string) {
+		s.writeAsync(&Frame{Type: TypeProtoSwitch, Payload: encodeProtoSwitch("", req.Nonce, false, reason)})
+	}
+	if !s.cfg.Switchable || s.cfg.SwitchPlanner == nil {
+		fail("switch disabled")
+		return
+	}
+	target := NormalizeProto(req.Proto) // мусор → дефолт (никогда не ошибка)
+	if !IsExecutable(target) {
+		fail("protocol not executable")
+		return
+	}
+	if target == DefaultProtocolID && s.crypto != nil {
+		// v0.10: возврат на rrp1 = снятие крипты; в живой сессии безопасной
+		// точки дрена нет (старые envelope-кадры клиента в полёте). Честный
+		// отказ: клиент делает reconnect-свитч (валидирует и перезапускает).
+		fail("rrp1 switch requires reconnect")
+		return
+	}
+	s.mu.Lock()
+	if s.pendingProto != "" {
+		s.mu.Unlock()
+		fail("switch already in progress")
+		return
+	}
+	plan, err := s.cfg.SwitchPlanner(target)
+	if err != nil {
+		s.mu.Unlock()
+		fail("plan unavailable")
+		return
+	}
+	s.parkPayloadLocked()
+	s.pendingProto = target
+	s.keyPlan = plan
+	s.mu.Unlock()
+	s.writeAsync(&Frame{Type: TypeProtoSwitch, Payload: encodeProtoSwitch(target, req.Nonce, true, "")})
+	// перехендшейк целевого протокола (тот же поток, что и после READY в Run)
+	reqPayload, err := plan.RequestPayload()
+	if err != nil {
+		s.shutdown(fmt.Errorf("proto switch key request: %w", err))
+		return
+	}
+	errcc := make(chan error, 1)
+	s.outq <- outItem{frame: &Frame{Type: TypeKeyReq, Payload: reqPayload}, err: errcc}
+	if err := <-errcc; err != nil {
+		s.shutdown(fmt.Errorf("proto switch key request write: %w", err))
+		return
+	}
+	s.startSwitchDeadline()
+	s.logf("rrp: protocol switch started (session %s, %s → %s)", s.ID, s.Proto, target)
+}
+
+// startSwitchDeadline — дедлайн перехендшейка свитча (старая крипта жива,
+// поэтому критерий — pendingProto, а не crypto==nil).
+func (s *Session) startSwitchDeadline() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keyTimer = time.AfterFunc(KeyExchangeTimeout, func() {
+		s.mu.Lock()
+		pp := s.pendingProto
+		s.mu.Unlock()
+		if pp != "" {
+			s.logf("rrp: protocol switch timeout (%s) — closing", pp)
+			s.shutdown(fmt.Errorf("proto switch timeout"))
+		}
+	})
 }
 
 // handleCamCtl: клиент выключил/включил камуфляж для устройства (0x2A).

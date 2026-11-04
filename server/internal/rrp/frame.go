@@ -75,6 +75,22 @@ const (
 	// (переживает реконнекты и офлайн клиента) и отражает в READY.features
 	// следующей сессии: выключенный клиентом apimask не включается обратно.
 	TypeCamCtl = 0x2A
+
+	// Кадры протокола bittorrent (v0.10, module protocol.bittorrent):
+	// payload — канонные пакеты MSE/PE (Message Stream Encryption) внутри
+	// приватного канала. BT_INIT (C→S) = packet1||packet3 (Ya+pad+req1+
+	// req2⊕req3+RC4_A(...)), BT_RESP (S→C) = packet4 (RC4_B(VC+select+PadD)).
+	// После обмена payload'ы DATA/UDP_DATA — peer-wire piece-сообщения (type 7).
+	TypeBtInit = 0x29
+	TypeBtResp = 0x2B
+
+	// Бесшовная смена протокола в живой сессии (v0.10, «согласование без
+	// разрыва связи»): инициатор (клиент) шлёт JSON {"proto":id,"nonce":n};
+	// сервер отвечает тем же типом {"ok":bool,"proto":id,"nonce":n,"reason":""}.
+	// После ok=true обе стороны ПАРКОВАТ payload-кадры и переносят обмен
+	// ключами нового протокола (KEY_REQ → INIT/RESP); крипто-конверт
+	// атомарно подменяется по завершении обмена — соединение и стримы живут.
+	TypeProtoSwitch = 0x2C
 )
 
 const (
@@ -108,6 +124,10 @@ func MaxPayloadFor(t uint8) int {
 		return 256 // wg msg1 = 148 Б (запас на будущие WG-форматы)
 	case TypeWgResp:
 		return 256 // wg msg2 = 92 Б
+	case TypeBtInit:
+		return 1280 // MSE packet1(96+512) + packet3(40+8+4+2+512+2)
+	case TypeBtResp:
+		return 640 // MSE packet4 = RC4(8+4+2+512)
 	}
 	return MaxControlPayload
 }

@@ -363,6 +363,64 @@ object Msgs {
     // ── RrpProtocols: суффиксы меток ─────────────────────────────────────
     val LABEL_STABLE = Msg(" · stable", " · стабильный")
     val LABEL_PAYLOAD_ENC = Msg(" · payload encryption", " · шифрование payload")
+    val LABEL_BT_MASK = Msg(" · torrent DPI mask", " · маска под BitTorrent")
+
+    // ── Протокол bittorrent (v0.10) ──────────────────────────────────
+    val BT_INIT_SENT = Msg(
+        "bt: MSE init sent (packet1=%sБ packet3=%sБ, RC4-drop%s)",
+        "bt: MSE init отправлен (packet1=%sБ packet3=%sБ, RC4-drop%s)",
+    )
+    val BT_KEYS_AGREED = Msg(
+        "bt: MSE keys agreed — piece-конверт активен (BitTorrent DPI mask)",
+        "bt: MSE ключи согласованы — piece-конверт активен (DPI-маска BitTorrent)",
+    )
+    val BT_FAILED = Msg("bt: %s", "bt: %s")
+
+    // ── Бесшовная смена протокола (v0.10) ────────────────────────────
+    val PSW_REQUEST = Msg(
+        "proto-switch: requesting live switch to %s (nonce=%s)",
+        "proto-switch: запрос бесшовной смены на %s (nonce=%s)",
+    )
+    val PSW_GRANTED = Msg(
+        "proto-switch: server agreed on %s — re-keying",
+        "proto-switch: сервер согласовал %s — перехендшейк",
+    )
+    val PSW_DENIED = Msg(
+        "proto-switch: server refused: %s — old crypto alive",
+        "proto-switch: сервер отказал: %s — старая крипта жива",
+    )
+    val PSW_TIMEOUT = Msg(
+        "proto-switch: agreement timeout — old crypto alive",
+        "proto-switch: таймаут согласования — старая крипта жива",
+    )
+    val PSW_FLUSHED = Msg(
+        "proto-switch: flushed %d parked frames (new envelope)",
+        "proto-switch: отправлено накопленных кадров: %s (новый конверт)",
+    )
+
+    // ── Умный балансер auto-режима (v0.10) ────────────────────────────
+    val BAL_DEGRADED = Msg(
+        "auto: link degraded (%s) — rotating protocol %s → %s",
+        "auto: качество соединения просело (%s) — ротация протокола %s → %s",
+    )
+    val BAL_STABLE = Msg(
+        "auto: link stable (%s) — keeping %s",
+        "auto: соединение стабильно (%s) — остаюсь на %s",
+    )
+    val BAL_SKIP_COOLDOWN = Msg(
+        "auto: switch cooldown %ss — not switching",
+        "auto: кулдаун смены %sс — не переключаюсь",
+    )
+    val BAL_FAIL_MARKED = Msg(
+        "auto: %s failed on this link — cooling down %ss",
+        "auto: %s провалился на этой связи — кулдаун %sс",
+    )
+
+    // ── Пробник качества (v0.10, тестирование скважности) ────────────
+    val PROBE_LOSS = Msg(
+        "prober: loss %.0f%% rtt %sms over %d pings",
+        "prober: потери %.0f%% rtt %sмс за %s пингов",
+    )
 
     // ── SecurityFacts (вкладка «О приложении») ───────────────────────────
     val SF_TLS_MIN = Msg(

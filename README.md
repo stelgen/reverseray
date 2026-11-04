@@ -21,7 +21,8 @@
 ## Возможности
 
 - **Egress через телефон** — сервер инициирует исходящий трафик с резидентного IP; NAT/CGNAT не мешают
-- **Протоколы = DPI-маски** — rrp1, WireGuard, MTProto/2: туннель выглядит для DPI как заявленный протокол
+- **Протоколы = DPI-маски** — rrp1, WireGuard, MTProto/2, BitTorrent (MSE/PE): туннель выглядит для DPI как заявленный протокол
+- **Умный AUTO-балансер** — постоянный тест качества связи (потери/RTT/PROBE) и бесшовная ротация протоколов без разрыва соединения (гистерезис + кулдауны, без «скакания»)
 - **Мультипоточность** — N параллельных сессий через один порт; TCP-окна складываются
 - **Модули без переустановки** — единый манифест `modules.json` для APK и сервера
 - **Централизованное логирование** — ok зелёный / warn жёлтый / err красный на всех экранах
@@ -93,6 +94,7 @@ flowchart LR
     subgraph MASKS["Протоколы = DPI-маски"]
         WG["WireGuard/1<br/>Noise_IKpsk2"]
         MT["MTProto/2<br/>DH · AES-256-IGE"]
+        BT["BitTorrent/1<br/>MSE/PE · RC4-drop1024"]
         R1["RRP/1<br/>базовый"]
         NOISE["API Mask<br/>NOISE 0x26"]
     end
@@ -109,6 +111,7 @@ flowchart LR
     HARD --> P2 --> NEG
     NEG --- WG
     NEG --- MT
+    NEG --- BT
     NEG --- R1
     NOISE -."шум" .- APK
     SYNC -."манифест" .-> NEG
@@ -194,7 +197,10 @@ sequenceDiagram
 | **RRP/1** | Мультиплексирование, flow-control (кредит ≤ буферу), keep-alive — [protocol.md](docs/protocol.md) |
 | **wireguard** | Настоящий канон whitepaper: Noise_IKpsk2, ChaCha20-Poly1305, sliding-window 2048; PSK = SHA256(token); KAT Go↔Kotlin |
 | **mtproto2** | DH-канон MTProto 2.0 (официальный dh_prime Telegram, AES-256-IGE); кросс-языковой KAT |
+| **bittorrent** | Канон MSE/PE (DH 768-бит RFC 2409, RC4-drop1024, peer-wire piece-сообщения) — для DPI как BitTorrent; кросс-языковой KAT |
 | **AUTO-протокол** | Ссылка без `proto=` = AUTO; сервер согласует вниз до rrp1; даунгрейд = явный WARN |
+| **PROTO_SWITCH (0x2C)** | Бесшовная смена протокола в живой сессии: согласование клиент-сервер, паркинг payload-кадров, перехендшейк, атомарный свап конверта — связь НЕ рвётся |
+| **Умный балансер AUTO** | Пробник качества (потери/RTT/PROBE) + ротация round-robin по гистерезису и кулдаунам (30с→10мин) — без мигания |
 | **WAN-hardening** | Tarpit, ноль байт сканеру, per-IP лимиты |
 | **Модульная система** | Один `modules.json` для APK и сервера; обновления без переустановки; мусор не применяется |
 | **API Mask** | Фоновый шум как API бизнес-приложения; ноль внешних хостов; бюджет из манифеста |

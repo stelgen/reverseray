@@ -17,8 +17,25 @@ class RrpProtocolsVerTest {
         assertEquals("1", RrpProtocols.ver("rrp1"))
         assertEquals("MTProto/2", RrpProtocols.label("mtproto2"))
         assertEquals("2.0", RrpProtocols.ver("mtproto2"))
-        assertEquals("RRP/1 (v1)", RrpProtocols.labelWithVer("rrp1"))
+        // v0.10 ФИКС ДУБЛЕЙ: версия уже в метке ("Name/Ver") — НЕ дублируем скобками.
+        assertEquals("RRP/1", RrpProtocols.labelWithVer("rrp1"))
         assertEquals("MTProto/2 (v2.0)", RrpProtocols.labelWithVer("mtproto2"))
+        assertEquals("BitTorrent/1", RrpProtocols.labelWithVer("bittorrent"))
+    }
+
+    @Test
+    fun `version is not duplicated in menu labels`() {
+        // регрессия меню «Смена протокола»: «RRP/1 (v1)» было дублированием
+        for (id in RrpProtocols.BUNDLED) {
+            val shown = RrpProtocols.labelWithVer(id)
+            val v = RrpProtocols.ver(id)
+            if (v.isNotEmpty()) {
+                assertTrue(
+                    "версия задвоена: $shown",
+                    !shown.contains("(v$v)"),
+                )
+            }
+        }
     }
 
     @Test
@@ -30,7 +47,8 @@ class RrpProtocolsVerTest {
                 mapOf("rrp1" to "RRP/1", "mtproto2" to "MTProto/2", "proto9" to "Proto/9"),
                 mapOf("rrp1" to "1", "mtproto2" to "2.0", "proto9" to "9"),
             )
-            assertEquals("Proto/9 (v9)", RrpProtocols.labelWithVer("proto9"))
+            // v0.10: версия уже в метке "Proto/9" — скобки не приписываем
+            assertEquals("Proto/9", RrpProtocols.labelWithVer("proto9"))
             assertEquals("9", RrpProtocols.ver("proto9"))
         } finally {
             // вернуть встроенный реестр (глобальное состояние)
@@ -88,7 +106,8 @@ class RrpProtocolsVerTest {
             vers = mapOf("rrp1" to "1", "future2" to "2"),
         )
         try {
-            assertEquals("Future/2 (v2)", RrpProtocols.labelWithVer("future2"))
+            // v0.10: версия уже в метке "Future/2" — скобки не приписываем
+            assertEquals("Future/2", RrpProtocols.labelWithVer("future2"))
             assertTrue(RrpProtocols.displayList().contains("future2"))
             assertEquals("future2", RrpProtocols.normalize("future2"))
             // движок остаётся на стабильном дефолте
