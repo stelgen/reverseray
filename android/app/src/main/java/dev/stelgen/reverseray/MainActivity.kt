@@ -676,7 +676,7 @@ class MainActivity : AppCompatActivity() {
         linkCard.addView(linkStatusView)
         linkValueView = TextView(this).apply {
             textSize = 12f
-            setTypeface(typeface, Typeface.MONOSPACE)
+            setTypeface(Typeface.MONOSPACE)
             setPadding(dp(10), dp(10), dp(10), dp(10))
             setTextIsSelectable(true)
             val cur = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
@@ -1261,7 +1261,7 @@ class MainActivity : AppCompatActivity() {
     // ================================================================= Действия
 
     private fun startTunnel() {
-        val raw = configView.text.toString()
+        val raw = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
         val cfg = try {
             RrpUri.parse(raw) // бронепарсер чинит мусор; по итогу — канонический вид
         } catch (e: Exception) {
@@ -1270,8 +1270,8 @@ class MainActivity : AppCompatActivity() {
         }
         // сохраняем нормализованную ссылку (v0.9.5: proto= пишется только когда
         // выбран явно; отсутствует = режим AUTO — лучший общий протокол сервера)
-        configView.setText(cfg.serialize())
         prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
+        updateLinkValueView(cfg.serialize())
         // v0.8: лимит — король. Достигнут → НОЛЬ байт: окно предупреждения вместо старта.
         val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
         val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
@@ -1525,9 +1525,8 @@ class MainActivity : AppCompatActivity() {
             if (transport == RrpUri.TRANSPORT_WS) R.string.transport_ws_label else R.string.transport_tcp_label,
         )
         val canonical = cfg.copy(transport = transport).serialize()
-        configView.setText(canonical)
-        configView.setSelection(canonical.length)
         prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+        updateLinkValueView(canonical)
         refreshConnLine()
         val msg = getString(R.string.transport_applied, label)
         LogStore.push(msg, LogKind.INFO, LogStore.Channel.STATUS)
@@ -1582,7 +1581,7 @@ class MainActivity : AppCompatActivity() {
             minLines = 2
             minHeight = dp(96)
             setTextSize(12f)
-            setTypeface(typeface, Typeface.MONOSPACE)
+            setTypeface(Typeface.MONOSPACE)
         }
         val container = TextInputLayout(this).apply {
             hint = getString(R.string.config_hint)
@@ -1632,7 +1631,7 @@ class MainActivity : AppCompatActivity() {
                 val cfg = RrpUri.parse(canonical)
                 probeServer(cfg)
             } catch (e: Exception) {
-                false to (e.message ?: e.javaClass.simpleName)
+                ProbeOut(false, e.message ?: e.javaClass.simpleName)
             }
             runOnUiThread {
                 if (ok) {
@@ -1669,8 +1668,9 @@ class MainActivity : AppCompatActivity() {
                     override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {
                         val ca = chain?.lastOrNull() ?: throw java.security.cert.CertificateException("no chain")
                         if (want != null) {
+                            // SPKI DER = encoded публичного ключа сертификата
                             val sum = java.security.MessageDigest.getInstance("SHA-256")
-                                .digest(ca.subjectPublicKeyInfo.encoded)
+                                .digest(ca.publicKey.encoded)
                             if (!sum.contentEquals(want)) {
                                 throw java.security.cert.CertificateException("SPKI pin mismatch")
                             }
@@ -1839,7 +1839,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun writeConfigToFile(uri: Uri) {
         try {
-            val raw = configView.text.toString().trim()
+            val raw = prefs().getString(TunnelService.KEY_CONFIG, "")?.trim() ?: ""
             val cfg = RrpUri.parse(raw) // не экспортируем мусор
             contentResolver.openOutputStream(uri)?.use { out ->
                 out.write(cfg.serialize().toByteArray(Charsets.UTF_8))
@@ -1936,7 +1936,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showQr() {
         val raw = try {
-            RrpUri.parse(configView.text.toString()).serialize() // QR всегда канонический
+            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").serialize() // QR всегда канонический
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
             return
