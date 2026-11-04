@@ -156,7 +156,16 @@
     <string name="console_title_update">журнал обновления и модулей</string>
 
     <string name="link_clear">Очистить</string>
-    <string name="link_clear_confirm">Очистить поле ссылки?</string>
+        <string name="link_edit">Изменить</string>
+    <string name="link_edit_title">Ссылка на сервер</string>
+    <string name="link_ok">ОК</string>
+    <string name="link_cancel">Отмена</string>
+    <string name="link_empty">Ссылка не задана</string>
+    <string name="probe_ok">Тестовое подключение: успех — сервер доступен, TLS-пин подтверждён</string>
+    <string name="probe_ok_short">Тестовое подключение: успех</string>
+    <string name="probe_fail">Тестовое подключение не удалось: %1$s</string>
+    <string name="probe_fail_short">Тестовое подключение не удалось</string>
+<string name="link_clear_confirm">Очистить поле ссылки?</string>
     <string name="link_saved">Ссылка сохранена</string>
     <string name="link_status_ok">Ссылка принята и сохранена ✓</string>
     <string name="link_status_bad">Ссылка не распознана — вставьте rrp:// строку</string>

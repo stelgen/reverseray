@@ -69,9 +69,12 @@ type Config struct {
 	} `json:"modules"`
 
 	Limits struct {
-		MaxStreams          int `json:"max_streams"`
-		StreamWindow        int `json:"stream_window"`
-		MaxStreamWindow     int `json:"max_stream_window"`
+		MaxStreams      int `json:"max_streams"`
+		StreamWindow    int `json:"stream_window"`
+		MaxStreamWindow int `json:"max_stream_window"`
+		// v1.3.0 «буфер трафика»: сколько секунд сервер держит браузерную сторону
+		// запаркованных стримов в ожидании реконнекта телефона.
+		StreamParkSec       int `json:"stream_park_sec"`
 		DeviceBudget        int `json:"device_budget"`
 		MaxTunnelsPerDevice int `json:"max_tunnels_per_device"`
 		IdleTimeoutSec      int `json:"idle_timeout_sec"`

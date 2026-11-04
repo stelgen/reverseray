@@ -48,6 +48,9 @@ type StatusReport struct {
 	ModulesVersion   string `json:"modules_version,omitempty"`
 	ModulesSource    string `json:"modules_source,omitempty"`
 	ProtoSessions    int64  `json:"proto_sessions_non_default"` // уже int64
+	Parked           int    `json:"parked_streams"`             // v1.3.0: стримов в буфере трафика
+	EventInfo        int    `json:"events_info"`
+	EventWarn        int    `json:"events_warn"`
 	// v0.8.2: модуль камуфляжа «API Mask» (честно наружу: id/имя/версия/статус)
 	Camouflage    *CamouflageInfo `json:"camouflage,omitempty"`
 	ApimaskFrames uint64          `json:"apimask_frames_total"`
@@ -130,7 +133,7 @@ func (a *App) statusJSON() []byte {
 		"HMAC-SHA256(key=SHA256(token), msg=nonce‖session_id), constant-time; nonce TTL 60 с, replay → отказ",
 		"≤120 рукопожатий/мин/IP; lockout за невалидный HMAC: 5 неудач → 30с·2^n (до 10 мин)",
 		"MTProto 2.0: DH-2048 на официальном dh_prime Telegram, AES-256-IGE, msg_key SHA-256",
-		"DATA ≤ 65535 Б; прочие кадры ≤ 4096 Б; окно стрима 512 КБ→4 МБ; бюджет сессии 16 МБ",
+		"DATA ≤ 65535 Б; прочие кадры ≤ 4096 Б; окно стрима 1 МБ→4 МБ (BDP-автотюнинг); бюджет 32 МБ; буфер трафика до 600 с",
 		"WAN-hardening: первый байт ≠ TLS → tarpit + тишина (0 байт ответа)",
 		"Манифест modules.json: schema-чек, семвер, sha256, даунгрейд запрещён, мусор не применяется",
 		"DNS/SNI резолвит телефон — сервер не знает хосты назначения (redact by default)",
@@ -157,6 +160,9 @@ func (a *App) statusJSON() []byte {
 		HardeningLimited: a.hardSt.Limited.Load(),
 		ProtoSessions:    a.met.ProtoSessions.Load(),
 	}
+	// v1.3.0: буфер трафика + сводка журнала событий
+	s.Parked = a.hub.ParkedTotal()
+	s.EventInfo, s.EventWarn, _ = a.ev.Counts()
 	if a.modSync != nil {
 		s.ModulesVersion = a.modSync.ActiveVersion()
 		if ms := a.modSync.Status(); ms.Source != "" {
@@ -202,224 +208,216 @@ const uiHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>ReverseRay · панель</title>
+<title>ReverseRay — панель управления</title>
 <style>
 :root{
- --bg:#070b16;--bg2:#0b1122;--card:#101830;--card2:#141d38;--line:#1e2b52;--line2:#27386b;
- --tx:#e6edff;--mut:#8fa3d9;--ok:#39d98a;--warn:#f9a825;--err:#ff6b6b;--acc:#4fc3f7;--acc2:#7c6bff;
- --in:#39d98a;--out:#4fc3f7;--r:14px;--grid:#1e2b52;--axis:#8fa3d9;
-}
-@media (prefers-color-scheme:light){
- :root{
-  --bg:#f3f5fb;--bg2:#ffffff;--card:#ffffff;--card2:#eef1fa;--line:#d7deee;--line2:#c3cde6;
-  --tx:#1c2440;--mut:#5a6a94;--ok:#149a5c;--warn:#b07a00;--err:#d04545;--acc:#0f7dc2;--acc2:#5b4bd6;
-  --in:#149a5c;--out:#0f7dc2;--grid:#dfe5f2;--axis:#7787b0;
- }
- body{background:radial-gradient(1200px 600px at 80% -10%,#e6ecff 0%,var(--bg) 55%) fixed,var(--bg)}
+ --bg:#111217;--panel:#181b1f;--panel2:#1f2126;--border:#2c3038;--txt:#d8d9dd;--dim:#8e9095;
+ --green:#73bf69;--red:#f2495c;--yellow:#ff9830;--blue:#5794f2;--purple:#b877d9;--orange:#ffb357;
+ --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%}
-body{background:radial-gradient(1200px 600px at 80% -10%,#12204a 0%,var(--bg) 55%) fixed,var(--bg);
- color:var(--tx);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
- padding:clamp(10px,2.5vw,26px);max-width:1500px;margin:0 auto}
-h1{font-size:clamp(19px,2.6vw,26px);letter-spacing:.01em;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sub{color:var(--mut);font-size:clamp(11px,1.5vw,13px);margin:4px 0 16px;display:flex;gap:8px 18px;flex-wrap:wrap}
-.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:11.5px;white-space:nowrap}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 4px rgba(57,217,138,.14);animation:p 2s infinite}
-.dot.warn{background:var(--warn);box-shadow:0 0 0 4px rgba(249,168,37,.14)}
-@keyframes p{50%{opacity:.55}}
-@media (prefers-reduced-motion:reduce){.dot{animation:none}}
-.grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));margin-bottom:12px}
-.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:var(--r);
- padding:13px 15px;min-width:0;transition:border-color .2s}
-.card:hover{border-color:var(--line2)}
-.k{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px}
-.v{font-size:clamp(17px,2.2vw,22px);font-weight:700;font-variant-numeric:tabular-nums;word-break:break-word}
-.v small{font-size:.55em;color:var(--mut);font-weight:600}
-.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.acc{color:var(--acc)}
-.sec{margin:18px 0 8px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.12em;
- display:flex;align-items:center;gap:10px}
-.sec::after{content:"";flex:1;height:1px;background:var(--line)}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{color:var(--mut);text-align:left;font-weight:600;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-td{padding:7px 9px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;word-break:break-word;vertical-align:top}
-tr:last-child td{border-bottom:none}
-.badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.04em;border:1px solid}
-.b-green{color:var(--ok);border-color:rgba(57,217,138,.4);background:rgba(57,217,138,.08)}
-.b-blue{color:var(--acc);border-color:rgba(79,195,247,.4);background:rgba(79,195,247,.08)}
-.b-purple{color:var(--acc2);border-color:rgba(124,107,255,.45);background:rgba(124,107,255,.1)}
-.b-gray{color:var(--mut);border-color:var(--line2);background:rgba(143,163,217,.06)}
-.num{font-variant-numeric:tabular-nums}
-code{background:var(--card2);padding:1px 6px;border-radius:6px;font-size:11.5px;color:var(--mut)}
-footer{color:var(--mut);font-size:11px;margin-top:16px;text-align:center}
-.chartwrap{position:relative}
-svg{width:100%;height:auto;display:block}
-.legend{display:flex;gap:16px;font-size:12px;color:var(--mut);flex-wrap:wrap;margin-top:6px}
-.legend b{color:var(--tx);font-variant-numeric:tabular-nums}
-.sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
-.sw.dash{background:repeating-linear-gradient(90deg,var(--mut) 0 4px,transparent 4px 8px)}
-.muted{color:var(--mut)}
-.cols{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-@media (max-width:560px){th:nth-child(9),td:nth-child(9){display:none}}
-:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+body{background:var(--bg);color:var(--txt);font:13px/1.45 -apple-system,'Segoe UI',Roboto,sans-serif}
+a{color:var(--blue);text-decoration:none}
+.top{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--panel2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:9}
+.brand{font-weight:700;font-size:16px;letter-spacing:.4px}
+.brand b{color:var(--blue);font-weight:700}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.warn{background:var(--red);box-shadow:0 0 6px var(--red)}
+.chip{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:2px 9px;font-size:12px;color:var(--dim)}
+.chip b{color:var(--txt);font-weight:600}
+.top .sp{flex:1}
+.wrap{padding:14px 18px 40px;max-width:1680px;margin:0 auto}
+.grid{display:grid;gap:10px}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(158px,1fr))}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:12px 14px}
+.panel h3{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.stat .v{font-size:26px;font-weight:600;font-family:var(--mono)}
+.stat .v small{font-size:13px;color:var(--dim);font-weight:400}
+.stat.ok .v{color:var(--green)}.stat.bad .v{color:var(--red)}.stat.acc .v{color:var(--blue)}.stat.mut .v{color:var(--txt)}
+.row2{grid-template-columns:minmax(320px,2fr) minmax(300px,1fr)}
+@media(max-width:900px){.row2{grid-template-columns:1fr}}
+.ctrl{display:flex;gap:6px;align-items:center}
+.ctrl button,.ctrl select{background:var(--panel2);color:var(--dim);border:1px solid var(--border);border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer;font-family:inherit}
+.ctrl button.on{color:var(--txt);border-color:var(--blue);background:#232a35}
+svg.chart{width:100%;height:190px;display:block}
+.legend{display:flex;gap:16px;font-size:11px;color:var(--dim);margin-top:6px}
+.legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{color:var(--dim);font-weight:600;text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+td{padding:6px 8px;border-bottom:1px solid #23262c;font-family:var(--mono)}
+td.s{font-family:inherit}
+tr:hover td{background:#1d2025}
+.mono{font-family:var(--mono)}
+.ok{color:var(--green)}.warn{color:var(--yellow)}.bad{color:var(--red)}.dim{color:var(--dim)}
+.logs{max-height:340px;overflow-y:auto;font-family:var(--mono);font-size:12px}
+.logs:hover{filter:none}
+.le{display:flex;gap:8px;padding:3px 2px;border-bottom:1px solid #1d2025;align-items:baseline}
+.le .t{color:var(--dim);flex:0 0 66px}
+.le .k{flex:0 0 84px;text-align:center;border-radius:3px;font-size:10px;padding:1px 0;background:var(--panel2);color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.le .k.tunnel{color:var(--blue)}.le .k.proto{color:var(--purple)}.le .k.park{color:var(--orange)}.le .k.auth{color:var(--dim)}
+.le .d{flex:0 0 90px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.le .m{flex:1}
+.le.w .m{color:var(--yellow)}
+.facts{font-size:11.5px;color:var(--dim);line-height:1.7}
+.foot{margin-top:14px;color:var(--dim);font-size:11px;display:flex;gap:14px;flex-wrap:wrap}
+.pill{padding:1px 7px;border-radius:3px;background:var(--panel2);border:1px solid var(--border)}
 </style>
 </head>
 <body>
-<h1><span class="dot" id="dot"></span>ReverseRay — панель <span class="chip" id="ver">…</span></h1>
-<div class="sub" id="sub">загрузка…</div>
-<div class="grid" id="cards" aria-live="off"></div>
-
-<div class="sec" id="traffic-sec">Трафик в реальном времени</div>
-<div class="card chartwrap">
- <svg id="chart" viewBox="0 0 640 200" role="img" aria-label="График трафика в реальном времени">
-  <defs>
-   <linearGradient id="gIn" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0" stop-color="#39d98a" stop-opacity=".35"/><stop offset="1" stop-color="#39d98a" stop-opacity="0"/>
-   </linearGradient>
-   <linearGradient id="gOut" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0" stop-color="#4fc3f7" stop-opacity=".35"/><stop offset="1" stop-color="#4fc3f7" stop-opacity="0"/>
-   </linearGradient>
-  </defs>
-  <g id="gridLines" stroke="var(--grid)" stroke-width="1"></g>
-  <g id="gridLabels" fill="var(--axis)" font-size="10" font-family="system-ui,sans-serif"></g>
-  <path id="areaIn" fill="url(#gIn)"/><path id="areaOut" fill="url(#gOut)"/>
-  <path id="peakIn" fill="none" stroke="var(--axis)" stroke-width="1" stroke-dasharray="2 4"/>
-  <path id="peakOut" fill="none" stroke="var(--axis)" stroke-width="1" stroke-dasharray="2 4"/>
-  <path id="emaIn" fill="none" stroke="var(--axis)" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <path id="emaOut" fill="none" stroke="var(--axis)" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <path id="lineIn" fill="none" stroke="var(--in)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <path id="lineOut" fill="none" stroke="var(--out)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
- </svg>
- <div class="legend">
-  <span><span class="sw" style="background:var(--in)"></span>Вход rx (телефон→сервер) <b id="rateIn">0 Б/с</b></span>
-  <span><span class="sw" style="background:var(--out)"></span>Выход tx (сервер→телефон) <b id="rateOut">0 Б/с</b></span>
-  <span><span class="sw dash"></span>среднее (EMA) · пик</span>
-  <span class="muted">окно 90 с · шаг 2 с</span>
+<div class="top">
+ <div class="brand">Reverse<b>Ray</b></div>
+ <div class="dot" id="dot"></div>
+ <div class="chip">версия <b id="ver">—</b></div>
+ <div class="chip">uptime <b id="upt">—</b></div>
+ <div class="chip">egress <b class="mono" id="eg">—</b></div>
+ <div class="chip">сертификат до <b id="cert">—</b></div>
+ <div class="sp"></div>
+ <div class="chip" id="hprofile">—</div>
+</div>
+<div class="wrap">
+ <div class="grid kpis" id="kpis"></div>
+ <div class="grid row2" style="margin-top:10px">
+  <div class="panel">
+   <h3><span>Трафик через туннель</span>
+    <span class="ctrl">
+     <button data-p="150" class="on">5 мин</button><button data-p="450">15 мин</button><button data-p="1800">1 ч</button>
+     <select id="unit"><option value="b">Б/с</option><option value="kb" selected>КБ/с</option><option value="mb">МБ/с</option><option value="mbit">Мбит/с</option></select>
+    </span></h3>
+   <svg class="chart" id="chart" preserveAspectRatio="none" viewBox="0 0 1000 190"></svg>
+   <div class="legend"><span><i style="background:var(--green)"></i>входящий <b id="lin" class="mono">—</b></span><span><i style="background:var(--blue)"></i>исходящий <b id="lout" class="mono">—</b></span><span>пик <b id="lpeak" class="mono">—</b></span></div>
+  </div>
+  <div class="panel">
+   <h3>Протоколы и защита</h3>
+   <div class="facts" id="protos"></div>
+   <h3 style="margin-top:12px">Канонические гарантии</h3>
+   <div class="facts" id="facts"></div>
+  </div>
+ </div>
+ <div class="grid" style="margin-top:10px">
+  <div class="panel">
+   <h3><span>Устройства и туннели</span><span class="ctrl dim" id="parkinfo"></span></h3>
+   <div style="overflow-x:auto"><table id="sess"><thead><tr>
+    <th>Устройство</th><th>Протокол</th><th>Транспорт</th><th>RTT</th><th>Потоки</th><th>Окно</th><th>↓ всего</th><th>↑ всего</th><th>Ошибки диала</th><th>Аптайм</th>
+   </tr></thead><tbody></tbody></table></div>
+  </div>
+ </div>
+ <div class="grid row2" style="margin-top:10px">
+  <div class="panel">
+   <h3><span>Журнал событий</span>
+    <span class="ctrl"><button id="fall" class="on">все</button><button id="fwarn">предупреждения</button></span></h3>
+   <div class="logs" id="logs"></div>
+  </div>
+  <div class="panel">
+   <h3>Камуфляж и модули</h3>
+   <div class="facts" id="mods"></div>
+  </div>
+ </div>
+ <div class="foot">
+  <span>GET /status — полная телеметрия</span><span>GET /metrics — Prometheus</span><span>GET /ui/logs — журнал (JSON)</span><span>GET /healthz · /readyz</span>
  </div>
 </div>
-
-<div class="sec">Клиенты</div>
-<div id="clients" class="cols"></div>
-
-<footer>авто-обновление 2 с · ReverseRay web UI</footer>
 <script>
-'use strict';
-var histIn=[],histOut=[],emaIn=[],emaOut=[],lastRelay=null,lastAt=null,N=45;
+var hist=[],lastRelay={},lastAt=0,period=150,unit='kb',logCache=[],logFilter='all',lastLogKey='';
+function fmtB(b){if(b==null)return'—';var u=['Б','КБ','МБ','ГБ','ТБ'],i=0,x=Number(b);while(x>=1024&&i<4){x/=1024;i++}return(i?x.toFixed(1):x)+' '+u[i]}
+function fmtR(b){if(b==null||b<0)return'—';var u=['Б/с','КБ/с','МБ/с','ГБ/с'],i=0,x=b;while(x>=1024&&i<3){x/=1024;i++}return x.toFixed(i?1:0)+' '+u[i]}
+function fmtUp(s){s=Math.max(0,s|0);var d=(s/86400)|0,h=((s%86400)/3600)|0,m=((s%3600)/60)|0;return(d?d+' д ':'')+(h?h+' ч ':'')+m+' мин'}
+function inUnit(v){if(v==null)return null;if(unit==='b')return v;if(unit==='kb')return v/1024;if(unit==='mb')return v/1048576;return v*8/1e6}
+function unitName(){return{b:'Б/с',kb:'КБ/с',mb:'МБ/с',mbit:'Мбит/с'}[unit]}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function fmt(b){if(b==null||b===undefined)return'—';const u=['Б','КБ','МБ','ГБ','ТБ'];let i=0,x=Number(b);while(x>=1024&&i<4){x/=1024;i++}return (i?x.toFixed(1):x)+' '+u[i]}
-function fmtR(b){if(!b)return'0 Б/с';const u=['Б/с','КБ/с','МБ/с','ГБ/с'];let i=0,x=b;while(x>=1024&&i<3){x/=1024;i++}return x.toFixed(i?1:0)+' '+u[i]}
-function fmtUp(sec){sec=Math.max(0,sec|0);const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+' д ':'')+(h?h+' ч ':'')+m+' мин'}
-function protoLabel(id,s){const l=(s.protocol_labels||{})[id]||id;const v=(s.protocol_vers||{})[id];return v?l+' · v'+v:l}
-// KPI-карточка выводится только если поле несёт данные (канон v0.9.6)
-function kpiCards(list){
- return list.filter(function(kv){return kv[1]!==null&&kv[1]!==undefined&&kv[1]!==0&&kv[1]!==''&&kv[1]!=='0'})
- .map(function(kv){return '<div class="card"><div class="k">'+kv[0]+'</div><div class="v '+kv[2]+'">'+kv[1]+'</div></div>'}).join('');
-}
-// сглаживание Катмулла-Рома: точки → кубические безье
-function smoothPath(pts){
- if(pts.length<2)return '';
- if(pts.length===2)return 'M'+pts[0][0]+' '+pts[0][1]+' L'+pts[1][0]+' '+pts[1][1];
- let d='M'+pts[0][0].toFixed(1)+' '+pts[0][1].toFixed(1);
- for(let i=0;i<pts.length-1;i++){
-  const p0=pts[Math.max(0,i-1)],p1=pts[i],p2=pts[i+1],p3=pts[Math.min(pts.length-1,i+2)];
-  const c1x=p1[0]+(p2[0]-p0[0])/6,c1y=p1[1]+(p2[1]-p0[1])/6;
-  const c2x=p2[0]-(p3[0]-p1[0])/6,c2y=p2[1]-(p3[1]-p1[1])/6;
-  d+=' C'+c1x.toFixed(1)+' '+c1y.toFixed(1)+' '+c2x.toFixed(1)+' '+c2y.toFixed(1)+' '+p2[0].toFixed(1)+' '+p2[1].toFixed(1);
- }
- return d;
-}
-function toPts(arr,mx,x0,x1,y0,y1){
- const n=N,sx=(x1-x0)/(n-1),p=[];
- for(let i=0;i<n;i++){const v=arr[i]||0;p.push([x0+i*sx,y1-(v/mx)*(y1-y0)])}
- return p;
-}
-function drawChart(){
- const w=640,h=200,padL=56,padR=10,padT=12,padB=20;
- const x0=padL,x1=w-padR,y0=padT,y1=h-padB;
- let mx=1;for(let i=0;i<N;i++){mx=Math.max(mx,histIn[i]||0,histOut[i]||0)}
- // сетка: 5 горизонтальных линий с подписями скорости
- let gl='',lb='';
- for(let k=0;k<5;k++){
-  const y=(y1-(y1-y0)*k/4).toFixed(1);
-  gl+='<line x1="'+x0+'" y1="'+y+'" x2="'+x1+'" y2="'+y+'"/>';
-  lb+='<text x="'+(x0-6)+'" y="'+(+y+3.5)+'" text-anchor="end">'+fmtR(mx*k/4)+'</text>';
- }
- // ось времени: -90с … 0
- for(let k=0;k<=4;k++){
-  const x=(x0+(x1-x0)*k/4).toFixed(0);
-  lb+='<text x="'+x+'" y="'+(h-5)+'" text-anchor="middle">-'+(90-90*k/4)+'с</text>';
- }
- document.getElementById('gridLines').innerHTML=gl;
- document.getElementById('gridLabels').innerHTML=lb;
- const pIn=toPts(histIn,mx,x0,x1,y0,y1),pOut=toPts(histOut,mx,x0,x1,y0,y1);
- document.getElementById('lineIn').setAttribute('d',smoothPath(pIn));
- document.getElementById('lineOut').setAttribute('d',smoothPath(pOut));
- document.getElementById('areaIn').setAttribute('d',smoothPath(pIn)+' L'+x1+' '+y1+' L'+x0+' '+y1+' Z');
- document.getElementById('areaOut').setAttribute('d',smoothPath(pOut)+' L'+x1+' '+y1+' L'+x0+' '+y1+' Z');
- // EMA (плавное среднее) и пик — пунктиром
- const eIn=[],eOut=[];let peak=0;
- for(let i=0;i<N;i++){
-  const a=histIn[i]||0,b=histOut[i]||0;
-  emaIn[i]=(i?emaIn[i-1]*0.7+a*0.3:a);emaOut[i]=(i?emaOut[i-1]*0.7+b*0.3:b);
-  peak=Math.max(peak,a,b);
-  eIn.push([x0+i*((x1-x0)/(N-1)),y1-(emaIn[i]/mx)*(y1-y0)]);
-  eOut.push([x0+i*((x1-x0)/(N-1)),y1-(emaOut[i]/mx)*(y1-y0)]);
- }
- document.getElementById('emaIn').setAttribute('d',smoothPath(eIn));
- document.getElementById('emaOut').setAttribute('d',smoothPath(eOut));
- const yPk=(y1-peak/mx*(y1-y0)).toFixed(1);
- document.getElementById('peakIn').setAttribute('d','M'+x0+' '+yPk+' L'+x1+' '+yPk);
- document.getElementById('peakOut').setAttribute('d','M'+x0+' '+yPk+' L'+x1+' '+yPk);
- document.getElementById('rateIn').textContent=fmtR(histIn[histIn.length-1]||0);
- document.getElementById('rateOut').textContent=fmtR(histOut[histOut.length-1]||0);
-}
+function protoLabel(id,s){var l=(s.protocol_labels||{})[id]||id,v=(s.protocol_vers||{})[id];return v?l+' · v'+v:l}
+function stat(label,val,cls,sub){if(val===null||val===undefined||val==='')return'';return'<div class="panel stat '+(cls||'')+'"><h3>'+label+'</h3><div class="v">'+val+(sub?' <small>'+sub+'</small>':'')+'</div></div>'}
 async function tick(){
  try{
-  const r=await fetch('/status',{cache:'no-store'});const s=await r.json();
-  const dot=document.getElementById('dot');
-  dot.className='dot'+(s.tunnels_up>0?'':' warn');
+  var r=await fetch('/status',{cache:'no-store'}),s=await r.json();
+  document.getElementById('dot').className='dot'+(s.tunnels_up>0?'':' warn');
   document.getElementById('ver').textContent='v'+s.version;
-  document.getElementById('sub').innerHTML=
-   '<span>'+protoLabel(s.default_proto,s)+' по умолчанию</span>'
-   +'<span>реестр: '+esc((s.protocols||[]).map(function(p){return protoLabel(p,s)}).join(' · '))+'</span>'
-   +(s.egress_ip?'<span>egress IP: <code>'+esc(s.egress_ip)+'</code></span>':'')
-   +(s.cert_not_after?'<span>серт TLS до '+esc(s.cert_not_after.slice(0,10))+'</span>':'');
-  // KPI: нули и пустоты не выводим (канон v0.9.6)
-  const c=[
-   ['Туннели',s.tunnels_up,s.tunnels_up>0?'ok':'warn'],
-   ['Открытых стримов',s.streams_open||null,''],
-   ['Auth OK / fail',s.auth_ok_total?s.auth_ok_total+' / '+s.auth_failures_total:null,s.auth_failures_total>0?'warn':'ok'],
-   ['Устройств',s.devices||null,''],
-   ['Релея всего',s.bytes_relayed_total?fmt(s.bytes_relayed_total):null,'acc'],
-   ['UDP-дейтаграмм',s.udp_datagrams_total||null,''],
-   ['Uptime',s.uptime_sec?fmtUp(s.uptime_sec):null,''],
-   ['RAM (alloc)',s.mem_alloc_mb?fmt(s.mem_alloc_mb*1048576):null,''],
-  ];
-  document.getElementById('cards').innerHTML=kpiCards(c);
-  // скорость из дельт BytesRelayed (общий relay)
-  const now=Date.now();
-  let rIn=0,rOut=0;
-  const sess=s.sessions||[];
-  if(lastRelay&&lastAt){
-   const dt=Math.max(1,(now-lastAt)/1000);
-   let dIn=0,dOut=0;
-   sess.forEach(function(x){
-    const p=lastRelay[x.session];
-    if(p){dIn+=Math.max(0,(x.relay_in||0)-p[0]);dOut+=Math.max(0,(x.relay_out||0)-p[1])}
-   });
-   rIn=dIn/dt;rOut=dOut/dt;
+  document.getElementById('upt').textContent=fmtUp(s.uptime_sec);
+  document.getElementById('eg').textContent=s.egress_ip||'—';
+  document.getElementById('cert').textContent=(s.cert_not_after||'—').slice(0,10);
+  document.getElementById('hprofile').innerHTML='<b>'+esc(s.hardening_profile||'')+'</b>';
+  var k=[
+   stat('Туннели',s.tunnels_up,s.tunnels_up>0?'ok':'bad'),
+   stat('Открытых потоков',s.streams_open||null,'mut'),
+   stat('В буфере трафика',s.parked_streams||null,s.parked_streams?'acc':'mut','стримов'),
+   stat('Устройств',s.devices||null,'mut'),
+   stat('Пропущено всего',fmtB(s.bytes_relayed_total),'acc'),
+   stat('Авторизаций устройств',s.auth_ok_total||null,'ok'),
+   stat('Отклонено рукопожатий',s.auth_failures_total||null,'mut'),
+   stat('UDP-дейтаграмм',s.udp_datagrams_total||null,'mut'),
+   stat('Сканирований отклонено',s.hardening_scans_total||null,'mut'),
+   stat('RAM (Go heap)',s.mem_alloc_mb?fmtB(s.mem_alloc_mb*1048576):null,'mut'),
+   stat('События',s.events_info!=null?('<span class="dim">'+s.events_info+'</span> / <span class="warn">'+(s.events_warn||0)+'</span>'):'','mut','info/warn')
+  ].join('');
+  document.getElementById('kpis').innerHTML=k;
+  // скорости из дельт релея по сессиям
+  var now=Date.now(),dIn=0,dOut=0,rows='';
+  var sess=s.sessions||[];
+  if(lastAt){var dt=Math.max(1,(now-lastAt)/1000);
+   sess.forEach(function(x){var p=lastRelay[x.session];if(p){dIn+=Math.max(0,(x.relay_in||0)-p[0]);dOut+=Math.max(0,(x.relay_out||0)-p[1])}});
+   hist.push({t:now,in:dIn/dt,out:dOut/dt});if(hist.length>1800)hist.shift();
   }
   lastAt=now;lastRelay={};
   sess.forEach(function(x){lastRelay[x.session]=[x.relay_in||0,x.relay_out||0]});
-  histIn.push(rIn);histOut.push(rOut);
-  if(histIn.length>N){histIn.shift();histOut.shift()}
-  drawChart();
-  // карточки клиентов — рендерит сервер (пустые поля не приходят вовсе)
-  const cr=await fetch('/ui/cards',{cache:'no-store'});
-  document.getElementById('clients').innerHTML=await cr.text();
- }catch(e){document.getElementById('sub').textContent='ошибка: '+e}
+  draw();
+  sess.forEach(function(x){
+   var rtt=x.rtt_ms>0?x.rtt_ms+' мс':'—';
+   var win=x.window_grant>0?(x.window_grant/1048576).toFixed(1)+' МБ':'—';
+   var gr=x.window_grant>0?fmtB(x.relay_in):fmtB(x.relay_in);
+   rows+='<tr><td class="s"><b>'+esc(x.device)+'</b></td><td class="s">'+esc(protoLabel(x.proto,s))+'</td><td class="s dim">'+esc(x.proto===undefined?'':(x.transport||'tcp'))+'</td><td>'+rtt+'</td><td>'+x.streams+'</td><td>'+win+'</td><td>'+fmtB(x.relay_in)+'</td><td>'+fmtB(x.relay_out)+'</td><td>'+(x.open_errors?'<span class="warn">'+x.open_errors+'</span>':'<span class="ok">0</span>')+'</td><td class="dim">'+fmtUp(x.uptime_sec)+'</td></tr>';
+  });
+  document.querySelector('#sess tbody').innerHTML=rows||'<tr><td colspan="10" class="dim">нет активных туннелей</td></tr>';
+  document.getElementById('parkinfo').textContent='буфер: '+fmtUp(s.parked_streams!=null?s.parked_streams*2:0);
+  var pl=(s.protocols||[]).map(function(p){return '<span class="pill">'+esc(protoLabel(p,s))+'</span>'}).join(' ');
+  document.getElementById('protos').innerHTML='<div style="margin-bottom:6px">Реестр протоколов: '+pl+'</div><div>Протокол по умолчанию: <b>'+esc(protoLabel(s.default_proto,s))+'</b></div><div style="margin-top:4px">Сессии на не-дефолтном протоколе: '+s.proto_sessions_non_default+'</div>';
+  document.getElementById('facts').innerHTML=(s.facts||[]).map(function(f){return '· '+esc(f)}).join('<br>');
+  var m='';
+  if(s.camouflage)m+='<div>API Mask: <b>'+esc(s.camouflage.name)+'</b> · v'+esc(s.camouflage.ver)+' · '+(s.camouflage.enabled?'<span class="ok">активен</span>':'<span class="warn">выключен</span>')+' · кадров '+s.apimask_frames_total+'</div>';
+  if(s.modules_version)m+='<div>Модули: манифест <b>v'+esc(s.modules_version)+'</b>'+(s.modules_source?' · '+esc(s.modules_source):'')+'</div>';
+  if(s.go_version)m+='<div>Среда: Go '+esc(s.go_version)+' · '+esc(s.goos)+'/'+esc(s.goarch)+' · state '+fmtB((s.state_dir_mb||0)*1048576)+'</div>';
+  document.getElementById('mods').innerHTML=m||'<span class="dim">—</span>';
+ }catch(e){var d=document.getElementById('dot');if(d)d.className='dot warn'}
+ pollLogs();
 }
+function draw(){
+ var svg=document.getElementById('chart');
+ var win=hist.slice(-period);
+ if(win.length<2){svg.innerHTML='<text x="12" y="100" fill="#8e9095" font-size="13">сбор данных…</text>';return}
+ var W=1000,H=190,pad=26,max=0,sum=0;
+ win.forEach(function(x){var a=inUnit(x.in)||0,b=inUnit(x.out)||0;if(a>max)max=a;if(b>max)max=b;sum+=a+b});
+ if(max<=0)max=1;
+ var pw=W-pad*2,ph=H-pad*1.4,x0=pad,y0=H-pad;
+ function px(i){return x0+pw*i/(win.length-1)}
+ function py(v){return y0-ph*(v/max)}
+ function path(key){var d='';win.forEach(function(x,i){var v=inUnit(x[key])||0;d+=(i?'L':'M')+px(i).toFixed(1)+' '+py(v).toFixed(1)+' '});return d}
+ var g='';for(var i=0;i<=4;i++){var yy=y0-ph*i/4;g+='<line x1="'+x0+'" y1="'+yy+'" x2="'+(x0+pw)+'" y2="'+yy+'" stroke="#23262c"/><text x="'+(x0-4)+'" y="'+(yy+3)+'" fill="#8e9095" font-size="9" text-anchor="end">'+fmtR(max*i/4*(unit==='mbit'?1:(unit==='b'?1:1)))+'</text>'}
+ svg.innerHTML=g
+  +'<path d="'+path('in')+'" fill="none" stroke="#73bf69" stroke-width="1.6"/>'
+  +'<path d="'+path('out')+'" fill="none" stroke="#5794f2" stroke-width="1.6"/>';
+ var lastIn=inUnit(win[win.length-1].in),lastOut=inUnit(win[win.length-1].out);
+ document.getElementById('lin').textContent=lastIn==null?'—':lastIn.toFixed(1)+' '+unitName();
+ document.getElementById('lout').textContent=lastOut==null?'—':lastOut.toFixed(1)+' '+unitName();
+ document.getElementById('lpeak').textContent=max.toFixed(1)+' '+unitName();
+}
+async function pollLogs(){
+ try{
+  var r=await fetch('/ui/logs?limit=200',{cache:'no-store'}),list=await r.json();
+  logCache=list||[];
+  renderLogs();
+ }catch(e){}
+}
+function renderLogs(){
+ var el=document.getElementById('logs');
+ var rows=logCache.filter(function(e){return logFilter==='all'||e.level!=='info'});
+ el.innerHTML=rows.map(function(e){
+  var t=new Date(e.at).toTimeString().slice(0,8);
+  return '<div class="le'+(e.level==='warn'?' w':'')+'"><span class="t">'+t+'</span><span class="k '+esc(e.kind)+'">'+esc(e.kind)+'</span>'+(e.device?'<span class="d">'+esc(e.device)+'</span>':'<span class="d">—</span>')+'<span class="m">'+esc(e.msg)+'</span></div>';
+ }).join('')||'<div class="dim" style="padding:8px">журнал пуст</div>';
+}
+document.querySelectorAll('[data-p]').forEach(function(b){b.onclick=function(){
+ document.querySelectorAll('[data-p]').forEach(function(x){x.classList.remove('on');});b.classList.add('on');period=+b.dataset.p;draw();}});
+document.getElementById('unit').onchange=function(e){unit=e.target.value;draw()};
+document.getElementById('fall').onclick=function(){logFilter='all';document.getElementById('fall').classList.add('on');document.getElementById('fwarn').classList.remove('on');renderLogs()};
+document.getElementById('fwarn').onclick=function(){logFilter='warn';document.getElementById('fwarn').classList.add('on');document.getElementById('fall').classList.remove('on');renderLogs()};
 tick();setInterval(tick,2000);
 </script>
 </body>
@@ -649,5 +647,17 @@ func (a *App) mountUI(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Robots-Tag", "noindex")
 		_, _ = w.Write(a.statusJSON())
+	})
+	// v1.3.0: кольцевой журнал ключевых событий для дашборда.
+	mux.HandleFunc("/ui/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("X-Robots-Tag", "noindex")
+		n := 200
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if p, err := strconv.Atoi(v); err == nil && p > 0 && p <= 1000 {
+				n = p
+			}
+		}
+		_ = json.NewEncoder(w).Encode(a.ev.Snapshot(n))
 	})
 }

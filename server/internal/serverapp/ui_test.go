@@ -80,7 +80,7 @@ func TestStatusServerFactsAndUI(t *testing.T) {
 	if strings.Contains(html, "Константы защиты") {
 		t.Fatal("/ui не должен рендерить «Константы защиты» (v0.9.5)")
 	}
-	for _, need := range []string{"Трафик в реальном времени", "Клиенты", "<svg", "relay_in"} {
+	for _, need := range []string{"Трафик через туннель", "Устройства и туннели", "Журнал событий", "<svg", "relay_in"} {
 		if !strings.Contains(html, need) {
 			t.Fatal("/ui без элемента дашборда 2026: " + need)
 		}
@@ -99,31 +99,27 @@ func TestUIGraphGridLegendAxis(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("/ui: %d", status)
 	}
-	// сетка: контейнер линий + JS рисует 5 горизонтальных линий
-	if !strings.Contains(html, `id="gridLines"`) || !strings.Contains(html, `id="gridLabels"`) {
-		t.Fatal("график без сетки/подписей")
+	// v1.3.0 (Grafana-стиль): сетка рисуется JS-циклом — 5 горизонтальных линий
+	if !strings.Contains(html, `id="chart"`) || !strings.Contains(html, "i<=4;i++") {
+		t.Fatal("график без сетки (5 линий)")
 	}
-	if !strings.Contains(html, "k<5") {
-		t.Fatal("сетка графика менее 5 линий")
-	}
-	// легенда: rx/tx/EMA/пик
-	for _, need := range []string{"Вход rx", "Выход tx", "среднее (EMA)", "пик", "var(--in)", "var(--out)"} {
+	// легенда: входящий/исходящий/пик + палитра Grafana
+	for _, need := range []string{"входящий", "исходящий", "пик", "#73bf69", "#5794f2"} {
 		if !strings.Contains(html, need) {
 			t.Fatal("легенда графика без элемента: " + need)
 		}
 	}
-	// подписи осей: время назад и скорость с единицами
-	for _, need := range []string{"-90с", "КБ/с", "МБ/с"} {
+	// подписи: скорости в человекочитаемых единицах + селектор периода/юнита
+	for _, need := range []string{"5 мин", "15 мин", "1 ч", "КБ/с", "МБ/с", "Мбит/с"} {
 		if !strings.Contains(html, need) {
-			t.Fatal("подписи осей графика без элемента: " + need)
+			t.Fatal("переключатели периода/юнитов без элемента: " + need)
 		}
 	}
-	// градиентная заливка и сглаживание (Катмулл-Ром → кривые Безье)
-	if !strings.Contains(html, "linearGradient") || !strings.Contains(html, "url(#gIn)") {
-		t.Fatal("график без градиентной заливки")
-	}
-	if !strings.Contains(html, "smoothPath") || !strings.Contains(html, "' C'") {
-		t.Fatal("график без сглаживания Катмулла-Рома")
+	// журнал событий: ринг с уровнями и видами
+	for _, need := range []string{"/ui/logs", "все", "предупреждения"} {
+		if !strings.Contains(html, need) {
+			t.Fatal("журнал событий без элемента: " + need)
+		}
 	}
 }
 

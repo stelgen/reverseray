@@ -139,7 +139,7 @@ class MainActivity : AppCompatActivity() {
     private val usageViews = mutableListOf<TextView>()
 
     // ---------- связь ----------
-    private lateinit var configView: TextInputEditText
+    private lateinit var linkValueView: TextView
     private lateinit var linkStatusView: TextView
     private var configEditDebounce = 0L
 
@@ -662,8 +662,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(4), 0, dp(4))
         })
 
-        // Окно ссылки в стиле «О устройстве»: статус + поле + Очистить.
-        // Статус скрыт, пока пуст (v0.8.2: никаких «пустых полей» на вкладке)
+        // v1.3.0: ссылка ОТОбражается (read-only, перенос строк); правка — через
+        // кнопку «Изменить» с диалогом (Отмена/Очистить/ОК) и тестовым прогоном.
         val linkCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         linkCard.addView(sectionTitle(R.string.config_hint_title, null))
         linkStatusView = TextView(this).apply {
@@ -673,40 +673,18 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         linkCard.addView(linkStatusView)
-        val layout = TextInputLayout(this).apply {
-            hint = getString(R.string.config_hint)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(0, dp(4), 0, dp(8)) }
+        linkValueView = TextView(this).apply {
+            textSize = 12f
+            setTypeface(typeface, Typeface.MONOSPACE)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setTextIsSelectable(true)
+            val cur = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
+            text = if (cur.isBlank()) getString(R.string.link_empty) else cur
         }
-        configView = TextInputEditText(this).apply {
-            setText(prefs().getString(TunnelService.KEY_CONFIG, ""))
-            minLines = 2
-            minHeight = dp(80)
-            // КАНОН v0.8: вставил — приложение само всё починило и сохранило
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    val now = System.currentTimeMillis()
-                    if (now - configEditDebounce < 400) return // дебаунс на пасту
-                    configEditDebounce = now
-                    val text = s?.toString() ?: ""
-                    if (text.isBlank()) {
-                        setLinkStatus(null)
-                        return
-                    }
-                    applyPastedConfig(text, announce = false, silentFail = true)
-                }
-            })
-        }
-        layout.addView(configView)
-        linkCard.addView(layout)
+        linkCard.addView(linkValueView)
         linkCard.addView(
             row(
-                outlined(R.string.link_clear).apply {
-                    setOnClickListener { confirmClearLink() }
-                },
+                outlined(R.string.link_edit).apply { setOnClickListener { showEditLinkDialog() } },
                 outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
             )
         )
@@ -1562,13 +1540,13 @@ class MainActivity : AppCompatActivity() {
         try {
             val cfg = RrpUri.parse(content) // бронепарсер чинит мусор сам
             val canonical = cfg.serialize()
-            configView.setText(canonical)
-            configView.setSelection(canonical.length)
             prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+            updateLinkValueView(canonical)
             setLinkStatus(getString(R.string.link_status_ok))
             refreshConnLine()
             if (announce) {
                 Toast.makeText(this, R.string.link_saved, Toast.LENGTH_SHORT).show()
+                probeConfig(canonical) // v1.3.0: тестовый прогон после принятия ссылки
             }
         } catch (e: Exception) {
             setLinkStatus(getString(R.string.link_status_bad))
@@ -1590,18 +1568,141 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Очистить поле — только с подтверждением (канон UX v0.8). */
-    private fun confirmClearLink() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.link_clear)
-            .setMessage(R.string.link_clear_confirm)
-            .setPositiveButton(android.R.string.yes) { _, _ ->
-                configView.setText("")
-                prefs().edit().remove(TunnelService.KEY_CONFIG).apply()
-                setLinkStatus(null)
-                Toast.makeText(this, R.string.link_clear, Toast.LENGTH_SHORT).show()
+    private fun updateLinkValueView(value: String? = null) {
+        val cur = value ?: prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
+        linkValueView.text = if (cur.isBlank()) getString(R.string.link_empty) else cur
+    }
+
+    /** v1.3.0: диалог правки ссылки — Отмена / Очистить / ОК (+ тестовый прогон). */
+    private fun showEditLinkDialog() {
+        val cur = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
+        val input = TextInputEditText(this).apply {
+            setText(cur)
+            minLines = 2
+            minHeight = dp(96)
+            setTextSize(12f)
+            setTypeface(typeface, Typeface.MONOSPACE)
+        }
+        val container = TextInputLayout(this).apply {
+            hint = getString(R.string.config_hint)
+        }
+        container.addView(input)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.link_edit_title)
+            .setView(container)
+            .setPositiveButton(R.string.link_ok, null)
+            .setNeutralButton(R.string.link_clear, null)
+            .setNegativeButton(R.string.link_cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                input.setText("")
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val text = input.text?.toString()?.trim().orEmpty()
+                dialog.dismiss()
+                if (text.isBlank()) {
+                    prefs().edit().remove(TunnelService.KEY_CONFIG).apply()
+                    updateLinkValueView("")
+                    setLinkStatus(null)
+                    Toast.makeText(this, R.string.link_clear, Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                try {
+                    val cfg = RrpUri.parse(text)
+                    val canonical = cfg.serialize()
+                    prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+                    updateLinkValueView(canonical)
+                    setLinkStatus(getString(R.string.link_status_ok))
+                    refreshConnLine()
+                    probeConfig(canonical) // тестовый прогон + уведомление внизу экрана
+                } catch (e: Exception) {
+                    Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    /** v1.3.0: тестовый прогон конфигурации — TCP+TLS (пин SPKI) + HELLO/HELLO_OK. */
+    private fun probeConfig(canonical: String) {
+        kotlin.concurrent.thread {
+            val (ok, msg) = try {
+                val cfg = RrpUri.parse(canonical)
+                probeServer(cfg)
+            } catch (e: Exception) {
+                false to (e.message ?: e.javaClass.simpleName)
+            }
+            runOnUiThread {
+                if (ok) {
+                    Toast.makeText(this, R.string.probe_ok, Toast.LENGTH_LONG).show()
+                    setLinkStatus(getString(R.string.probe_ok_short))
+                } else {
+                    Toast.makeText(this, getString(R.string.probe_fail, msg), Toast.LENGTH_LONG).show()
+                    setLinkStatus(getString(R.string.probe_fail_short))
+                }
+            }
+        }
+    }
+
+    private data class ProbeOut(val ok: Boolean, val msg: String)
+
+    private fun probeServer(cfg: RrpUriConfig): ProbeOut {
+        val want: ByteArray? = try {
+            cfg.pin?.let {
+                android.util.Base64.decode(it, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+            }
+        } catch (e: Exception) {
+            return ProbeOut(false, "bad pin: " + (e.message ?: ""))
+        }
+        var last = "unreachable"
+        for (port in cfg.ports) {
+            var raw: java.net.Socket? = null
+            try {
+                raw = java.net.Socket()
+                raw.connect(java.net.InetSocketAddress(cfg.host, port), 10_000)
+                raw.soTimeout = 10_000
+                val ctx = javax.net.ssl.SSLContext.getInstance("TLS")
+                ctx.init(null, arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {
+                        val ca = chain?.lastOrNull() ?: throw java.security.cert.CertificateException("no chain")
+                        if (want != null) {
+                            val sum = java.security.MessageDigest.getInstance("SHA-256")
+                                .digest(ca.subjectPublicKeyInfo.encoded)
+                            if (!sum.contentEquals(want)) {
+                                throw java.security.cert.CertificateException("SPKI pin mismatch")
+                            }
+                        }
+                    }
+                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                }), java.security.SecureRandom())
+                val s = ctx.socketFactory.createSocket(raw, cfg.host, port, true) as javax.net.ssl.SSLSocket
+                s.startHandshake()
+                val out = s.getOutputStream()
+                out.write(
+                    RrpFrame.Hello(
+                        agent = "reverseray-probe",
+                        protocolVersion = RrpFrame.VERSION,
+                        device = "probe",
+                        caps = listOf(),
+                        maxStreams = 1,
+                    ).encode()
+                )
+                out.flush()
+                val f = RrpFrame.parse(s.getInputStream())
+                val ok = f.type == RrpFrame.TYPE_HELLO_OK
+                try { s.close() } catch (_: Exception) {}
+                raw = null
+                if (ok) return ProbeOut(true, "")
+                last = "unexpected reply type"
+            } catch (e: Exception) {
+                last = e.message ?: e.javaClass.simpleName
+            } finally {
+                try { raw?.close() } catch (_: Exception) {}
+            }
+        }
+        return ProbeOut(false, last)
     }
 
     // ================================================================= Сеть/статус

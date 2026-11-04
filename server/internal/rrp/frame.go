@@ -91,6 +91,15 @@ const (
 	// ключами нового протокола (KEY_REQ → INIT/RESP); крипто-конверт
 	// атомарно подменяется по завершении обмена — соединение и стримы живут.
 	TypeProtoSwitch = 0x2C
+
+	// v1.3.0 «буфер трафика» — резюме стримов при потере связи:
+	// RESUME_TOKEN (S→C, сразу после OPEN_OK err=0): 16-байтный токен привязки
+	// телефонного сокета. OPEN_RESUME (S→C, после реконнекта): сервер просит
+	// телефон ПРИВЯЗАТЬ запаркованный сокет (телефон НЕ закрывал его) к новому
+	// стриму; ответ — обычный OPEN_OK (0 = привязано, 5 = сокета больше нет).
+	// Оба кадра уходят ТОЛЬКО клиентам с HELLO caps «stream-resume».
+	TypeOpenResume  = 0x2D
+	TypeResumeToken = 0x2E
 )
 
 const (
@@ -120,6 +129,8 @@ func MaxPayloadFor(t uint8) int {
 	switch t {
 	case TypeData, TypeUdpData:
 		return MaxDataPayload
+	case TypeOpenResume, TypeResumeToken:
+		return 16 // ровно токен
 	case TypeWgInit:
 		return 256 // wg msg1 = 148 Б (запас на будущие WG-форматы)
 	case TypeWgResp:

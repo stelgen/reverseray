@@ -116,6 +116,8 @@ type App struct {
 	// реконнекты и офлайн клиента; применяется в READY.features будущих сессий.
 	camoMu  sync.Mutex
 	camoOff map[string]bool
+
+	ev *EventLog // v1.3.0: кольцевой журнал ключевых событий для /ui
 }
 
 // New assembles the app.
@@ -189,6 +191,17 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		hardSt:         hardSt,
 		gate:           gate,
 		modSync:        modSync,
+		ev:             NewEventLog(1024),
+	}
+	// v1.3.0 «буфер трафика»: TTL паркинга из конфига; события буфера — в журнал /ui.
+	app.hub.ParkSec = cfg.Limits.StreamParkSec
+	app.hub.Logf = func(level, kind, msg string) {
+		if level == "warn" {
+			log.Warn("park: " + msg)
+		} else {
+			log.Info("park: " + msg)
+		}
+		app.ev.Add(level, kind, msg)
 	}
 	app.loadCamouflage() // v0.9.5: перманентные выборы камуфляжа клиентов
 	return app, nil
@@ -631,11 +644,22 @@ func (a *App) handleTunnel(conn net.Conn) {
 	// и включение крипты теперь живут в rrp.Session (KeyPlan): рукопожатие
 	// завершено, reject «protocol error» из-за гонки PROBE/KEY_RESP невозможен.
 	if proto == mtproto.ProtoID || proto == wg.ProtoID || proto == bt.ProtoID {
-		scfg.Logf = func(format string, args ...any) {
-			a.log.Info(fmt.Sprintf(format, args...), "device", device, "session", sid)
-		}
 		a.met.ProtoSessions.Add(1)
 		defer a.met.ProtoSessions.Add(-1)
+	}
+	// v1.3.0: Logf для ВСЕХ сессий — ключевые события (обмен ключами, смена
+	// протокола, паркинг) идут и в slog, и в кольцевой журнал веб-морды.
+	scfg.Logf = func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		a.log.Info(msg, "device", device, "session", sid)
+		a.ev.AddDev("info", "proto", msg, device)
+	}
+	// v1.3.0 «буфер трафика»: клиент объявил cap stream-resume в HELLO.
+	for _, c := range hello.Caps {
+		if c == "stream-resume" {
+			scfg.ResumeCapable = true
+			break
+		}
 	}
 	// v0.9.2: честный лог даунгрейда — клиент попросил протокол, заявленный
 	// в реестре, но не исполняемый этой сборкой (модуль прилетел раньше кода).
@@ -655,10 +679,12 @@ func (a *App) handleTunnel(conn net.Conn) {
 	a.met.Reconnects.Add(1)
 	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport,
 		"proto", proto, "proto_label", rrp.Label(proto), "proto_ver", rrp.Ver(proto), "camo_label", rrp.CamouflageLabel())
+	a.ev.AddDev("info", "tunnel", "туннель подключён: "+rrp.Label(proto)+" · транспорт "+transport, device)
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)
 		a.log.Info("tunnel closed", "device", device, "session", sid)
+		a.ev.AddDev("warn", "tunnel", "туннель отключён — активные потоки в буфере, ожидание реконнекта", device)
 	}()
 	sess.Run()
 }
@@ -684,6 +710,9 @@ func (a *App) probeDialer() func(ctx context.Context, target string, timeout tim
 
 func (a *App) rejectHandshake(ip string, framed io.ReadWriteCloser, why string) {
 	a.met.AuthFailures.Add(1)
+	// v1.3.0: классификация в журнале морды — сканерный шум не должен
+	// выглядеть как авария; реальный источник виден в slog по IP.
+	a.ev.Add("info", "auth", "рукопожатие отклонено: "+why+" (сканер или устаревший клиент)")
 	// lockout — только за невалидный HMAC (брутфорс токена); прочие ошибки
 	// рукопожатия (сканеры, кривые клиенты) не должны лочить NAT-клиентов
 	locked := false
@@ -731,6 +760,7 @@ func (a *App) inbound(ln net.Listener) *inbound.Inbound {
 	}
 	return &inbound.Inbound{
 		Dialer:      a.hub,
+		Parker:      a.hub, // v1.3.0: буфер трафика — паркинг стримов при потере туннеля
 		Username:    a.cfg.Auth.Username,
 		Password:    pass,
 		Allowlist:   parseAllowlist(a.cfg.Allowlist),

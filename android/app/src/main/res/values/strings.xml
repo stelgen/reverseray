@@ -156,7 +156,16 @@
     <string name="console_title_update">update &amp; modules journal</string>
 
     <string name="link_clear">Clear</string>
-    <string name="link_clear_confirm">Clear the link field?</string>
+        <string name="link_edit">Change</string>
+    <string name="link_edit_title">Server link</string>
+    <string name="link_ok">OK</string>
+    <string name="link_cancel">Cancel</string>
+    <string name="link_empty">No link configured</string>
+    <string name="probe_ok">Test connection: OK — server reached, TLS pin verified</string>
+    <string name="probe_ok_short">Test connection: OK</string>
+    <string name="probe_fail">Test connection failed: %1$s</string>
+    <string name="probe_fail_short">Test connection failed</string>
+<string name="link_clear_confirm">Clear the link field?</string>
     <string name="link_saved">Link saved</string>
     <string name="link_status_ok">Link accepted and saved ✓</string>
     <string name="link_status_bad">Link not recognized — paste an rrp:// string</string>

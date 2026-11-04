@@ -152,6 +152,10 @@ class RrpClient(
     ) {
         val closed = AtomicBoolean(false)
         var remoteConsumed = 0
+        /** v1.3.0 «буфер трафика»: токен привязки сокета (caps stream-resume). */
+        var resumeToken: ByteArray? = null
+        /** Сокет припаркован: pump обязан выйти БЕЗ закрытия сокета. */
+        val parked = AtomicBoolean(false)
     }
 
     private val rnd = SecureRandom()
@@ -312,6 +316,14 @@ class RrpClient(
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-ping").apply { isDaemon = true } }
     private val relayExecutor: ExecutorService =
         Executors.newCachedThreadPool { r -> Thread(r, "rrp-relay").apply { isDaemon = true } }
+    // v1.3.0 «буфер трафика»: паркинг сокетов таргетов при потере транспорта.
+    // Отдельный daemon-пул: переживает close() клиента (TTL-рипер).
+    private val parkExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-park").apply { isDaemon = true } }
+    private val parkedSockets = java.util.concurrent.ConcurrentHashMap<String, ParkedSock>()
+
+    /** Припаркованный сокет таргета: живёт до реконнекта (OPEN_RESUME) или TTL. */
+    class ParkedSock(val socket: Socket, val parkedAt: Long)
 
     // ------------------------------------------------------------------ connect
 
@@ -383,7 +395,7 @@ class RrpClient(
             agent = agentName,
             protocolVersion = RrpFrame.VERSION,
             device = deviceName,
-            caps = listOf("chacha20", "alpn"),
+            caps = listOf("chacha20", "alpn", "stream-resume"),
             maxStreams = MAX_STREAMS_REQUEST,
             proto = RrpProtocols.normalize(protoId),
             protocols = RrpProtocols.displayList(),
@@ -495,7 +507,7 @@ class RrpClient(
         } finally {
             helloLatch.countDown()
             readyLatch.countDown()
-            close()
+            close(parkLive = true)
         }
     }
 
@@ -533,6 +545,8 @@ class RrpClient(
                 lastPacketKind = KIND_UDP
                 handleUdpData(f)
             }
+            is RrpFrame.ResumeToken -> streams[frame.streamId]?.let { it.resumeToken = frame.token }
+            is RrpFrame.OpenResume -> handleOpenResume(frame)
             is RrpFrame.Close -> closeStream(frame.streamId, notify = false)
             is RrpFrame.Window -> streams[frame.streamId]?.sendWindow
                 ?.release(frame.increment.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
@@ -992,14 +1006,65 @@ class RrpClient(
         return st
     }
 
+    // ------------------------------------------------------------------ PARK / RESUME (v1.3.0)
+
+    private fun tokenKey(tok: ByteArray): String =
+        tok.joinToString("") { ((it.toInt() and 0xFF)).toString(16).padStart(2, '0') }
+
+    /** Паркинг сокета при смерти транспорта: TCP-сессия с сайтом сохраняется. */
+    private fun parkSocket(st: Stream) {
+        val tok = st.resumeToken ?: return // старый сервер — закрываем как раньше
+        val key = tokenKey(tok)
+        parkedSockets[key] = ParkedSock(st.socket, System.currentTimeMillis())
+        try {
+            parkExecutor.schedule({ closeParked(key) }, STREAM_PARK_MS, TimeUnit.MILLISECONDS)
+        } catch (_: RejectedExecutionException) {}
+        log(Msgs.SOCKET_PARKED.t(st.id))
+    }
+
+    private fun closeParked(key: String) {
+        parkedSockets.remove(key)?.let {
+            try { it.socket.close() } catch (_: Exception) {}
+            log(Msgs.PARK_EXPIRED.t())
+        }
+    }
+
+    /** OPEN_RESUME: сервер просит привязать запаркованный сокет к новому стриму. */
+    private fun handleOpenResume(frame: RrpFrame.OpenResume) {
+        val sock = parkedSockets.remove(tokenKey(frame.token))
+        if (sock == null) {
+            log(Msgs.RESUME_NO_SOCKET.t())
+            sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_NO_PARKED))
+            return
+        }
+        if (streams[frame.streamId] != null) {
+            sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_GENERAL))
+            return
+        }
+        try { sock.socket.soTimeout = 0 } catch (_: Exception) {}
+        val st = registerStream(frame.streamId, sock.socket)
+        st.resumeToken = frame.token
+        relayExecutor.execute { pumpOutgoing(st) }
+        sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_OK))
+        log(Msgs.RESUME_ATTACHED.t(frame.streamId))
+    }
+
     /** Поток: сокет цели → DATA кадры (с учётом окна flow-control).
      *  acquire с таймаутом: если сервер умер и не наращивает окно — поток не висит вечно. */
     private fun pumpOutgoing(st: Stream) {
         val buf = ByteArray(16 * 1024)
         try {
             val input = st.socket.getInputStream()
-            while (running.get() && !st.closed.get()) {
-                val n = input.read(buf)
+            while (running.get() && !st.closed.get() && !st.parked.get()) {
+                // Такт чтения: pump обязан просыпаться и проверять parked —
+                // при паркинге он выходит БЕЗ закрытия сокета (второй читатель
+                // на резюмированном сокете недопустим).
+                try { st.socket.soTimeout = PUMP_POLL_MS } catch (_: Exception) {}
+                val n = try {
+                    input.read(buf)
+                } catch (e: java.net.SocketTimeoutException) {
+                    continue
+                }
                 if (n < 0) break
                 if (n == 0) continue
                 if (!st.sendWindow.tryAcquire(n, WINDOW_ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
@@ -1009,13 +1074,14 @@ class RrpClient(
                 }
                 sendFrame(RrpFrame.Data(st.id, 0, buf.copyOf(n)))
             }
-            if (!st.closed.get()) sendFrameQuiet(RrpFrame.Close(st.id, ERR_OK))
+            if (!st.closed.get() && !st.parked.get()) sendFrameQuiet(RrpFrame.Close(st.id, ERR_OK))
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         } catch (e: Exception) {
             sendFrameQuiet(RrpFrame.Close(st.id, ERR_GENERAL))
         } finally {
-            closeStreamInternal(st)
+            // Паркинг: сокет продолжает жить (TTL-рипер/OPEN_RESUME).
+            if (!st.parked.get()) closeStreamInternal(st)
         }
     }
 
@@ -1415,16 +1481,32 @@ class RrpClient(
 
     // ------------------------------------------------------------------ close
 
-    fun close() {
+    fun close() = close(parkLive = false)
+
+    /**
+     * close(parkLive = true) — смерть транспорта (readerLoop): потоки с токеном
+     * НЕ закрываются, сокеты паркуются (TCP-сессии с сайтами переживают блып,
+     * сервер резюмит их OPEN_RESUME после реконнекта). parkLive=false —
+     * явный stop пользователем: чистое закрытие всего.
+     */
+    fun close(parkLive: Boolean) {
         running.set(false)
         setState(State.CLOSED)
         helloLatch.countDown()
         readyLatch.countDown()
         try { pingExecutor.shutdownNow() } catch (_: Exception) {}
         try { relayExecutor.shutdownNow() } catch (_: Exception) {}
+        if (parkLive) {
+            streams.values.toList().forEach { st ->
+                if (st.resumeToken != null && !st.parked.get()) {
+                    st.parked.set(true)
+                    parkSocket(st)
+                }
+            }
+        }
         streams.values.forEach {
             it.closed.set(true)
-            closeQuietly(it.socket)
+            if (!(parkLive && it.parked.get())) closeQuietly(it.socket)
         }
         streams.clear()
         pendingOpens.values.forEach { it.complete(ERR_CONNECTION_CLOSED) }
@@ -1698,6 +1780,12 @@ class RrpClient(
         const val ERR_NOT_READY = 6
         const val ERR_NO_STREAM = 7
         const val ERR_TOO_MANY_STREAMS = 8
+        const val ERR_NO_PARKED = 5 // v1.3.0: OPEN_RESUME — сокет уже не дожил
+
+        /** v1.3.0: такт pump (пробуждение для проверки parked/running). */
+        const val PUMP_POLL_MS = 250
+        /** v1.3.0: TTL припаркованного сокета (сек) — синхронизировано с сервером. */
+        const val STREAM_PARK_MS = 30_000L
         const val ERR_PROTOCOL = 9
         const val ERR_CONNECTION_CLOSED = 10
 

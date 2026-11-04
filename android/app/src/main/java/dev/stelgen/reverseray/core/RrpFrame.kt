@@ -585,6 +585,29 @@ sealed class RrpFrame(val type: Int) {
     }
 
     /** 0x2A C→S (v0.9.5): JSON {"enabled":true|false} — выбор камуфляжа устройством. */
+    /** 0x2E S→C: токен привязки телефонного сокета (сразу после OPEN_OK err=0). */
+    class ResumeToken(val token: ByteArray) : RrpFrame(TYPE_RESUME_TOKEN) {
+        override fun buildPayload(): ByteArray = token.copyOf()
+        companion object {
+            fun fromPayload(p: ByteArray): ResumeToken {
+                if (p.size != 16) throw RrpFrameException(Msgs.RESUME_BAD_TOKEN.t(p.size))
+                return ResumeToken(p.copyOf())
+            }
+        }
+    }
+
+    /** 0x2D S→C: сервер просит привязать запаркованный сокет к новому стриму.
+     *  Ответ — обычный OpenOk(err): 0 = привязано, 5 = сокет уже не дожил. */
+    class OpenResume(val token: ByteArray) : RrpFrame(TYPE_OPEN_RESUME) {
+        override fun buildPayload(): ByteArray = token.copyOf()
+        companion object {
+            fun fromPayload(p: ByteArray): OpenResume {
+                if (p.size != 16) throw RrpFrameException(Msgs.RESUME_BAD_TOKEN.t(p.size))
+                return OpenResume(p.copyOf())
+            }
+        }
+    }
+
     class CamCtl(val enabled: Boolean) : RrpFrame(TYPE_CAM_CTL) {
         override fun buildPayload(): ByteArray = MiniJson.obj(
             "enabled" to enabled.toString(),
@@ -666,6 +689,11 @@ sealed class RrpFrame(val type: Int) {
         const val TYPE_BT_RESP = 0x2B
         // v0.10: бесшовная смена протокола без разрыва связи (0x2C, двунаправленный)
         const val TYPE_PROTO_SWITCH = 0x2C
+
+        // v1.3.0 «буфер трафика»: резюме стримов при потере связи (S→C, только
+        // для клиентов с HELLO caps «stream-resume»).
+        const val TYPE_OPEN_RESUME = 0x2D
+        const val TYPE_RESUME_TOKEN = 0x2E
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
@@ -726,6 +754,8 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_BT_INIT -> BtInit(payload)
                 TYPE_BT_RESP -> BtResp(payload)
                 TYPE_PROTO_SWITCH -> ProtoSwitch.fromPayload(payload)
+                TYPE_OPEN_RESUME -> OpenResume.fromPayload(payload)
+                TYPE_RESUME_TOKEN -> ResumeToken.fromPayload(payload)
                 TYPE_CAM_CTL -> CamCtl.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)
                 TYPE_ERROR -> ErrorFrame.fromPayload(payload)

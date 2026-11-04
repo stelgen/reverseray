@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stelgen/reverseray/server/internal/hub"
+	"github.com/stelgen/reverseray/server/internal/park"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 )
 
@@ -44,6 +45,10 @@ type Inbound struct {
 	Password  string
 	Allowlist []*net.IPNet
 	Logf      func(format string, args ...any)
+
+	// v1.3.0 «буфер трафика»: приемник паркинга стримов (hub). nil = паркинг
+	// выключен (старое поведение: смерть туннеля закрывает браузерную сторону).
+	Parker park.Sink
 
 	DialTimeout time.Duration
 
@@ -110,11 +115,16 @@ func (in *Inbound) logf(f string, a ...any) {
 // slowloris-гвард: первый запрос обязан прийти ≤30 с, дальше дедлайн
 // снимается (relay ставит свои).
 func (in *Inbound) handle(c net.Conn) {
+	// v1.3.0 «буфер трафика»: если стрим запаркован (владение c передано
+	// буферу) — закрывать c здесь НЕЛЬЗЯ, он переживёт потерю туннеля.
+	parked := false
 	defer func() {
 		if r := recover(); r != nil {
 			in.logf("inbound panic recovered: %v", r)
 		}
-		_ = c.Close()
+		if !parked {
+			_ = c.Close()
+		}
 	}()
 	br := bufio.NewReaderSize(c, 16*1024)
 	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
@@ -125,49 +135,50 @@ func (in *Inbound) handle(c net.Conn) {
 	_ = c.SetDeadline(time.Time{})
 	switch first[0] {
 	case 0x05:
-		in.socks5(c, br)
+		parked = in.socks5(c, br)
 	default:
-		in.http(c, br)
+		parked = in.http(c, br)
 	}
 }
 
 // ---- SOCKS5 (RFC 1928) ----
 
-func (in *Inbound) socks5(c net.Conn, br *bufio.Reader) {
+func (in *Inbound) socks5(c net.Conn, br *bufio.Reader) bool {
 	if err := in.socksAuth(c, br); err != nil {
 		in.logf("socks auth: %v", err)
-		return
+		return false
 	}
 	head := make([]byte, 4)
 	if _, err := io.ReadFull(br, head); err != nil {
-		return
+		return false
 	}
 	if head[0] != 0x05 {
-		return
+		return false
 	}
 	switch head[1] {
 	case socksCmdUdpAsoc:
 		in.socks5UdpAssociate(c, br, head[3])
-		return
+		return false
 	case socksCmdConnect:
 	default: // BIND и прочее не поддерживаем
 		c.Write([]byte{5, 0x07, 0, 1, 0, 0, 0, 0, 0, 0})
-		return
+		return false
 	}
 	atyp, addr, port, err := readSocksTarget(br, head[3])
 	if err != nil {
 		c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
-		return
+		return false
 	}
 	dst, err := in.dial(c, atyp, addr, port)
 	if err != nil {
 		c.Write([]byte{5, socksErr(err), 0, 1, 0, 0, 0, 0, 0, 0})
-		return
+		return false
 	}
-	defer dst.Close()
 	// Success reply.
 	c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
-	relay(c, dst)
+	wasParked := in.relayStream(c, dst)
+	dst.Close()
+	return wasParked
 }
 
 func (in *Inbound) socksAuth(c net.Conn, br *bufio.Reader) error {
@@ -262,48 +273,48 @@ func readSocksTarget(br *bufio.Reader, atyp byte) (byte, []byte, uint16, error) 
 
 // ---- HTTP proxy (CONNECT + absolute-URI) ----
 
-func (in *Inbound) http(c net.Conn, br *bufio.Reader) {
+func (in *Inbound) http(c net.Conn, br *bufio.Reader) bool {
 	req, err := http.ReadRequest(br)
 	if err != nil {
-		return
+		return false
 	}
 	if in.Username != "" || in.Password != "" {
 		u, p, ok := proxyBasicAuth(req)
 		if !ok || !subtleEqual(u, in.Username) || !subtleEqual(p, in.Password) {
 			c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"reverseray\"\r\n\r\n"))
-			return
+			return false
 		}
 	}
 	if req.Method == http.MethodConnect {
 		host, portS, err := net.SplitHostPort(req.Host)
 		if err != nil {
 			c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-			return
+			return false
 		}
 		port, err := strconv.ParseUint(portS, 10, 16)
 		if err != nil {
 			c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-			return
+			return false
 		}
 		atyp, addr, aerr := encodeHost(host)
 		if aerr != nil {
 			c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-			return
+			return false
 		}
 		dst, derr := in.dial(c, atyp, addr, uint16(port))
 		if derr != nil {
 			c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-			return
+			return false
 		}
-		defer dst.Close()
 		c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-		relay(c, dst)
-		return
+		wasParked := in.relayStream(c, dst)
+		dst.Close()
+		return wasParked
 	}
 	// Absolute-URI plain proxy (GET/POST ...). One request per connection.
 	if req.URL.Host == "" {
 		c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-		return
+		return false
 	}
 	host := req.URL.Hostname()
 	port := req.URL.Port()
@@ -317,13 +328,13 @@ func (in *Inbound) http(c net.Conn, br *bufio.Reader) {
 	atyp, addr, aerr := encodeHost(host)
 	if aerr != nil {
 		c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-		return
+		return false
 	}
 	p64, _ := strconv.ParseUint(port, 10, 16)
 	dst, derr := in.dial(c, atyp, addr, uint16(p64))
 	if derr != nil {
 		c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-		return
+		return false
 	}
 	defer dst.Close()
 	outReq := req.Clone(context.Background())
@@ -331,9 +342,10 @@ func (in *Inbound) http(c net.Conn, br *bufio.Reader) {
 	outReq.Header.Del("Proxy-Authorization")
 	outReq.Header.Set("Connection", "close")
 	if err := outReq.Write(dst); err != nil {
-		return
+		return false
 	}
 	_ = relayHalf(c, dst)
+	return false
 }
 
 func relayHalf(a, b net.Conn) error {
@@ -355,6 +367,105 @@ func relayHalf(a, b net.Conn) error {
 
 func relay(a, b net.Conn) {
 	_ = relayHalf(a, b)
+}
+
+// resumeInfoer — доступ к токену резюме rrp-стрима (v1.3.0).
+type resumeInfoer interface {
+	ResumeInfo() (token [16]byte, dst rrp.DialRequest, device string, ok bool)
+}
+
+// relayStream — релей CONNECT-пути с «буфером трафика» (v1.3.0):
+// при смерти туннеля (StreamError code 1) браузерная сторона НЕ закрывается —
+// стрим паркуется в hub-буфере; телефон при реконнекте привязывает свой сокет
+// заново (OPEN_RESUME), буфер c→p дозылается. Обе TCP-стороны переживают
+// блып туннеля end-to-end, ни один байт не дропается (при переполнении
+// буфера — TCP backpressure). Без паркинга — прежнее поведение relayHalf.
+func (in *Inbound) relayStream(c, dst net.Conn) bool {
+	var ps atomic.Pointer[park.Parked]
+	done := make(chan error, 2)
+
+	// downstream: rrp-стрим → браузер.
+	go func() {
+		_, err := io.Copy(c, dst)
+		if err != nil {
+			var se *rrp.StreamError
+			if errors.As(err, &se) && se.Code == 1 && in.Parker != nil {
+				if ri, ok := dst.(resumeInfoer); ok {
+					if token, d, device, ok2 := ri.ResumeInfo(); ok2 {
+						p := park.New(device, token, d, c, "")
+						if in.Parker.Park(p) {
+							ps.Store(p)
+							done <- nil // владение c передано буферу — не закрываем
+							return
+						}
+					}
+				}
+			}
+		}
+		done <- err
+	}()
+
+	// upstream: браузер → rrp-стрим; после паркинга — дозапись в буфер (pump).
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := c.Read(buf)
+			if err != nil {
+				if ps.Load() == nil {
+					done <- err // паркинга нет — штатное завершение
+				}
+				return // c принадлежит буферу — не закрываем
+			}
+			p := ps.Load()
+			wn := 0
+			if p == nil {
+				var werr error
+				wn, werr = dst.Write(buf[:n])
+				if werr == nil {
+					continue
+				}
+				var se *rrp.StreamError
+				if !(errors.As(werr, &se) && se.Code == 1) || in.Parker == nil {
+					done <- werr
+					return
+				}
+				if ri, ok := dst.(resumeInfoer); ok {
+					if token, d, device, ok2 := ri.ResumeInfo(); ok2 {
+						np := park.New(device, token, d, c, "")
+						if in.Parker.Park(np) {
+							ps.Store(np)
+							p = np
+						}
+					}
+				}
+				if p == nil {
+					// Паркинг мог выиграть downstream (дубликат токена) — он
+					// уже сохранил ps: продолжаем как pump буфера, а не выходим.
+					p = ps.Load()
+				}
+				if p == nil {
+					done <- werr
+					return // паркинг не удался — релей завершается
+				}
+			}
+			// Буфер: досылаем непроханные байты. Feed блокируется при
+			// переполнении (TCP backpressure) и НЕ дропает данные.
+			if !p.Feed(buf[wn:n]) {
+				return // буфер закрыт (TTL/резюме не удалось) — c закрыт им же
+			}
+		}
+	}()
+
+	<-done
+	if ps.Load() != nil {
+		// Паркинг состоялся: вторая горутина живёт как pump буфера, владение
+		// c у него — не ждём и не закрываем.
+		return true
+	}
+	_ = dst.Close()
+	_ = c.Close()
+	<-done
+	return false
 }
 
 func (in *Inbound) dial(_ net.Conn, atyp byte, addr []byte, port uint16) (net.Conn, error) {

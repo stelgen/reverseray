@@ -60,7 +60,7 @@ func TestMTProto2ProbeKeyRespRace(t *testing.T) {
 		t.Fatal(tlsCfgErr)
 	}
 	conn := tlsClientWrap(t, raw, tlsC)
-	sid, _, err := clientHandshake(conn, token, "phone-1", "mtproto2")
+	sid, _, err := clientHandshake(conn, token, "phone-1", "mtproto2", nil)
 	if err != nil {
 		t.Fatalf("handshake: %v", err)
 	}

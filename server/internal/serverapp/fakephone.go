@@ -3,6 +3,7 @@ package serverapp
 import (
 	"bytes"
 	"crypto/sha256"
+	"sync/atomic"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -33,6 +34,16 @@ type fakePhone struct {
 	wmu sync.Mutex
 	mu  sync.Mutex
 	dst map[uint32]net.Conn
+
+	// v1.3.0 «буфер трафика»: телефон поддерживает резюме стримов
+	// (HELLO caps stream-resume): хранит токены, паркует сокеты при потере
+	// транспорта и привязывает их заново по OPEN_RESUME.
+	resume bool
+	tokens map[[16]byte]uint32
+	parked map[[16]byte]net.Conn
+	// dead: транспорт умер — pump'ы обязаны выйти БЕЗ закрытия сокетов
+	// (читают с коротким дедлайном, чтобы увидеть флаг).
+	dead atomic.Bool
 
 	// flow-control (v0.9.3): не подтверждённые сервером байты на стрим.
 	win int64
@@ -86,16 +97,19 @@ func makePhoneTLSConfig(caPinB64 string) (*tls.Config, error) {
 	return cfg, nil
 }
 
-// DialPhone connects over TLS with CA-SPKI pinning and handshakes RRP/1.
-func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
+// DialPhoneResume — как DialPhone, но телефон объявляет cap «stream-resume»:
+// сервер выдаёт RESUME_TOKEN, а при потере связи телефон паркует сокеты.
+func DialPhoneResume(t *testing.T, serverAddr, caPinB64, token, device string,
 	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
-	return DialPhoneProto(t, serverAddr, caPinB64, token, device, "", dial)
+	return dialPhoneCaps(t, serverAddr, caPinB64, token, device, "", dial, true)
 }
 
-// DialPhoneProto — как DialPhone, но с согласованием протокола (v0.8:
-// "mtproto2" — после READY DH-апгрейд; весь обмен дальше в MTProto-конверте).
-func DialPhoneProto(t *testing.T, serverAddr, caPinB64, token, device, proto string,
-	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+// DialPhoneResumeWith — как DialPhoneResume, но паркинг сокетов загружается
+// ДО хендшейка (сервер шлёт OPEN_RESUME сразу после Attach — реальный телефон
+// держит паркинг в том же экземпляре клиента, тест переносит их заранее).
+func DialPhoneResumeWith(t *testing.T, serverAddr, caPinB64, token, device string,
+	dial func(host string, port uint16) (net.Conn, error),
+	parked map[[16]byte]net.Conn) (*fakePhone, string, error) {
 
 	t.Helper()
 	cfg, err := makePhoneTLSConfig(caPinB64)
@@ -111,7 +125,43 @@ func DialPhoneProto(t *testing.T, serverAddr, caPinB64, token, device, proto str
 		raw.Close()
 		return nil, "", err
 	}
-	return DialPhoneOnProto(t, conn, token, device, proto, dial)
+	if parked == nil {
+		parked = make(map[[16]byte]net.Conn)
+	}
+	return dialPhoneOnCapsParked(t, conn, token, device, "", dial, true, parked)
+}
+
+// DialPhone connects over TLS with CA-SPKI pinning and handshakes RRP/1.
+func DialPhone(t *testing.T, serverAddr, caPinB64, token, device string,
+	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+	return DialPhoneProto(t, serverAddr, caPinB64, token, device, "", dial)
+}
+
+// DialPhoneProto — как DialPhone, но с согласованием протокола (v0.8:
+// "mtproto2" — после READY DH-апгрейд; весь обмен дальше в MTProto-конверте).
+func DialPhoneProto(t *testing.T, serverAddr, caPinB64, token, device, proto string,
+	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+	return dialPhoneCaps(t, serverAddr, caPinB64, token, device, proto, dial, false)
+}
+
+func dialPhoneCaps(t *testing.T, serverAddr, caPinB64, token, device, proto string,
+	dial func(host string, port uint16) (net.Conn, error), resume bool) (*fakePhone, string, error) {
+
+	t.Helper()
+	cfg, err := makePhoneTLSConfig(caPinB64)
+	if err != nil {
+		return nil, "", err
+	}
+	raw, err := net.Dial("tcp", serverAddr)
+	if err != nil {
+		return nil, "", err
+	}
+	conn := tls.Client(raw, cfg)
+	if err := conn.Handshake(); err != nil {
+		raw.Close()
+		return nil, "", err
+	}
+	return dialPhoneOnCaps(t, conn, token, device, proto, dial, resume)
 }
 
 // DialPhoneOn handshakes RRP/1 over a pre-built transport (TLS, WS-over-TLS,
@@ -126,10 +176,29 @@ func DialPhoneOn(t *testing.T, conn net.Conn, token, device string,
 // обмен идёт в MTProto-конверте).
 func DialPhoneOnProto(t *testing.T, conn net.Conn, token, device, proto string,
 	dial func(host string, port uint16) (net.Conn, error)) (*fakePhone, string, error) {
+	return dialPhoneOnCaps(t, conn, token, device, proto, dial, false)
+}
+
+func dialPhoneOnCaps(t *testing.T, conn net.Conn, token, device, proto string,
+	dial func(host string, port uint16) (net.Conn, error), resume bool) (*fakePhone, string, error) {
+	return dialPhoneOnCapsParked(t, conn, token, device, proto, dial, resume, nil)
+}
+
+func dialPhoneOnCapsParked(t *testing.T, conn net.Conn, token, device, proto string,
+	dial func(host string, port uint16) (net.Conn, error), resume bool,
+	parked map[[16]byte]net.Conn) (*fakePhone, string, error) {
 
 	t.Helper()
-	p := &fakePhone{conn: conn, dst: make(map[uint32]net.Conn), dial: dial}
-	sid, win, err := clientHandshake(p.conn, token, device, proto)
+	p := &fakePhone{conn: conn, dst: make(map[uint32]net.Conn), dial: dial, resume: resume}
+	if resume {
+		p.tokens = make(map[[16]byte]uint32)
+		if parked != nil {
+			p.parked = parked
+		} else {
+			p.parked = make(map[[16]byte]net.Conn)
+		}
+	}
+	sid, win, err := clientHandshake(p.conn, token, device, proto, p.capsList())
 	if err != nil {
 		conn.Close()
 		return nil, "", err
@@ -147,8 +216,15 @@ func DialPhoneOnProto(t *testing.T, conn net.Conn, token, device, proto string,
 	return p, sid, nil
 }
 
-func clientHandshake(conn net.Conn, token, device, proto string) (string, uint32, error) {
-	hb, _ := json.Marshal(&rrp.Hello{Agent: "fake-phone", Ver: "1.0", Device: device, MaxStreams: 64, Proto: rrp.FlexString(proto)})
+func (p *fakePhone) capsList() []string {
+	if p.resume {
+		return []string{"stream-resume"}
+	}
+	return nil
+}
+
+func clientHandshake(conn net.Conn, token, device, proto string, caps []string) (string, uint32, error) {
+	hb, _ := json.Marshal(&rrp.Hello{Agent: "fake-phone", Ver: "1.0", Device: device, MaxStreams: 64, Proto: rrp.FlexString(proto), Caps: caps})
 	if err := rrpWrite1(conn, rrp.TypeHello, hb); err != nil {
 		return "", 0, err
 	}
@@ -209,8 +285,21 @@ func (p *fakePhone) loop() {
 	p.fmu.Unlock()
 	defer func() {
 		p.mu.Lock()
-		for _, c := range p.dst {
-			c.Close()
+		if p.resume {
+			// Паркинг: сокеты таргетов переживают потерю связи (TCP end-to-end).
+			for tok, id := range p.tokens {
+				if c, ok := p.dst[id]; ok && c != nil {
+					p.parked[tok] = c
+					delete(p.dst, id)
+				}
+			}
+			for _, c := range p.dst {
+				c.Close()
+			}
+		} else {
+			for _, c := range p.dst {
+				c.Close()
+			}
 		}
 		p.mu.Unlock()
 		p.conn.Close()
@@ -222,6 +311,9 @@ func (p *fakePhone) loop() {
 		}
 		f, err := rrp.ReadFrame(src)
 		if err != nil {
+			if p.resume {
+				p.dead.Store(true)
+			}
 			return
 		}
 		switch f.Type {
@@ -247,6 +339,34 @@ func (p *fakePhone) loop() {
 			p.dst[f.StreamID] = dst
 			p.mu.Unlock()
 			go p.pumpToPhone(f.StreamID, dst)
+		case rrp.TypeResumeToken:
+			if !p.resume || len(f.Payload) != 16 {
+				continue
+			}
+			var tok [16]byte
+			copy(tok[:], f.Payload)
+			p.mu.Lock()
+			p.tokens[tok] = f.StreamID
+			p.mu.Unlock()
+		case rrp.TypeOpenResume:
+			if !p.resume || len(f.Payload) != 16 {
+				continue
+			}
+			var tok [16]byte
+			copy(tok[:], f.Payload)
+			p.mu.Lock()
+			conn2, ok := p.parked[tok]
+			if ok {
+				delete(p.parked, tok)
+				p.dst[f.StreamID] = conn2
+			}
+			p.mu.Unlock()
+			if ok {
+				p.write(rrp.TypeOpenOK, f.StreamID, []byte{0})
+				go p.pumpToPhone(f.StreamID, conn2)
+			} else {
+				p.write(rrp.TypeOpenOK, f.StreamID, []byte{5})
+			}
 		case rrp.TypeData:
 			p.mu.Lock()
 			dst := p.dst[f.StreamID]
@@ -283,14 +403,34 @@ func (p *fakePhone) loop() {
 func (p *fakePhone) pumpToPhone(id uint32, dst net.Conn) {
 	buf := make([]byte, 32*1024)
 	for {
+		// Короткий дедлайн чтения: pump обязан периодически просыпаться и
+		// проверять dead-флаг, чтобы при потере транспорта ОСВОБОДИТЬ сокет
+		// для паркинга (два читателя на резюмированном сокете недопустимы).
+		_ = dst.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
 		n, err := dst.Read(buf)
 		if n > 0 {
 			if werr := p.writePaced(id, buf[:n]); werr != nil {
-				dst.Close()
+				// Смерть транспорта НЕ закрывает сокет таргета — он паркуется
+				// (loop-defer переносит его в parked) и привязывается заново
+				// по OPEN_RESUME. Закрытие = потеря TCP-сессии сайта.
+				if !p.resume {
+					dst.Close()
+				}
 				return
 			}
 		}
 		if err != nil {
+			if p.resume {
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
+					if p.dead.Load() {
+						return // паркинг: выходим БЕЗ закрытия сокета
+					}
+					continue
+				}
+				// Сокет таргета закрылся по-настоящему (сайт/сеть) —
+				// штатное закрытие стрима, сокет уже мёртв.
+			}
 			p.write(rrp.TypeClose, id, []byte{0})
 			p.mu.Lock()
 			delete(p.dst, id)
@@ -326,6 +466,25 @@ func (p *fakePhone) writePaced(id uint32, b []byte) error {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// TokenCount — race-safe доступ для тестов.
+func (p *fakePhone) TokenCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.tokens)
+}
+
+// ParkedConns возвращает припаркованные сокеты (для переноса на новый
+// экземпляр фейка при переподключении в тестах резюме).
+func (p *fakePhone) ParkedConns() map[[16]byte]net.Conn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[[16]byte]net.Conn, len(p.parked))
+	for k, v := range p.parked {
+		out[k] = v
+	}
+	return out
 }
 
 func (p *fakePhone) Close() {

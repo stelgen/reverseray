@@ -27,8 +27,11 @@ type SessionConfig struct {
 	// v1.2.0: стартовый грант телефону на отправку — то же значение, что уходит
 	// в HELLO_OK/READY tunnel_window. 0 → StreamWindow*2 (дефолт serverapp).
 	TunnelWindow uint32
-	IdleTimeout  time.Duration // no frames -> close
-	PingInterval time.Duration // server-side keepalive
+	// v1.3.0 «буфер трафика»: клиент объявил HELLO caps «stream-resume» —
+	// сервер выдаёт RESUME_TOKEN и умеет OPEN_RESUME после реконнекта.
+	ResumeCapable bool
+	IdleTimeout   time.Duration // no frames -> close
+	PingInterval  time.Duration // server-side keepalive
 	// Protocol — согласованный id протокола сессии (см. protocol.go).
 	Protocol string
 	// ProbeDialer — исходящий диал для PROBE-валидации (реальный трафик до
@@ -881,6 +884,18 @@ func (s *Session) pingLoop() {
 
 // Open asks the phone to connect to dst and returns the stream.
 func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
+	return s.openStream(ctx, d, TypeOpen, EncodeOpen(d.ATYP, d.Addr, d.Port))
+}
+
+// OpenResume (v1.3.0 «буфер трафика») просит телефон привязать запаркованный
+// сокет (телефон НЕ закрыл его при потере связи) к НОВОМУ стриму. Ответ —
+// обычный OPEN_OK: 0 = привязано, 5 = сокет уже не дожил (TTL телефона) —
+// тогда браузерную сторону закрываем штатно.
+func (s *Session) OpenResume(ctx context.Context, token [16]byte, d DialRequest) (net.Conn, error) {
+	return s.openStream(ctx, d, TypeOpenResume, append([]byte(nil), token[:]...))
+}
+
+func (s *Session) openStream(ctx context.Context, d DialRequest, ft uint8, payload []byte) (net.Conn, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -910,9 +925,8 @@ func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
 	s.streams[id] = st
 	s.mu.Unlock()
 
-	payload := EncodeOpen(d.ATYP, d.Addr, d.Port)
 	errc := make(chan error, 1)
-	s.outq <- outItem{frame: &Frame{Type: TypeOpen, StreamID: id, Payload: payload}, err: errc}
+	s.outq <- outItem{frame: &Frame{Type: ft, StreamID: id, Payload: payload}, err: errc}
 	if err := <-errc; err != nil {
 		s.dropStream(id)
 		return nil, err
@@ -923,6 +937,11 @@ func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
 		if err != nil {
 			s.dropStream(id)
 			return nil, err
+		}
+		// v1.3.0: токен резюме уходит сразу после успешного диала — телефон
+		// привязывает его к своему сокету таргета (кадр только для новых клиентов).
+		if ft == TypeOpen && st.hasToken {
+			s.writeAsync(&Frame{Type: TypeResumeToken, StreamID: id, Payload: append([]byte(nil), st.token[:]...)})
 		}
 		return st, nil
 	case <-ctx.Done():
@@ -1101,6 +1120,16 @@ func (s *Session) WindowGrantTotal() int64 {
 		st.mu.Unlock()
 	}
 	return t
+}
+
+// ResumeInfo (v1.3.0 «буфер трафика») — токен/цель/устройство для паркинга.
+func (st *stream) ResumeInfo() (token [16]byte, dst DialRequest, device string, ok bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.hasToken {
+		return token, dst, "", false
+	}
+	return st.token, st.dst, st.sess.Device, true
 }
 
 // handleWgInit: бинарный кадр WG_INIT (v0.9.5, wireguard) — маршрутизация
@@ -1283,15 +1312,25 @@ type stream struct {
 
 	tokens chan struct{}
 	winSz  uint32
-	// v1.2.0: текущее разрешённое окно телефона на отправку (download).
+	// v1.3.0: текущее разрешённое окно телефона на отправку (download).
 	// Стартует с initialGrant (= TunnelWindow, что реально у телефона) и растёт
 	// BDP-автотюнингом до MaxStreamWin, пока потребитель осушает буфер.
 	grant int64
+
+	// v1.3.0 «буфер трафика»: токен резюме — привязка телефонного сокета.
+	token    [16]byte
+	hasToken bool
 }
 
 type errOpen uint8
 
 func (e errOpen) Error() string { return fmt.Sprintf("phone dial failed: code %d", uint8(e)) }
+
+// StreamError — типизированное закрытие стрима: код 1 = транспорт/сессия умер
+// (триггер паркинга «буфера трафика»), 0 = штатное закрытие, остальное — ошибки.
+type StreamError struct{ Code uint8 }
+
+func (e *StreamError) Error() string { return fmt.Sprintf("stream closed: code %d", e.Code) }
 
 func openResultErr(code uint8) error {
 	if code == 0 {
@@ -1315,6 +1354,10 @@ func newStream(s *Session, id uint32, d DialRequest) *stream {
 		winSz:  s.cfg.StreamWindow,
 		tokens: make(chan struct{}, s.cfg.MaxStreamWin),
 		grant:  s.cfg.initialGrant(),
+	}
+	if s.cfg.ResumeCapable {
+		_, _ = crand.Read(st.token[:])
+		st.hasToken = true
 	}
 	st.cond = sync.NewCond(&st.mu)
 	for i := uint32(0); i < s.cfg.StreamWindow/1024; i++ {
@@ -1396,7 +1439,10 @@ func (st *stream) Read(p []byte) (int, error) {
 	if st.inLen == 0 && st.closed {
 		st.mu.Unlock()
 		if st.cerr != 0 && st.cerr != 1 {
-			return 0, fmt.Errorf("stream closed: code %d", st.cerr)
+			return 0, &StreamError{Code: st.cerr}
+		}
+		if st.cerr == 1 {
+			return 0, &StreamError{Code: 1}
 		}
 		return 0, io.EOF
 	}
@@ -1454,13 +1500,15 @@ func (st *stream) Write(p []byte) (int, error) {
 		select {
 		case <-st.tokens:
 		case <-st.sess.Done():
-			return total, ErrClosed
+			return total, &StreamError{Code: 1} // v1.3.0: транспорт умер — паркинг
 		}
 		st.mu.Lock()
-		closed := st.closed
+		closed, code := st.closed, st.cerr
 		st.mu.Unlock()
 		if closed {
-			return total, io.ErrClosedPipe
+			// v1.3.0: типизированная ошибка — relay «буфера трафика» различает
+			// смерть транспорта (code 1 → паркинг) от прочих закрытий.
+			return total, &StreamError{Code: code}
 		}
 		chunk := p[total:]
 		if len(chunk) > MaxDataPayload {
