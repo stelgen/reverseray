@@ -49,15 +49,21 @@ class MainActivityApi31Test {
 
     @Test
     fun `invalid config does not crash on start`() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            scenario.onActivity { activity ->
-                val edit = UiFind.editTexts(UiFind.contentView(activity))[0]
-                edit.setText("not-an-rrp-uri")
-                val start = UiFind.buttons(UiFind.contentView(activity))
-                    .first { it.text == activity.getString(R.string.btn_start_short) }
-                start.performClick() // должен показать тост, не крашиться
-                assertFalse(activity.isFinishing)
+        // v1.3.0: правка ссылки — через диалог; невалидный конфиг кладём в prefs
+        val prefs = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .getSharedPreferences(TunnelService.PREFS, android.content.Context.MODE_PRIVATE)
+        prefs.edit().putString(TunnelService.KEY_CONFIG, "not-an-rrp-uri").commit()
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                scenario.onActivity { activity ->
+                    val start = UiFind.buttons(UiFind.contentView(activity))
+                        .first { it.text == activity.getString(R.string.btn_start_short) }
+                    start.performClick() // должен показать тост, не крашиться
+                    assertFalse(activity.isFinishing)
+                }
             }
+        } finally {
+            prefs.edit().clear().commit()
         }
     }
 
@@ -69,10 +75,13 @@ class MainActivityApi31Test {
         try {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 scenario.onActivity { activity ->
-                        val edit = UiFind.editTexts(UiFind.contentView(activity))[0]
-                    assertEquals(validConfig, edit.text.toString())
+                    // v1.3.0: ссылка отображается read-only (TextView), правка —
+                    // через диалог «Изменить».
+                    val view = UiFind.texts(UiFind.contentView(activity))
+                        .firstOrNull { it.text.toString() == validConfig }
+                    assertTrue("ссылка не отображается на вкладке", view != null)
                     // и парсится тем же кодеком, что и скан QR
-                    assertEquals("Home", RrpUri.parse(edit.text.toString()).name)
+                    assertEquals("Home", RrpUri.parse(validConfig).name)
                 }
             }
         } finally {
