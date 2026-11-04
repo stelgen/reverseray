@@ -21,7 +21,7 @@ class RrpProtocolsExecutableTest {
             block()
         } finally {
             RrpProtocols.onRegistryChanged = oldOnChanged
-            RrpProtocols.applyRegistry(listOf("rrp1", "mtproto2"), "")
+            RrpProtocols.applyRegistry(RrpProtocols.BUNDLED, "")
         }
     }
 
@@ -66,7 +66,7 @@ class RrpProtocolsExecutableTest {
             assertTrue("GUI обязан узнавать о новых протоколах сразу", notified >= 1)
         } finally {
             RrpProtocols.onRegistryChanged = old
-            RrpProtocols.applyRegistry(listOf("rrp1", "mtproto2"), "")
+            RrpProtocols.applyRegistry(RrpProtocols.BUNDLED, "")
         }
     }
 }

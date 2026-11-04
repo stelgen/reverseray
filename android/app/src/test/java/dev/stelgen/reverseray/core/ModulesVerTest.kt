@@ -58,7 +58,8 @@ class ModulesVerTest {
             """.trimIndent()
             Modules.apply(Modules.parse(body))
             assertEquals("MTProto/2 (v2.0)", RrpProtocols.labelWithVer("mtproto2"))
-            assertEquals("RRP/1 (v1)", RrpProtocols.labelWithVer("rrp1"))
+            // v1.1.0 фикс дублей: метка "RRP/1" уже несёт версию — скобки не приписываются
+            assertEquals("RRP/1", RrpProtocols.labelWithVer("rrp1"))
         } finally {
             RrpProtocols.applyRegistry(RrpProtocols.BUNDLED, "")
         }
