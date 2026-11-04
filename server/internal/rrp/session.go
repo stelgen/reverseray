@@ -20,10 +20,13 @@ import (
 
 // SessionConfig tunes a server-side tunnel session.
 type SessionConfig struct {
-	MaxStreams   int           // max concurrent streams on this tunnel
-	StreamWindow uint32        // initial per-stream window (server->phone), bytes
-	MaxStreamWin uint32        // max window after WINDOW increments
-	Budget       int64         // total outstanding bytes cap on this session
+	MaxStreams   int    // max concurrent streams on this tunnel
+	StreamWindow uint32 // initial per-stream window (server->phone), bytes
+	MaxStreamWin uint32 // max window after WINDOW increments
+	Budget       int64  // total outstanding bytes cap on this session
+	// v1.2.0: стартовый грант телефону на отправку — то же значение, что уходит
+	// в HELLO_OK/READY tunnel_window. 0 → StreamWindow*2 (дефолт serverapp).
+	TunnelWindow uint32
 	IdleTimeout  time.Duration // no frames -> close
 	PingInterval time.Duration // server-side keepalive
 	// Protocol — согласованный id протокола сессии (см. protocol.go).
@@ -60,9 +63,20 @@ func DefaultSessionConfig() SessionConfig {
 		StreamWindow: 512 * 1024,
 		MaxStreamWin: 4 * 1024 * 1024,
 		Budget:       16 * 1024 * 1024,
+		TunnelWindow: 1024 * 1024,
 		IdleTimeout:  180 * time.Second,
 		PingInterval: 60 * time.Second,
 	}
+}
+
+// initialGrant — окно, которым телефон реально располагает на отправку
+// (download-направление phone→server) на момент открытия стрима.
+func (c SessionConfig) initialGrant() int64 {
+	tw := c.TunnelWindow
+	if tw == 0 {
+		tw = c.StreamWindow * 2 // совместимость: serverapp шлёт StreamWindow*2
+	}
+	return int64(tw)
 }
 
 // DialRequest is one egress connect request.
@@ -105,10 +119,14 @@ type Session struct {
 	streams  map[uint32]*stream
 	nextID   uint32
 	outstand int64
-	pending  map[uint32]*openWait
-	udpChans map[uint32]*UdpChannel
-	closed   bool
-	err      error
+	// v1.2.0: наблюдаемость/гейты autotune-окон и отказов диала.
+	grantedTotal int64  // суммарный прирост окон сверх стартовых (≤ Budget)
+	windowGrow   uint64 // байтов autotune-прироста выдано телефону
+	openErrs     uint64 // отказов диала со стороны телефона (OPEN_OK err != 0)
+	pending      map[uint32]*openWait
+	udpChans     map[uint32]*UdpChannel
+	closed       bool
+	err          error
 
 	rtt    int64 // ms, atomic read via mu
 	bin    uint64
@@ -272,6 +290,11 @@ func (s *Session) handle(f *Frame) error {
 		if w != nil {
 			delete(s.pending, f.StreamID)
 		}
+		if code != 0 {
+			// v1.2.0: телефон не смог дial-ить таргет (недоступен с его сети,
+			// blocked carrier'ом и т.п.) — считаем для наблюдаемости.
+			s.openErrs++
+		}
 		s.mu.Unlock()
 		if w != nil {
 			w.ch <- openResultErr(code)
@@ -305,6 +328,9 @@ func (s *Session) handle(f *Frame) error {
 		}
 		s.mu.Lock()
 		st := s.streams[f.StreamID]
+		// v1.2.0: WINDOW от телефона подтверждает наши DATA (upload-направление)
+		// — снимаем байты с in-flight, иначе outstand течёт вверх.
+		s.outstand -= int64(inc)
 		s.mu.Unlock()
 		if st != nil {
 			st.refill(inc)
@@ -866,6 +892,8 @@ func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
 	}
 	if s.outstand >= s.cfg.Budget {
 		s.mu.Unlock()
+		// v1.2.0: чек снова работает — учёт outstand починен (раньше счётчик
+		// уезжал в минус и бюджет не защищал память).
 		return nil, errors.New("rrp: device window budget exhausted")
 	}
 	if d.Port == 53 {
@@ -933,8 +961,9 @@ func (s *Session) shutdown(err error) {
 	for id := range s.streams {
 		ids = append(ids, id)
 	}
+	streams := make([]*stream, 0, len(ids))
 	for _, id := range ids {
-		s.streams[id].markClosed(1)
+		streams = append(streams, s.streams[id])
 		delete(s.streams, id)
 	}
 	udp := make([]*UdpChannel, 0, len(s.udpChans))
@@ -942,15 +971,26 @@ func (s *Session) shutdown(err error) {
 		udp = append(udp, ch)
 	}
 	s.udpChans = map[uint32]*UdpChannel{}
-	for _, ch := range udp {
-		ch.closeChan()
-	}
+	pendings := make(map[uint32]*openWait, len(s.pending))
 	for id, w := range s.pending {
-		w.ch <- ErrClosed
+		pendings[id] = w
 		delete(s.pending, id)
 	}
 	s.cond.Broadcast()
 	s.mu.Unlock()
+	// v1.2.0 (дедлок, найден тестом нарушителя под -race): markClosed теперь
+	// берёт st.mu → s.mu (возврат autotune-гранта в бюджет) — вызывать его ПОД
+	// s.mu нельзя (AB-BA с stream.Read, который держит st.mu и ждёт s.mu).
+	// Канон порядка блокировок: st.mu → s.mu и НИКОГДА наоборот.
+	for _, st := range streams {
+		st.markClosed(1)
+	}
+	for _, ch := range udp {
+		ch.closeChan()
+	}
+	for _, w := range pendings {
+		w.ch <- ErrClosed
+	}
 	close(s.done)
 	_ = s.wc.Close()
 }
@@ -1027,6 +1067,40 @@ func (s *Session) DnsHits() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.dnsHits
+}
+
+// OpenErrors — отказов диала со стороны телефона за жизнь сессии
+// (v1.2.0: недоступные/заблокированные egress-сетью телефона таргеты).
+func (s *Session) OpenErrors() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.openErrs
+}
+
+// WindowGrowTotal — сколько байтов autotune-прироста окна выдано (v1.2.0).
+func (s *Session) WindowGrowTotal() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.windowGrow
+}
+
+// WindowGrantTotal — суммарное окно, выданное телефону сейчас, все стримы
+// (v1.2.0, наблюдаемость autotune). Порядок блокировок канонический:
+// s.mu → (unlock) → st.mu — никогда не наоборот.
+func (s *Session) WindowGrantTotal() int64 {
+	s.mu.Lock()
+	sts := make([]*stream, 0, len(s.streams))
+	for _, st := range s.streams {
+		sts = append(sts, st)
+	}
+	s.mu.Unlock()
+	var t int64
+	for _, st := range sts {
+		st.mu.Lock()
+		t += st.grant
+		st.mu.Unlock()
+	}
+	return t
 }
 
 // handleWgInit: бинарный кадр WG_INIT (v0.9.5, wireguard) — маршрутизация
@@ -1209,6 +1283,10 @@ type stream struct {
 
 	tokens chan struct{}
 	winSz  uint32
+	// v1.2.0: текущее разрешённое окно телефона на отправку (download).
+	// Стартует с initialGrant (= TunnelWindow, что реально у телефона) и растёт
+	// BDP-автотюнингом до MaxStreamWin, пока потребитель осушает буфер.
+	grant int64
 }
 
 type errOpen uint8
@@ -1236,6 +1314,7 @@ func newStream(s *Session, id uint32, d DialRequest) *stream {
 		dst:    d,
 		winSz:  s.cfg.StreamWindow,
 		tokens: make(chan struct{}, s.cfg.MaxStreamWin),
+		grant:  s.cfg.initialGrant(),
 	}
 	st.cond = sync.NewCond(&st.mu)
 	for i := uint32(0); i < s.cfg.StreamWindow/1024; i++ {
@@ -1250,13 +1329,29 @@ func (st *stream) pushIn(b []byte) {
 		st.mu.Unlock()
 		return
 	}
-	const capIn = 1 << 20 // server-side anti-abuse buffer per stream
-	if st.inLen+len(b) > capIn {
+	// v1.2.0: буфер обязан вместить текущее окно (autotune поднимает его выше
+	// стартового), минимум — прежний анти-абьюз 1 МБ; агрегат по устройству
+	// ограничен grantedTotal ≤ Budget.
+	bufCap := int(st.grant)
+	if bufCap < 1<<20 {
+		bufCap = 1 << 20
+	}
+	if st.inLen+len(b) > bufCap {
 		st.mu.Unlock()
 		st.sess.writeAsync(&Frame{Type: TypeClose, StreamID: st.id, Payload: EncodeClose(4)})
 		st.markClosed(4)
 		return
 	}
+	// v1.2.0: DATA от телефона = in-flight байты. Раньше инкремента не было,
+	// а Read декрементил → outstand уезжал в минус (−469 МБ на живой сессии)
+	// и бюджет устройства не защищал память.
+	// Примечание: грант НЕ спускается при заторе — кредиты WINDOW в протоколе
+	// неотзывные, а грант = фактически выданные телефону пермиты; буфер всегда
+	// вмещает грант, поэтому честный телефон никогда не ловит kill(4).
+	// Память ограничена агрегатно: grantedTotal ≤ Budget.
+	st.sess.mu.Lock()
+	st.sess.outstand += int64(len(b))
+	st.sess.mu.Unlock()
 	cp := append([]byte(nil), b...)
 	st.inQ = append(st.inQ, cp)
 	st.inLen += len(cp)
@@ -1269,6 +1364,14 @@ func (st *stream) markClosed(code uint8) {
 	if !st.closed {
 		st.closed = true
 		st.cerr = code
+		// v1.2.0: вернуть autotune-прирост окна в общий бюджет устройства.
+		if floor := int64(st.sess.cfg.initialGrant()); st.grant > floor {
+			ex := st.grant - floor
+			st.grant = floor
+			st.sess.mu.Lock()
+			st.sess.grantedTotal -= ex
+			st.sess.mu.Unlock()
+		}
 	}
 	st.cond.Broadcast()
 	st.mu.Unlock()
@@ -1312,9 +1415,35 @@ func (st *stream) Read(p []byte) (int, error) {
 		st.sess.outstand -= int64(c)
 		st.sess.mu.Unlock()
 	}
+	// v1.2.0 BDP-автотюнинг: потребитель осушил буфер целиком → выдаём телефону
+	// дополнительное окно пропорционально темпу потребления (≤n за раунд).
+	// Потолок — MaxStreamWin, агрегат по устройству — Budget (grantedTotal).
+	// Это снимает потолок throughput = окно/RTT: при RTT мобильной сети 300–600мс
+	// стартовое окно 1МБ давало лишь ~14–27 Мбит/с; рост до 4МБ поднимает
+	// потолок до ~57 Мбит/с (и выше при меньшем RTT).
+	grow := int64(0)
+	if n > 0 && st.inLen == 0 && !st.closed {
+		if room := int64(st.sess.cfg.MaxStreamWin) - st.grant; room > 0 {
+			grow = int64(n)
+			if grow > room {
+				grow = room
+			}
+			st.sess.mu.Lock()
+			if st.sess.grantedTotal+grow > st.sess.cfg.Budget {
+				grow = st.sess.cfg.Budget - st.sess.grantedTotal
+				if grow < 0 {
+					grow = 0
+				}
+			}
+			st.sess.grantedTotal += grow
+			st.sess.windowGrow += uint64(grow)
+			st.grant += grow
+			st.sess.mu.Unlock()
+		}
+	}
 	st.mu.Unlock()
-	if n > 0 {
-		st.sess.writeAsync(&Frame{Type: TypeWindow, StreamID: st.id, Payload: EncodeWindow(uint32(n))})
+	if n > 0 || grow > 0 {
+		st.sess.writeAsync(&Frame{Type: TypeWindow, StreamID: st.id, Payload: EncodeWindow(uint32(int64(n) + grow))})
 	}
 	return n, nil
 }

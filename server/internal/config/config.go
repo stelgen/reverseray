@@ -97,7 +97,7 @@ func Default() *Config {
 	c.Limits.MaxStreams = 256
 	c.Limits.StreamWindow = 512 * 1024
 	c.Limits.MaxStreamWindow = 4 * 1024 * 1024
-	c.Limits.DeviceBudget = 16 * 1024 * 1024
+	c.Limits.DeviceBudget = 32 * 1024 * 1024 // v1.2.0: было 16МБ — 4МБ окна × параллельные стримы браузера
 	c.Limits.MaxTunnelsPerDevice = 8
 	c.Limits.IdleTimeoutSec = 180
 	c.Limits.PingIntervalSec = 60
@@ -173,6 +173,11 @@ func (c *Config) applyEnv() {
 	setInt(&c.Limits.IdleTimeoutSec, "RR_LIMITS_IDLE_TIMEOUT")
 	setInt(&c.Limits.DialTimeoutSec, "RR_LIMITS_DIAL_TIMEOUT")
 	setInt(&c.Limits.HandshakesPerMin, "RR_LIMITS_HANDSHAKES_PER_MIN")
+	// v1.2.0: окна flow-control и бюджет устройства — оперативно настраиваются
+	// без пересборки (BDP-автотюнинг потолка скорости).
+	setInt(&c.Limits.StreamWindow, "RR_LIMITS_STREAM_WINDOW")
+	setInt(&c.Limits.MaxStreamWindow, "RR_LIMITS_MAX_STREAM_WINDOW")
+	setInt(&c.Limits.DeviceBudget, "RR_LIMITS_DEVICE_BUDGET")
 	// v0.8: hardening (RR_HARDENING=false/0 выключает скрытие порта) и модули.
 	if v := os.Getenv("RR_HARDENING"); v != "" {
 		c.Hardening.Enabled = v != "false" && v != "0"
@@ -204,6 +209,16 @@ func (c *Config) Validate() error {
 	}
 	if c.Limits.MaxStreams <= 0 || c.Limits.MaxStreams > 1024 {
 		return errors.New("config: limits.max_streams out of range (1..1024)")
+	}
+	// v1.2.0: санитайзинг окон (мусорные env сводим к дефолту, без ошибки).
+	if c.Limits.StreamWindow < 64*1024 || c.Limits.StreamWindow > 8*1024*1024 {
+		c.Limits.StreamWindow = 512 * 1024
+	}
+	if c.Limits.MaxStreamWindow < c.Limits.StreamWindow || c.Limits.MaxStreamWindow > 64*1024*1024 {
+		c.Limits.MaxStreamWindow = 4 * 1024 * 1024
+	}
+	if c.Limits.DeviceBudget < c.Limits.MaxStreamWindow || c.Limits.DeviceBudget > 512*1024*1024 {
+		c.Limits.DeviceBudget = 32 * 1024 * 1024
 	}
 	if c.Limits.HandshakesPerMin <= 0 {
 		c.Limits.HandshakesPerMin = 120

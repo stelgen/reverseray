@@ -553,6 +553,9 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.StreamWindow = toU32(a.cfg.Limits.StreamWindow)
 	scfg.MaxStreamWin = toU32(a.cfg.Limits.MaxStreamWindow)
 	scfg.Budget = int64(a.cfg.Limits.DeviceBudget)
+	// v1.2.0: тот же стартовый грант, что уходит в HELLO_OK/READY tunnel_window —
+	// rrp-сессия должна знать, каким окном реально располагает телефон.
+	scfg.TunnelWindow = toU32(a.cfg.Limits.StreamWindow) * 2
 	scfg.IdleTimeout = a.cfg.IdleTimeout()
 	scfg.PingInterval = a.cfg.PingInterval()
 	scfg.Protocol = proto
@@ -792,6 +795,21 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 		// v0.8.2: камуфляж «API Mask» — наблюдаемость (пары/байты NOISE)
 		fmt.Fprintf(w, "# HELP reverseray_apimask_frames_total apimask noise request/response pairs\n# TYPE reverseray_apimask_frames_total counter\nreverseray_apimask_frames_total %d\n", m.ApimaskFrames.Load())
 		fmt.Fprintf(w, "# HELP reverseray_apimask_bytes_total apimask noise payload bytes\n# TYPE reverseray_apimask_bytes_total counter\nreverseray_apimask_bytes_total %d\n", m.ApimaskBytes.Load())
+		// v1.2.0: observability скорости — autotune-прирост окон и отказы диала
+		// со стороны телефона (недоступные с его сети таргеты).
+		var openErrs, winGrow uint64
+		if a.hub != nil {
+			for _, sm := range a.hub.Snapshot() {
+				if v, ok := sm["open_errors"].(uint64); ok {
+					openErrs += v
+				}
+				if v, ok := sm["window_grow"].(uint64); ok {
+					winGrow += v
+				}
+			}
+		}
+		fmt.Fprintf(w, "# HELP reverseray_open_errors_total phone-side dial failures (target unreachable from phone network)\n# TYPE reverseray_open_errors_total counter\nreverseray_open_errors_total %d\n", openErrs)
+		fmt.Fprintf(w, "# HELP reverseray_window_growth_total autotune window growth bytes granted\n# TYPE reverseray_window_growth_total counter\nreverseray_window_growth_total %d\n", winGrow)
 		if a.modSync != nil {
 			fmt.Fprintf(w, "# HELP reverseray_modules_version modules manifest version\n# TYPE reverseray_modules_version gauge\nreverseray_modules_version{version=%q} 1\n", a.modSync.ActiveVersion())
 			fmt.Fprintf(w, "# HELP reverseray_modules_last_check_success last modules sync ok\n# TYPE reverseray_modules_last_check_success gauge\nreverseray_modules_last_check_success %d\n", boolToInt(a.modSync.LastCheckOK()))

@@ -154,16 +154,20 @@ func (h *Hub) Snapshot() []map[string]any {
 				up = int64(time.Since(ct).Seconds())
 			}
 			out = append(out, map[string]any{
-				"session":      s.ID,
-				"device":       d.Name,
-				"outstanding":  s.Outstanding(),
-				"rtt_ms":       s.RTT(),
-				"proto":        s.Proto,
-				"bytes_in":     st.BytesIn, // трафик, отчитанный телефоном
-				"bytes_out":    st.BytesOut,
-				"relay_in":     relayIn, // байты payload'ов через сервер
-				"relay_out":    relayOut,
-				"streams":      s.StreamsOpen(),
+				"session":     s.ID,
+				"device":      d.Name,
+				"outstanding": s.Outstanding(),
+				"rtt_ms":      s.RTT(),
+				"proto":       s.Proto,
+				"bytes_in":    st.BytesIn, // трафик, отчитанный телефоном
+				"bytes_out":   st.BytesOut,
+				"relay_in":    relayIn, // байты payload'ов через сервер
+				"relay_out":   relayOut,
+				"streams":     s.StreamsOpen(),
+				// v1.2.0: autotune-окна и отказы диала телефона (наблюдаемость)
+				"open_errors":  s.OpenErrors(),
+				"window_grant": s.WindowGrantTotal(),
+				"window_grow":  s.WindowGrowTotal(),
 				"mt_active":    s.MTActive(),
 				"udp":          s.UdpDatagrams(),
 				"dns":          s.DnsHits(),
