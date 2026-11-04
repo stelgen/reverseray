@@ -15,11 +15,13 @@ import (
 // windowedPhone — фейковый телефон, соблюдающий flow-control: не шлёт DATA
 // сверх выданных сервером WINDOW-кредитов (как реальный клиент на семафоре).
 // Позволяет детерминированно тестировать BDP-автотюнинг и бюджеты.
+//
+// Детерминизм для медленных CI-раннеров: все дедлайны 60с, фазы тестов
+// разделены синхронизацией по каналам (никаких «поспим и подождём»).
 type windowedPhone struct {
 	t       *testing.T
 	c       net.Conn
 	mu      sync.Mutex
-	cond    *sync.Cond
 	permits int64
 
 	streamID uint32
@@ -29,7 +31,7 @@ type windowedPhone struct {
 
 	sentBytes   int64
 	creditBytes int64 // сумма WINDOW-инкрементов от сервера
-	lastGrow    int64 // прирост сверх отправленного (credit > sent ⇒ autotune)
+	growMax     int64 // максимум (credit - sent): прирост сверх отправленного
 	killedCode  uint8
 }
 
@@ -38,11 +40,10 @@ func newWindowedPhone(t *testing.T, c net.Conn, initialPermits int64) *windowedP
 		t:        t,
 		c:        c,
 		permits:  initialPermits,
-		dialOK:   make(chan struct{}, 16), // буфер: рун-цикл телефона никогда не блокируется на dialOK
+		dialOK:   make(chan struct{}, 16), // буфер: рун-цикл телефона никогда не блокируется
 		closed:   make(chan struct{}),
 		streamID: 0xFFFFFFFF,
 	}
-	p.cond = sync.NewCond(&p.mu)
 	return p
 }
 
@@ -71,10 +72,9 @@ func (p *windowedPhone) run() {
 			p.mu.Lock()
 			p.permits += int64(inc)
 			p.creditBytes += int64(inc)
-			if g := p.creditBytes - p.sentBytes; g > p.lastGrow {
-				p.lastGrow = g
+			if g := p.creditBytes - p.sentBytes; g > p.growMax {
+				p.growMax = g
 			}
-			p.cond.Broadcast()
 			p.mu.Unlock()
 		case TypePing:
 			_ = WriteFrame(p.c, TypePong, 0, 0, f.Payload)
@@ -117,7 +117,7 @@ func (p *windowedPhone) sendChunk(n int, deadline time.Time) bool {
 func (p *windowedPhone) stats() (sent, credit, grow int64, killed uint8) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.sentBytes, p.creditBytes, p.lastGrow, p.killedCode
+	return p.sentBytes, p.creditBytes, p.growMax, p.killedCode
 }
 
 func newTestSession(t *testing.T, mutate func(*SessionConfig)) (*Session, *windowedPhone) {
@@ -135,6 +135,20 @@ func newTestSession(t *testing.T, mutate func(*SessionConfig)) (*Session, *windo
 	return sess, p
 }
 
+// waitFor поллит условие до дедлайна (детерминизм против асинхронности pipe:
+// sendChunk/WriteFrame возвращаются раньше, чем сессия обработает кадр).
+func waitFor(t *testing.T, d time.Duration, cond func() bool) bool {
+	t.Helper()
+	dl := time.Now().Add(d)
+	for time.Now().Before(dl) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cond()
+}
+
 func openStream(t *testing.T, sess *Session, p *windowedPhone) net.Conn {
 	t.Helper()
 	st, err := sess.Open(context.Background(), DialRequest{ATYP: ATYPDomain, Addr: []byte("example.com"), Port: 443})
@@ -143,7 +157,7 @@ func openStream(t *testing.T, sess *Session, p *windowedPhone) net.Conn {
 	}
 	select {
 	case <-p.dialOK:
-	case <-time.After(5 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("phone did not see OPEN")
 	}
 	return st
@@ -157,19 +171,20 @@ func TestOutstandBalancedDownload(t *testing.T) {
 	st := openStream(t, sess, p)
 	defer st.Close()
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	const chunks, size = 3, 64 * 1024
 	for i := 0; i < chunks; i++ {
 		if !p.sendChunk(size, deadline) {
 			t.Fatalf("phone send %d failed", i)
 		}
 	}
-	// In-flight до чтения: ровно то, что прислал телефон.
-	if got := sess.Outstanding(); got != chunks*size {
-		t.Fatalf("outstanding after push = %d, want %d", got, chunks*size)
+	// In-flight до чтения: ровно то, что прислал телефон. sendChunk завершается
+	// раньше, чем сессия обработает кадр (pipe→handle асинхронны) — поллим.
+	if !waitFor(t, 60*time.Second, func() bool { return sess.Outstanding() == chunks*size }) {
+		t.Fatalf("outstanding after push = %d, want %d", sess.Outstanding(), chunks*size)
 	}
 	buf := make([]byte, chunks*size)
-	_ = st.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = st.SetReadDeadline(time.Now().Add(60 * time.Second))
 	if _, err := io.ReadFull(st, buf); err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -178,35 +193,74 @@ func TestOutstandBalancedDownload(t *testing.T) {
 	}
 }
 
-// Тест 2: BDP-автотюнинг растит окно до MaxStreamWin при быстром потребителе;
-// прирост виден телефону (кредиты > отправленного) и вписывается в Budget.
+// drainUntilGrown: фон-потребитель осушает стрим, тест ждёт фактического роста
+// гранта сверх стартового окна (детерминированно, по состоянию, не по времени).
+func drainUntilGrown(t *testing.T, st net.Conn, sess *Session, p *windowedPhone) {
+	t.Helper()
+	dl := time.Now().Add(60 * time.Second)
+	for time.Now().Before(dl) {
+		if !p.sendChunk(64*1024, dl) {
+			break
+		}
+		if sess.WindowGrantTotal() > int64(sess.cfg.initialGrant()) {
+			return
+		}
+	}
+	t.Fatalf("autotune не вырос за отведённое время: grant=%d", sess.WindowGrantTotal())
+}
+
+// waitPhoneGrow: ждём, пока фейковый телефон фактически ПОЛУЧИТ WINDOW-кредит
+// с приростом (серверный грант уже вырос — кадр мог быть ещё в полёте).
+func waitPhoneGrow(t *testing.T, p *windowedPhone) {
+	t.Helper()
+	dl := time.Now().Add(60 * time.Second)
+	for time.Now().Before(dl) {
+		if _, _, grow, _ := p.stats(); grow > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("телефон не увидел прирост окна (WINDOW-кредит не дошёл)")
+}
+
+// Тест 2: BDP-автотюнинг растит окно при быстром потребителе; прирост виден
+// телефону (кредиты > отправленного) и вписывается в MaxStreamWin/Budget.
 func TestAutotuneGrowsToMax(t *testing.T) {
 	sess, p := newTestSession(t, nil)
 	st := openStream(t, sess, p)
-	defer st.Close()
 
-	// Потребитель-дiscarder: осушает стрим, позволяя autotune расти.
-	done := make(chan error, 1)
+	// Потребитель-discarder: осушает стрим на протяжении всего теста.
+	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		_, err := io.Copy(io.Discard, st)
-		done <- err
+		defer close(done)
+		buf := make([]byte, 32*1024)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = st.SetReadDeadline(time.Now().Add(60 * time.Second))
+			if _, err := st.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	defer func() {
+		_ = st.Close() // читатель выйдет по ошибке/закрытию
+		<-done
 	}()
 
-	deadline := time.Now().Add(20 * time.Second)
-	const total = 6 * 1024 * 1024
-	sent := 0
-	for sent < total {
-		if !p.sendChunk(64*1024, deadline) {
-			break
-		}
-		sent += 64 * 1024
-	}
+	drainUntilGrown(t, st, sess, p)
+	waitPhoneGrow(t, p)
+
 	_, _, grow, killed := p.stats()
 	if killed != 0 {
 		t.Fatalf("stream killed code %d — буфер не должен переполняться при честном flow-control", killed)
 	}
 	if grow <= 0 {
-		t.Fatalf("autotune не сработал: кредиты %d ≤ отправлено (grow=%d)", func() int64 { s, c, _, _ := p.stats(); return c - s }(), grow)
+		t.Fatalf("autotune не сработал: кредиты не превысили отправленное (grow=%d)", grow)
 	}
 	if got := sess.WindowGrantTotal(); got <= int64(sess.cfg.initialGrant()) {
 		t.Fatalf("grant не вырос: %d ≤ стартового %d", got, sess.cfg.initialGrant())
@@ -217,47 +271,58 @@ func TestAutotuneGrowsToMax(t *testing.T) {
 	if sess.WindowGrowTotal() == 0 {
 		t.Fatal("счётчик windowGrow пуст")
 	}
-	_ = done
 }
 
-// Тест 3: затор потребителя останавливает рост окна и НЕ убивает стрим:
-// грант = фактически выданные телефону пермиты, буфер всегда их вмещает.
+// Тест 3: затор потребителя останавливает рост окна и НЕ убивает стрим.
+// Полностью синхронный (одна горутина теста): send→read по очереди в фазе
+// роста, затем шлём БЕЗ чтения — никакого межгорутинного ожидания, гонок и
+// зависаний нет по построению. У rrp-стрима нет реального read-таймаута
+// (SetReadDeadline — best-effort пробуждение), поэтому фоновые читатели
+// здесь принципиально не используются.
 func TestAutotuneStallStopsGrowthNoKill(t *testing.T) {
 	sess, p := newTestSession(t, nil)
 	st := openStream(t, sess, p)
 	defer st.Close()
 
-	// Фаза роста: короткий слив в фоне.
-	go func() { _, _ = io.CopyN(io.Discard, st, 2*1024*1024) }()
-	deadline := time.Now().Add(20 * time.Second)
-	for i := 0; i < 40; i++ {
-		if !p.sendChunk(64*1024, deadline) {
+	floor := int64(sess.cfg.initialGrant())
+
+	// Фаза роста: send→read по очереди; на каждом Read буфер осушен целиком
+	// (inLen==0) → autotune выдаёт прирост. Ждём фактического роста гранта.
+	dl := time.Now().Add(60 * time.Second)
+	chunk := make([]byte, 64*1024)
+	for time.Now().Before(dl) {
+		if !p.sendChunk(64*1024, dl) {
+			t.Fatal("phone send failed в фазе роста")
+		}
+		if _, err := io.ReadFull(st, chunk); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if sess.WindowGrantTotal() > floor {
 			break
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
 	g1 := sess.WindowGrantTotal()
-	if g1 <= int64(sess.cfg.initialGrant()) {
-		t.Skip("autotune не успел вырасти")
+	if g1 <= floor {
+		t.Fatalf("autotune не вырос: grant=%d", g1)
 	}
 
-	// Фаза затора: потребитель молчит, телефон добивает кредиты — рост окна
-	// должен остановиться, стрим обязан выжить.
+	// Фаза затора: шлём БЕЗ чтения. Рост обязан остановиться (окно выдаётся
+	// только на Read при пустом буфере); стрим обязан выжить — буфер вмещает
+	// грант, kill(4) при честном flow-control невозможен.
 	for i := 0; i < 40; i++ {
-		if !p.sendChunk(64*1024, time.Now().Add(5*time.Second)) {
+		if !p.sendChunk(64*1024, time.Now().Add(10*time.Second)) {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 	g2 := sess.WindowGrantTotal()
-	floor := int64(sess.cfg.initialGrant())
 	if g2 < floor {
 		t.Fatalf("grant %d ниже стартового %d", g2, floor)
 	}
 	if _, _, _, killed := p.stats(); killed != 0 {
 		t.Fatalf("стрим убит кодом %d при честном flow-control", killed)
 	}
-	if g2 > g1+64*1024*2 {
+	if g2 > g1 {
 		t.Fatalf("окно продолжило расти при заторе: %d → %d", g1, g2)
 	}
 }
@@ -269,27 +334,34 @@ func TestOpenBudgetBlocksAndRecovers(t *testing.T) {
 	st := openStream(t, sess, p)
 	defer st.Close()
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for i := 0; i < 10; i++ {
 		if !p.sendChunk(64*1024, deadline) {
 			break
 		}
 	}
-	if got := sess.Outstanding(); got < 512*1024 {
-		t.Fatalf("outstanding %d — тест expects ≥ Budget", got)
+	if !waitFor(t, 60*time.Second, func() bool { return sess.Outstanding() >= 512*1024 }) {
+		t.Fatalf("outstanding %d — тест expects ≥ Budget", sess.Outstanding())
 	}
 	_, err := sess.Open(context.Background(), DialRequest{ATYP: ATYPDomain, Addr: []byte("example.com"), Port: 80})
 	if err == nil || !strings.Contains(err.Error(), "device window budget exhausted") {
 		t.Fatalf("ожидали отказ по бюджету, получили: %v", err)
 	}
 	// Слив → бюджет освобождается → открытие снова работает.
-	_, _, _, killed := p.stats()
-	if killed != 0 {
+	if _, _, _, killed := p.stats(); killed != 0 {
 		t.Fatalf("стрим убит %d", killed)
 	}
-	buf := make([]byte, 10*64*1024)
-	_ = st.SetReadDeadline(time.Now().Add(10 * time.Second))
-	_, _ = io.ReadFull(st, buf)
+	buf := make([]byte, 64*1024)
+	dl := time.Now().Add(60 * time.Second)
+	for time.Now().Before(dl) {
+		if sess.Outstanding() == 0 {
+			break
+		}
+		_ = st.SetReadDeadline(time.Now().Add(60 * time.Second))
+		if _, err := st.Read(buf); err != nil {
+			break
+		}
+	}
 	if got := sess.Outstanding(); got != 0 {
 		t.Fatalf("outstanding %d после слива, want 0", got)
 	}
@@ -321,7 +393,7 @@ func TestTypeWindowCreditsOutstand(t *testing.T) {
 	if err := WriteFrame(p.c, TypeWindow, 0, id, inc); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if sess.Outstanding() == 0 {
 			return
@@ -347,7 +419,7 @@ func TestPushInKillsProtocolViolator(t *testing.T) {
 		}
 	}
 	buf := make([]byte, 1)
-	_ = st.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = st.SetReadDeadline(time.Now().Add(60 * time.Second))
 	_, err := io.ReadFull(st, buf)
 	for err == nil {
 		_, err = io.ReadFull(st, buf)
