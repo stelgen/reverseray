@@ -561,7 +561,7 @@ class RrpClient(
             is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8/v0.9.5: mtproto2 DH | wireguard WG_INIT
             is RrpFrame.KeyResp -> log(Msgs.KEY_RESP_UNEXPECTED.t())
             is RrpFrame.BtResp -> finishBtHandshake(frame)
-            is RrpFrame.BtInit -> log("bt: BT_INIT от сервера — нарушение порядка (клиент инициатор)")
+            is RrpFrame.BtInit -> log(Msgs.BT_INIT_UNEXPECTED.t())
             is RrpFrame.ProtoSwitch -> handleProtoSwitchAck(frame)
             is RrpFrame.WgResp -> {
                 // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов.
@@ -782,7 +782,7 @@ class RrpClient(
     /** BT_RESP (packet4) — финал MSE-хендшейка: активируем BT-конверт. */
     private fun finishBtHandshake(frame: RrpFrame.BtResp) {
         val hs = btHandshake ?: run {
-            log("bt: BT_RESP без хендшейка — игнор")
+            log(Msgs.BT_RESP_IGNORED.t())
             return
         }
         try {
@@ -852,12 +852,15 @@ class RrpClient(
 
     /** Снятие паркинга + отправка накопленных payload-кадров (уже новым конвертом). */
     private fun unparkAndFlush() {
-        val queued: MutableList<RrpFrame>
-        synchronized(parkLock) {
+        // NB: присвоение local val ВНУТРИ lambda (synchronized — inline-fun)
+        // в Kotlin не проходит definite-assignment — забираем значение значением
+        // самого блока (return внутри — не локальный выход из блока, а из метода).
+        val queued: List<RrpFrame> = synchronized(parkLock) {
             if (!parked) return
             parked = false
-            queued = ArrayList(parkedFrames)
+            val q = ArrayList(parkedFrames)
             parkedFrames.clear()
+            q
         }
         if (queued.isNotEmpty()) log(Msgs.PSW_FLUSHED.t(queued.size))
         for (f in queued) sendFrame(f)

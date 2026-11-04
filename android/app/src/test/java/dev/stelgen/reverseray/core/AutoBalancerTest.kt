@@ -38,10 +38,11 @@ class AutoBalancerTest {
     @Test
     fun `single bad sample does not switch - hysteresis`() {
         val b = bal()
-        // анти-мигание: ОДНА плохая проба < minSamples — молчим
-        assertEquals(AutoBalancer.Decision.Wait::class, b.onSample(sample(0, loss = 0.9))::class)
+        // анти-мигание: ОДНА плохая проба (loss 0.5 — деградация, НЕ обрыв) — молчим;
+        // обрыв (loss ≥ deadLoss 0.9) — отдельный путь, он не ждёт окна
+        assertEquals(AutoBalancer.Decision.Wait::class, b.onSample(sample(0, loss = 0.5))::class)
         // вторая проба в окне — деградация устойчива → смена
-        val d = b.onSample(sample(500, loss = 0.9))
+        val d = b.onSample(sample(500, loss = 0.5))
         assertTrue("устойчивая деградация обязана переключать: $d", d is AutoBalancer.Decision.Switch)
     }
 

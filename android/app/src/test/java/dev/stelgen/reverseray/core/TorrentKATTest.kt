@@ -63,7 +63,8 @@ class TorrentKATTest {
     @Test
     fun `kat handshake and transport match go vectors`() {
         val skey = Torrent.skey(Torrent.tokenHash("kat-token-2026"))
-        val yb = Torrent.P.modPow(XB, Torrent.P).let { be96(it) }
+        // yb = G^XB mod P (G=2; P^XB mod P был бы нулём — нельзя путать базу)
+        val yb = BigInteger.TWO.modPow(XB, Torrent.P).let { be96(it) }
 
         val (packet1, hs) = Torrent.newClientInit(skey, injectXaHex = XA.toString(16), injectPad = ByteArray(0))
         val packet3 = hs.buildPacket3(yb)
@@ -85,7 +86,7 @@ class TorrentKATTest {
     @Test
     fun `wrong skey handshake fails closed`() {
         val skey = Torrent.skey(Torrent.tokenHash("чужой-токен"))
-        val yb = be96(Torrent.P.modPow(XB, Torrent.P))
+        val yb = be96(BigInteger.TWO.modPow(XB, Torrent.P))
         val (_, hs) = Torrent.newClientInit(skey, injectXaHex = XA.toString(16), injectPad = ByteArray(0))
         hs.buildPacket3(yb)
         try {
@@ -99,18 +100,23 @@ class TorrentKATTest {
     @Test
     fun `transport roundtrip various sizes`() {
         val skey = Torrent.skey(Torrent.tokenHash("kat-token-2026"))
-        val yb = be96(Torrent.P.modPow(XB, Torrent.P))
+        val yb = be96(BigInteger.TWO.modPow(XB, Torrent.P))
         val (_, hs) = Torrent.newClientInit(skey, injectXaHex = XA.toString(16), injectPad = ByteArray(0))
         hs.buildPacket3(yb)
         hs.consumeResponse(EXPECTED_RESP)
-        val tr = hs.transport()
+        // Конверты НАПРАВЛЕННЫЕ (канон MSE): клиент seals keyA / opens keyB —
+        // сервер зеркально. Кросс-сторона, как в Go-тестах.
+        val client = hs.transport()
+        val server = Torrent.serverTransportForTest(hs.s, skey, EXPECTED_RESP.size)
         for (n in listOf(1, 13, 100, 4096, Torrent.MAX_PLAIN_DATA)) {
             val plain = ByteArray(n) { (it * 31 + 7).toByte() }
-            val back = tr.open(tr.seal(plain))
-            assertArrayEquals("размер $n", plain, back)
+            val back = server.open(client.seal(plain))
+            assertArrayEquals("C→S размер $n", plain, back)
+            val back2 = client.open(server.seal(back))
+            assertArrayEquals("S→C размер $n", plain, back2)
         }
         try {
-            tr.seal(ByteArray(Torrent.MAX_PLAIN_DATA + 1))
+            client.seal(ByteArray(Torrent.MAX_PLAIN_DATA + 1))
             throw AssertionError("Seal принял plaintext больше лимита")
         } catch (_: Torrent.TorrentException) {
         }
@@ -119,7 +125,7 @@ class TorrentKATTest {
     @Test
     fun `piece envelope is canonical peer wire shape`() {
         val skey = Torrent.skey(Torrent.tokenHash("kat-token-2026"))
-        val yb = be96(Torrent.P.modPow(XB, Torrent.P))
+        val yb = be96(BigInteger.TWO.modPow(XB, Torrent.P))
         val (_, hs) = Torrent.newClientInit(skey, injectXaHex = XA.toString(16), injectPad = ByteArray(0))
         hs.buildPacket3(yb)
         hs.consumeResponse(EXPECTED_RESP)

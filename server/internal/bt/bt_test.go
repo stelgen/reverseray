@@ -565,10 +565,20 @@ func TestKATVector(t *testing.T) {
 	if err != nil || string(back) != "kat" {
 		t.Fatalf("KAT roundtrip: %v %q", err, back)
 	}
+	// server-sealed box: клиентский Open (keyB-кейстрим) — для Kotlin-теста
+	// (кейстримы направленные: self-open невозможен по канону)
+	sbox, err := sTr.Seal([]byte("kat-s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back2, err := cTr.Open(sbox); err != nil || string(back2) != "kat-s" {
+		t.Fatalf("KAT server->client: %v %q", err, back2)
+	}
 	t.Logf("KAT s=%s", hex.EncodeToString(ch.s[:]))
 	t.Logf("KAT init(%d)=%s", len(init), hex.EncodeToString(init))
 	t.Logf("KAT resp(%d)=%s", len(resp), hex.EncodeToString(resp))
 	t.Logf("KAT box(%d)=%s", len(box), hex.EncodeToString(box))
+	t.Logf("KAT sbox(%d)=%s", len(sbox), hex.EncodeToString(sbox))
 }
 
 // fixedFill — rnd-заглушка: любой запрос длины возвращает fill-байты

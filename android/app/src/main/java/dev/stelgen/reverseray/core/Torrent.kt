@@ -52,7 +52,8 @@ object Torrent {
             "E485B576625E7EC6F44C42E9A63A36210000000000090563",
         16,
     )
-    private val G = BigInteger.TWO
+    /** Генератор группы (2) — публичен для KAT-тестов. */
+    val G = BigInteger.TWO
 
     private val rnd = SecureRandom()
 
@@ -74,7 +75,8 @@ object Torrent {
 
     // ---- RC4 с канонным drop ----
 
-    private class Rc4Stream(key: ByteArray, drop: Int) {
+    /** internal: тип протекает в Transport/ClientHandshake (вимость модуля). */
+    internal class Rc4Stream(key: ByteArray, drop: Int) {
         private val enc = RC4Engine()
         private val dec = RC4Engine()
 
@@ -165,8 +167,8 @@ object Torrent {
          * crypto_select(4) + len(PadD)(2) + PadD. После успеха транспорт активен.
          */
         fun consumeResponse(resp: ByteArray) {
-            val stream = inR ?: throw TorrentException("bt: packet3 не строился")
-            check(!consumed) { "bt: packet4 уже обработан" }
+            val stream = inR ?: throw TorrentException(Msgs.BT_NO_PACKET3.t())
+            check(!consumed) { Msgs.BT_PACKET4_DONE.t() }
             val minLen = VC_LEN + 4 + 2
             if (resp.size < minLen) {
                 throw TorrentException("bt: packet4 len ${resp.size} < $minLen")
@@ -186,8 +188,8 @@ object Torrent {
 
         /** Транспорт после успешного consumeResponse. */
         fun transport(): Transport {
-            val o = out ?: throw TorrentException("bt: хендшейк не завершён")
-            val i = inR ?: throw TorrentException("bt: хендшейк не завершён")
+            val o = out ?: throw TorrentException(Msgs.BT_HS_NOT_DONE.t())
+            val i = inR ?: throw TorrentException(Msgs.BT_HS_NOT_DONE.t())
             return Transport(o, i)
         }
     }
@@ -225,7 +227,10 @@ object Torrent {
      * пакет (включая length-префикс) шифруется продолжением RC4-кейстрима
      * хендшейка (канон MSE: кейстрим не реинициализируется).
      */
-    class Transport(private val outS: Rc4Stream, private val inS: Rc4Stream) {
+    // Конструктор приватный: наружу — только transport() у ClientHandshake
+    // (Rc4Stream — internal, публичная сигнальная поверхность его не светит;
+    // наружу транспорт выдаёт только transport() у ClientHandshake).
+    class Transport internal constructor(private val outS: Rc4Stream, private val inS: Rc4Stream) {
         private val ctr = AtomicLong(0)
 
         /** Открытые данные → зашифрованное piece-сообщение. */
@@ -263,6 +268,20 @@ object Torrent {
             }
             return msg.copyOfRange(PIECE_OVERHEAD, msg.size)
         }
+    }
+
+    /**
+     * Тест/KAT-фабрика серверного транспорта (зеркало Go после Respond):
+     * out=keyB уже продвинут packet4 (respLen байт), in=keyA — packet3
+     * (RC4-часть = VC8+provide4+len(PadC)2+PadC0+len(IA)2+IA0 = 16 Б при PadC=0).
+     * Без этого кейстримы не выровнены с клиентскими — открытый сервер не прочтёт.
+     */
+    internal fun serverTransportForTest(s: ByteArray, skey: ByteArray, respLen: Int): Transport {
+        val out = Rc4Stream(rc4Key("keyB", s, skey), KEY_DROP)
+        val inR = Rc4Stream(rc4Key("keyA", s, skey), KEY_DROP)
+        inR.xorDec(ByteArray(16), ByteArray(16)) // packet3 RC4-часть (PadC=0)
+        out.xorEnc(ByteArray(respLen), ByteArray(respLen)) // packet4
+        return Transport(out, inR)
     }
 
     // ---- big-endian helpers ----

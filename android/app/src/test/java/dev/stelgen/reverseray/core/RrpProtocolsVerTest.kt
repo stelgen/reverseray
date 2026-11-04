@@ -25,15 +25,17 @@ class RrpProtocolsVerTest {
 
     @Test
     fun `version is not duplicated in menu labels`() {
-        // регрессия меню «Смена протокола»: «RRP/1 (v1)» было дублированием
+        // регрессия меню «Смена протокола»: «RRP/1 (v1)» было дублированием —
+        // метка, УЖЕ несущая версию ("Name/Ver"), не должна получать скобки;
+        // «MTProto/2 (v2.0)» — НЕ дубль: метка несёт мажор, скобки — полную версию
         for (id in RrpProtocols.BUNDLED) {
             val shown = RrpProtocols.labelWithVer(id)
             val v = RrpProtocols.ver(id)
-            if (v.isNotEmpty()) {
-                assertTrue(
-                    "версия задвоена: $shown",
-                    !shown.contains("(v$v)"),
-                )
+            val l = RrpProtocols.label(id)
+            if (v.isNotEmpty() && l.endsWith("/$v")) {
+                assertEquals("версия задвоена: $shown", l, shown)
+            } else if (v.isNotEmpty()) {
+                assertTrue("версия потеряна: $shown", shown.contains("v$v"))
             }
         }
     }

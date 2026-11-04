@@ -375,6 +375,14 @@ object Msgs {
         "bt: MSE ключи согласованы — piece-конверт активен (DPI-маска BitTorrent)",
     )
     val BT_FAILED = Msg("bt: %s", "bt: %s")
+    val BT_INIT_UNEXPECTED = Msg(
+        "bt: BT_INIT from server — order violation (client is initiator)",
+        "bt: BT_INIT от сервера — нарушение порядка (клиент инициатор)",
+    )
+    val BT_RESP_IGNORED = Msg("bt: BT_RESP without handshake — ignored", "bt: BT_RESP без хендшейка — игнор")
+    val BT_NO_PACKET3 = Msg("bt: packet3 not built", "bt: packet3 не строился")
+    val BT_PACKET4_DONE = Msg("bt: packet4 already consumed", "bt: packet4 уже обработан")
+    val BT_HS_NOT_DONE = Msg("bt: handshake not finished", "bt: хендшейк не завершён")
 
     // ── Бесшовная смена протокола (v0.10) ────────────────────────────
     val PSW_REQUEST = Msg(
