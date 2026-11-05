@@ -52,6 +52,36 @@ class LogStoreTest {
         assertEquals(listOf("upd", "home"), LogStore.snapshotFor(LogStore.Screen.LOG).map { it.text })
     }
 
+    /** v1.5.0: тегирование сессий, фильтр «по сессии», ротация с тегами. */
+    @Test
+    fun sessionTags_filterAndRotation() {
+        LogStore.clear()
+        LogStore.push("[Home] connected", LogKind.OK, LogStore.Channel.STATUS, session = "Home")
+        LogStore.push("[Home2] reconnect", LogKind.WARN, LogStore.Channel.STATUS, session = "Home2")
+        LogStore.push("no session line", LogKind.INFO, LogStore.Channel.STATUS)
+        // структурный тег: известные сессии из кольца
+        assertEquals(listOf("Home", "Home2"), LogStore.knownSessions())
+        // фильтр по сессии (новые сверху)
+        val home = LogStore.snapshotFor(LogStore.Screen.LOG, "Home")
+        assertEquals(listOf("[Home] connected"), home.map { it.text })
+        // фильтр "" = только общие строки (не сессии)
+        assertEquals(
+            listOf("no session line"),
+            LogStore.snapshotFor(LogStore.Screen.LOG, "").map { it.text },
+        )
+        // без фильтра — всё
+        assertEquals(3, LogStore.snapshotFor(LogStore.Screen.LOG).size)
+        // дефолт push (без session) не ломает legacy-вызовы
+        LogStore.push("legacy")
+        assertEquals("legacy", LogStore.snapshotFor(LogStore.Screen.LOG).first().text)
+        // ротация: кольцо вытесняет старые строки с их тегами, известные сессии сужаются
+        LogStore.clear()
+        LogStore.push("[A] x", session = "A")
+        repeat(LogStore.CAPACITY + 5) { LogStore.push("m$it", LogKind.INFO, LogStore.Channel.STATUS) }
+        assertEquals(emptyList<String>(), LogStore.knownSessions()) // строка [A] вытеснена
+        assertEquals(LogStore.CAPACITY, LogStore.snapshot(null).size)
+    }
+
     @Test
     fun updateLoggerWritesIntoSingleStore() {
         LogStore.clear()

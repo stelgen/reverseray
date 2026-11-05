@@ -25,6 +25,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.CheckBox
@@ -156,6 +157,10 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- лог ----------
     private lateinit var logConsole: StatusConsole
+    private lateinit var logFilterRow: HorizontalScrollView
+
+    /** v1.5.0: фильтр лога «по сессии» (null = все строки). */
+    @Volatile private var logSessionFilter: String? = null
 
     // ---------- настройки ----------
     private lateinit var deviceInfoBox: LinearLayout
@@ -431,7 +436,7 @@ class MainActivity : AppCompatActivity() {
         }
         when (index) {
             2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
-            3 -> renderServiceLogs()
+            3 -> { renderServiceLogs(); refreshLogFilterChips() }
             4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
             1 -> refreshConnLine()
             5 -> if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
@@ -980,6 +985,16 @@ class MainActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(4), 0, dp(4))
         })
+        // v1.5.0: фильтр «по сессии» — чипы (Все / имена сессий из кольца)
+        logFilterRow = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(
+                LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                },
+            )
+        }
+        p.addView(logFilterRow)
         logConsole = StatusConsole(this).apply {
             setTitle(getString(R.string.console_title_service))
             setBodyHeight(280)
@@ -1823,7 +1838,45 @@ class MainActivity : AppCompatActivity() {
     private fun renderServiceLogs() {
         homeConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.HOME)))
         updateConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.UPDATE)))
-        logConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.LOG)))
+        logConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.LOG, logSessionFilter)))
+    }
+
+    /**
+     * v1.5.0: чипы фильтра лога «по сессии» — «Все» + имена сессий из кольца.
+     * Пересобирается при открытии вкладки LOG (сессии появляются/уходят).
+     */
+    private fun refreshLogFilterChips() {
+        if (!this::logFilterRow.isInitialized) return
+        val box = logFilterRow.getChildAt(0) as LinearLayout
+        box.removeAllViews()
+        val all = logChip(getString(R.string.log_filter_all), logSessionFilter == null)
+        all.setOnClickListener {
+            logSessionFilter = null
+            refreshLogFilterChips()
+            renderServiceLogs()
+        }
+        box.addView(all)
+        for (name in LogStore.knownSessions()) {
+            val c = logChip(name, logSessionFilter == name)
+            c.setOnClickListener {
+                logSessionFilter = name
+                refreshLogFilterChips()
+                renderServiceLogs()
+            }
+            box.addView(c)
+        }
+    }
+
+    private fun logChip(text: String, selected: Boolean): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        setPadding(dp(10), dp(4), dp(10), dp(4))
+        setTextColor(if (selected) 0xFF39D98A.toInt() else 0xFF8FA3D9.toInt())
+        if (selected) setTypeface(typeface, Typeface.BOLD)
+        setBackgroundResource(android.R.drawable.list_selector_background)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, 0, dp(6), 0) }
     }
 
     /** Открыта ли сейчас вкладка полного лога (для реалтайм-дорисовки). */

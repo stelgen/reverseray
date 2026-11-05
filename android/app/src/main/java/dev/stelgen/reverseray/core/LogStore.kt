@@ -36,12 +36,14 @@ object LogStore {
     /** Экраны приложения, потребляющие лог (фильтрация «своей части»). */
     enum class Screen { HOME, UPDATE, LOG }
 
-    /** Строка лога с цветовой ролью и каналом. */
+    /** Строка лога с цветовой ролью, каналом и тегом сессии (v1.5.0). */
     class Entry(
         val text: String,
         val kind: LogKind = LogKind.INFO,
         val channel: Channel = Channel.STATUS,
         val ts: Long = System.currentTimeMillis(),
+        /** v1.5.0: имя сессии ("" — общая строка приложения, не сессия). */
+        val session: String = "",
     )
 
     /** Вместимость кольца: «один большой лог» — не 300, а 2000 строк. */
@@ -52,9 +54,18 @@ object LogStore {
     /** Слушатель новых строк (реалтайм-обновления окон; UI сам переключает поток). */
     @Volatile var onEntry: ((Entry) -> Unit)? = null
 
-    /** Запись в единый лог — ЕДИНСТВЕННАЯ точка входа для всего приложения. */
-    fun push(text: String, kind: LogKind = LogKind.INFO, channel: Channel = Channel.STATUS) {
-        val e = Entry(text, kind, channel)
+    /**
+     * Запись в единый лог — ЕДИНСТВЕННАЯ точка входа для всего приложения.
+     * v1.5.0: session — тег сессии (текст строки уже несёт префикс «[Name]»,
+     * поле — для фильтра «по сессии» на экране LOG).
+     */
+    fun push(
+        text: String,
+        kind: LogKind = LogKind.INFO,
+        channel: Channel = Channel.STATUS,
+        session: String = "",
+    ) {
+        val e = Entry(text, kind, channel, System.currentTimeMillis(), session)
         synchronized(ring) {
             ring.addLast(e)
             while (ring.size > CAPACITY) ring.removeFirst()
@@ -73,19 +84,28 @@ object LogStore {
      * Снимок лога для экрана: Screen.LOG — ВСЁ (полный лог); иначе — только
      * свой канал. Новые сверху (канон консолей приложения).
      */
-    fun snapshotFor(screen: Screen): List<Entry> = snapshot(channelFor(screen))
+    fun snapshotFor(screen: Screen, sessionFilter: String? = null): List<Entry> =
+        snapshot(channelFor(screen), sessionFilter)
+
+    /** v1.5.0: имена сессий, встречающиеся в кольце (для фильтра на экране LOG). */
+    fun knownSessions(): List<String> = synchronized(ring) {
+        ring.map { it.session }.filter { it.isNotBlank() }.distinct()
+    }
 
     /**
      * Снимок лога: channel = null — ВСЁ (полный лог); иначе — только свой
      * канал. Новые сверху (канон консолей приложения).
      */
-    fun snapshot(channel: Channel? = null): List<Entry> = synchronized(ring) {
-        val out = ArrayList<Entry>(ring.size)
-        for (e in ring) {
-            if (channel == null || e.channel == channel) out.add(e)
+    fun snapshot(channel: Channel? = null, sessionFilter: String? = null): List<Entry> =
+        synchronized(ring) {
+            val out = ArrayList<Entry>(ring.size)
+            for (e in ring) {
+                if (channel != null && e.channel != channel) continue
+                if (sessionFilter != null && e.session != sessionFilter) continue
+                out.add(e)
+            }
+            out.asReversed()
         }
-        out.asReversed()
-    }
 
     /** Текстовый дамп (кнопка «Поделиться» / отладка). */
     fun dumpText(): String = snapshot().joinToString("\n") { it.text }

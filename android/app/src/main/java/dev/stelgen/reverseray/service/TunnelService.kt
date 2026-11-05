@@ -200,7 +200,8 @@ class TunnelService : Service() {
         }
 
         override fun onSessionLog(session: ConnectionManager.Session, message: String, kind: LogKind) {
-            pushLog("[${session.profile.name}] $message", kind)
+            // v1.5.0: строка с тегом сессии + структурный тег для фильтра LOG
+            pushLog("[${session.profile.name}] $message", kind, session = session.profile.name)
         }
 
         override fun onSessionState(session: ConnectionManager.Session, state: String) {
@@ -1765,8 +1766,8 @@ class TunnelService : Service() {
         // Окна (главная/обновление/лог) берут из него сообщения своего типа.
         fun snapshotLogs(): List<LogStore.Entry> = LogStore.snapshot(LogStore.Channel.STATUS)
 
-        fun pushLog(line: String, kind: LogKind = LogKind.INFO) {
-            LogStore.push(line, kind, LogStore.Channel.STATUS)
+        fun pushLog(line: String, kind: LogKind = LogKind.INFO, session: String = "") {
+            LogStore.push(line, kind, LogStore.Channel.STATUS, session)
         }
 
         /**

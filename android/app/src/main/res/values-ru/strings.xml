@@ -356,4 +356,5 @@
     <string name="sess_name_hint">Имя (необязательно)</string>
     <string name="log_probe_running">Валидационный прогон (TCP+TLS+HELLO+PROBE)…</string>
     <string name="log_probe_ok">Валидационный прогон пройден</string>
+    <string name="log_filter_all">Все</string>
 </resources>

@@ -356,4 +356,5 @@
     <string name="sess_name_hint">Name (optional)</string>
     <string name="log_probe_running">Validation run (TCP+TLS+HELLO+PROBE)…</string>
     <string name="log_probe_ok">Validation run passed</string>
+    <string name="log_filter_all">All</string>
 </resources>
