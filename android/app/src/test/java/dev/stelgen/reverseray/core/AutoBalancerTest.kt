@@ -139,4 +139,32 @@ class AutoBalancerTest {
         assertEquals("BitTorrent/1", RrpProtocols.labelWithVer("bittorrent"))
         assertTrue(RrpProtocols.isExecutable("bittorrent"))
     }
+
+    /**
+     * v1.5.0: два экземпляра балансера (per-сессия в ConnectionManager)
+     * ПОЛНОСТЬЮ независимы — гистерезис/кулдауны одного не мешают другому.
+     */
+    @Test
+    fun `two instances are independent per-session`() {
+        val a = bal()
+        val b = bal()
+        // A: деградация (2 пробы в окне 1с) → Switch → стабильность 2с
+        a.onSample(sample(0, loss = 0.5))
+        val dA = a.onSample(sample(900, loss = 0.5))
+        assertTrue(dA is AutoBalancer.Decision.Switch)
+        a.onSwitchResult(950, (dA as AutoBalancer.Decision.Switch).target, ok = true)
+        // A в stability-window — Wait; B в ТОТ ЖЕ момент чист и решает сам
+        assertTrue(a.onSample(sample(1_000, loss = 0.5)) is AutoBalancer.Decision.Wait)
+        b.onSample(sample(1_000, loss = 0.5))
+        val dB = b.onSample(sample(1_900, loss = 0.5))
+        assertTrue("гистерезис A не блокирует B: $dB", dB is AutoBalancer.Decision.Switch)
+        // провал смены у B остывает ЕГО кандидата/кулдаун, у A — ничего
+        b.onSwitchResult(1_950, (dB as AutoBalancer.Decision.Switch).target, ok = false)
+        assertTrue(b.cooldownLeftSec(2_000) > 0)
+        // один и тот же момент: A может переключаться снова, B молчит (кулдаун)
+        a.onSample(sample(2_900, loss = 0.5))
+        val dA2 = a.onSample(sample(3_000, loss = 0.5))
+        assertTrue("A свободен от состояния B: $dA2", dA2 is AutoBalancer.Decision.Switch)
+        assertTrue("кулдаун B не мешает A", b.onSample(sample(3_000, loss = 0.5)) is AutoBalancer.Decision.Wait)
+    }
 }
