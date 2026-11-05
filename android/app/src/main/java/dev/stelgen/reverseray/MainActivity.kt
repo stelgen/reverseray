@@ -59,6 +59,7 @@ import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.service.PrefsBackend
 import dev.stelgen.reverseray.core.ThemeMode
 import dev.stelgen.reverseray.ui.Formats
+import dev.stelgen.reverseray.ui.GraphHistory
 import dev.stelgen.reverseray.ui.DashboardView
 import dev.stelgen.reverseray.ui.PulseRingView
 import dev.stelgen.reverseray.net.DnsProbe
@@ -220,11 +221,12 @@ class MainActivity : AppCompatActivity() {
                     val rx = intent.getLongExtra(TunnelService.EXTRA_RX_RATE, 0L)
                     val tx = intent.getLongExtra(TunnelService.EXTRA_TX_RATE, 0L)
                     trafficGraph.addSample(rx.toFloat(), tx.toFloat())
+                    GraphHistory.push(rx.toFloat(), tx.toFloat(), fromService = true)
                     syncGraphVisibility()
-                    // v0.9.2 (R4): среднее (EMA) и пик по окну истории — из сервиса
-                    val gs = TunnelService.graphStats()
+                    // v1.5.1: среднее (EMA) и пик окна — из GraphHistory (пишется всегда)
+                    val (avgEma, peakNow) = GraphHistory.stats()
                     trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx)) +
-                        "   ·   " + getString(R.string.traffic_stats, fmtRate(gs[0].toLong()), fmtRate(gs[2].toLong()))
+                        "   ·   " + getString(R.string.traffic_stats, fmtRate(avgEma.toLong()), fmtRate(peakNow.toLong()))
                     val pkTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_COUNT, 0L)
                     val pkRx = intent.getLongExtra(TunnelService.EXTRA_PKT_RX_COUNT, 0L)
                     val szTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_SIZE, 0L)
@@ -351,6 +353,9 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         uiHandler.post(netInfoRunnable)
+        // v1.5.1: график пишется ВСЕГДА — пока сервис молчит, питаем его
+        // общесистемными скоростями (TrafficStats, дельты раз в 1 с)
+        startDeviceSampler()
         val filter = IntentFilter().apply {
             addAction(TunnelService.ACTION_STATUS)
             addAction(TunnelService.ACTION_STATS)
@@ -366,7 +371,56 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         uiHandler.removeCallbacks(netInfoRunnable)
+        stopDeviceSampler()
         try { unregisterReceiver(statusReceiver) } catch (_: Exception) {}
+    }
+
+    // ---- v1.5.1: ВСЕГДА-пишущийся график — общесистемный сэмплер ----
+
+    private var deviceSampler: Thread? = null
+    private var devLastRx = 0L
+    private var devLastTx = 0L
+
+    private fun startDeviceSampler() {
+        if (deviceSampler?.isAlive == true) return
+        devLastRx = android.net.TrafficStats.getTotalRxBytes()
+        devLastTx = android.net.TrafficStats.getTotalTxBytes()
+        deviceSampler = Thread({
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(1_000)
+                    val rxTot = android.net.TrafficStats.getTotalRxBytes()
+                    val txTot = android.net.TrafficStats.getTotalTxBytes()
+                    val drx = (rxTot - devLastRx).coerceAtLeast(0)
+                    val dtx = (txTot - devLastTx).coerceAtLeast(0)
+                    devLastRx = rxTot
+                    devLastTx = txTot
+                    // туннель молчит дольше 2.5 с — рисуем общесистемный трафик
+                    val serviceSilent =
+                        System.currentTimeMillis() - GraphHistory.lastServiceSampleMs >
+                        GraphHistory.SERVICE_SILENCE_MS
+                    if (serviceSilent) {
+                        runOnUiThread {
+                            trafficGraph.addSample(drx.toFloat(), dtx.toFloat())
+                            GraphHistory.push(drx.toFloat(), dtx.toFloat(), fromService = false)
+                            syncGraphVisibility()
+                            trafficLabel.text = getString(
+                                R.string.traffic_device_rates, fmtRate(drx), fmtRate(dtx),
+                            )
+                        }
+                    }
+                } catch (_: InterruptedException) {
+                    return@Thread
+                } catch (_: Throwable) {
+                    // одиночный сбой сэмплера не роняет Activity
+                }
+            }
+        }, "rr-device-net").apply { isDaemon = true; start() }
+    }
+
+    private fun stopDeviceSampler() {
+        deviceSampler?.interrupt()
+        deviceSampler = null
     }
 
     // ================================================================= UI
@@ -459,6 +513,15 @@ class MainActivity : AppCompatActivity() {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
         }
         val p = page()
+        // v1.5.1: «+ Добавить сервер» ПРЯМО на вкладке «Серверы» — раньше
+        // добавление пряталось только в настройках (находили с трудом).
+        p.addView(
+            row(
+                outlined(R.string.dash_add_server).apply {
+                    setOnClickListener { showAddSessionDialog() }
+                },
+            ),
+        )
         p.addView(dashboard)
         return scrollWrap(p)
     }
@@ -1548,9 +1611,15 @@ class MainActivity : AppCompatActivity() {
         setUiState(TunnelService.lastState)
         // протокол и его известность — из ссылки + реестра сервера
         refreshConnLine()
-        // история графика живёт в сервисе — восстанавливаем целиком
-        val (buf, head, valid) = TunnelService.graphHistory()
-        trafficGraph.setHistory(buf, head, valid)
+        // v1.5.1: история графика живёт в GraphHistory (пишется ВСЕГДА:
+        // и туннелем, и общесистемным сэмплером) — восстанавливаем из неё
+        val (rxBuf, txBuf, head, valid) = GraphHistory.snapshot()
+        val inter = FloatArray(GraphHistory.CAPACITY * 2)
+        for (i in 0 until GraphHistory.CAPACITY) {
+            inter[i * 2] = rxBuf[i]
+            inter[i * 2 + 1] = txBuf[i]
+        }
+        trafficGraph.setHistory(inter, head, valid)
         syncGraphVisibility()
         renderServiceLogs()
     }
@@ -2796,7 +2865,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Диалог добавления сервера: ссылка + имя; probe ДО сохранения (канон). */
+    /**
+     * v1.5.1: добавление сервера:
+     *  - чекбокс «Проверить подключение» (probe ДО сохранения — можно снять,
+     *    если сервер ещё не поднят, а профиль нужен в списке);
+     *  - при провале пробы — ЯВНОЕ предложение «Добавить без проверки»
+     *    (v1.5.0 молча отказывал — сервер не появлялся в списке вовсе);
+     *  - чекбокс «Подключить сразу» — новый профиль не остаётся выключенным.
+     */
     private fun showAddSessionDialog() {
         val input = TextInputEditText(this).apply {
             hint = getString(R.string.sess_add_hint)
@@ -2808,12 +2884,16 @@ class MainActivity : AppCompatActivity() {
             hint = getString(R.string.sess_name_hint)
             setTextSize(12f)
         }
+        val verifyBox = android.widget.CheckBox(this).apply { setText(R.string.sess_verify); isChecked = true; setTextSize(12f) }
+        val nowBox = android.widget.CheckBox(this).apply { setText(R.string.sess_add_now); isChecked = true; setTextSize(12f) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val pad = dp(16)
             setPadding(pad, pad, pad, 0)
             addView(input)
             addView(nameInput)
+            addView(verifyBox)
+            addView(nowBox)
         }
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.sess_add_title)
@@ -2822,6 +2902,16 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.link_cancel, null)
             .create()
         dialog.show()
+        fun commit(name: String, canonical: String, connectNow: Boolean) {
+            val store = sessionStore()
+            val created = store.add(canonical, name.ifBlank { null }, enabled = connectNow)
+            if (created != null) {
+                Toast.makeText(this, getString(R.string.sess_added, created.name), Toast.LENGTH_LONG).show()
+                refreshSessionsCard()
+                if (connectNow) sendSessionCmd(created.id, "connect")
+                if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
+            }
+        }
         dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val raw = input.text?.toString()?.trim().orEmpty()
                 val name = nameInput.text?.toString()?.trim().orEmpty()
@@ -2832,6 +2922,12 @@ class MainActivity : AppCompatActivity() {
                     return@setOnClickListener
                 }
                 val canonical = cfg.serialize()
+                val connectNow = nowBox.isChecked
+                if (!verifyBox.isChecked) {
+                    dialog.dismiss()
+                    commit(name, canonical, connectNow)
+                    return@setOnClickListener
+                }
                 kotlin.concurrent.thread {
                     val (ok, msg) = try {
                         probeServer(cfg)
@@ -2839,17 +2935,22 @@ class MainActivity : AppCompatActivity() {
                         ProbeOut(false, e.message ?: "?")
                     }
                     runOnUiThread {
-                        dialog.dismiss()
                         if (ok) {
-                            val store = sessionStore()
-                            val created = store.add(canonical, name.ifBlank { null })
-                            if (created != null) {
-                                Toast.makeText(this, getString(R.string.sess_added, created.name), Toast.LENGTH_LONG).show()
-                                refreshSessionsCard()
-                                dashboard.update(offlineStats())
-                            }
+                            dialog.dismiss()
+                            commit(name, canonical, connectNow)
                         } else {
-                            Toast.makeText(this, getString(R.string.sess_probe_failed) + " (" + msg + ")", Toast.LENGTH_LONG).show()
+                            // v1.5.1: провал пробы больше НЕ теряет ссылку —
+                            // предлагаем добавить без проверки (сервер мог быть
+                            // временно недоступен).
+                            MaterialAlertDialogBuilder(this)
+                                .setMessage(getString(R.string.sess_probe_fail_add, msg))
+                                .setPositiveButton(R.string.sess_anyway) { d2, _ ->
+                                    d2.dismiss()
+                                    dialog.dismiss()
+                                    commit(name, canonical, connectNow)
+                                }
+                                .setNegativeButton(R.string.link_cancel, null)
+                                .show()
                         }
                     }
                 }

@@ -8,17 +8,22 @@ import android.graphics.Path
 import android.graphics.Shader
 import android.view.View
 
+import dev.stelgen.reverseray.R
+
 /**
- * Реалтайм-график трафика (v0.7, richer v0.9.2): две области — приём (rx,
+ * Реалтайм-график трафика (v0.7 → pro v1.5.1): две области — приём (rx,
  * зелёный) и отправка (tx, синий) в байт/с. Чистый Canvas — работает от
  * API 14, без дополнительных зависимостей.
  *
- * v0.9.2 (R4): история живёт В СЕРВИСЕ (TunnelService.graphHistory) —
- * пересоздание Activity больше не сбрасывает график; view только рендер:
+ * v1.5.1 «PRO»:
+ *  - СГЛАЖЕННАЯ автошкала: максимум окна не «прыгает» — при всплеске
+ *    поднимается мгновенно, спадает EMA-затуханием (кадры без дёрганья);
+ *  - сетка из 4 пунктирных уровней с ЧЕЛОВЕЧЕСКИМИ подписями bps (max,
+ *    3/4, 1/2, 1/4) справа;
+ *  - легенда «▼ приём / ▲ отправка» слева сверху;
+ *  - метка окна истории (CAPACITY × 500 мс) справа снизу;
  *  - EMA-сглаживание линий (плавная отрисовка без «пилы»);
- *  - градиентная заливка областей;
- *  - ось: пунктирные уровни + подпись максимума (bps, из ресурсов);
- *  - подписи current/avg/peak рисует активность из TunnelService.graphStats().
+ *  - градиентная заливка областей.
  */
 class TrafficGraphView(context: Context) : View(context) {
 
@@ -48,12 +53,34 @@ class TrafficGraphView(context: Context) : View(context) {
         textSize = 22f
         textAlign = Paint.Align.RIGHT
     }
+    private val paintLegend = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xCCFFFFFF.toInt()
+        textSize = 20f
+        textAlign = Paint.Align.LEFT
+    }
+    private val paintLegendDot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val paintWindowLabel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x66FFFFFF.toInt()
+        textSize = 18f
+        textAlign = Paint.Align.RIGHT
+    }
 
     // Градиенты создаются на размер (onSizeChanged).
     private var txGradient: Shader? = null
     private var rxGradient: Shader? = null
     private val paintTxFill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val paintRxFill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /**
+     * v1.5.1 PRO: сглаженная автошкала. Целевой максимум окна поднимается
+     * мгновенно (спайк всегда виден), спад — 3% за кадр (шкала не «дёргается»).
+     * Волатильно: читается/пишется только из onDraw (UI-поток).
+     */
+    private var scaleMax = 1f
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -74,7 +101,7 @@ class TrafficGraphView(context: Context) : View(context) {
     }
 
     /**
-     * v0.9.2 (R4): восстановление истории из сервиса после recreate.
+     * v0.9.2 (R4): восстановление истории после recreate.
      * @param buffer [rx, tx]-чередование длиной 2*MAX_SAMPLES, head — индекс
      * нового сэмпла, valid — число валидных сэмплов.
      */
@@ -101,20 +128,26 @@ class TrafficGraphView(context: Context) : View(context) {
         val w = width.toFloat()
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
-        if (count > 0) {
-            var max = 1f
-            for (i in 0 until count) {
-                if (slots[i * 2] > max) max = slots[i * 2]
-                if (slots[i * 2 + 1] > max) max = slots[i * 2 + 1]
-            }
-            max *= 1.15f
 
-            // Ось: уровень максимума + половина (пунктир) и подпись bps.
-            // v0.9.2 (R4): подпись оси — максимум окна истории, «X B/s» из ресурсов
-            val maxLabel = Formats.rate(context, max.toLong())
-            canvas.drawText(maxLabel, w - 4f, 22f, paintAxisText)
-            canvas.drawLine(0f, 26f, w, 26f, paintAxis)
-            canvas.drawLine(0f, (h + 26f) / 2f, w, (h + 26f) / 2f, paintAxis)
+        if (count > 0) {
+            var target = 1f
+            for (i in 0 until count) {
+                if (slots[i * 2] > target) target = slots[i * 2]
+                if (slots[i * 2 + 1] > target) target = slots[i * 2 + 1]
+            }
+            target *= 1.15f
+            // сглаженная автошкала: вверх мгновенно, вниз — затуханием 3%/кадр
+            scaleMax = if (target >= scaleMax) target else (scaleMax * 0.97f + target * 0.03f).coerceAtLeast(target)
+            val max = scaleMax
+
+            // --- сетка: 4 уровня с подписями (max, 3/4, 1/2, 1/4) ---
+            val topPad = 26f
+            val levels = intArrayOf(4, 3, 2, 1)
+            for (lvl in levels) {
+                val y = h - (h - topPad) * lvl / 4f - 2f
+                canvas.drawLine(0f, y, w, y, paintAxis)
+                canvas.drawText(Formats.rate(context, (max * lvl / 4f).toLong()), w - 4f, y - 4f, paintAxisText)
+            }
 
             val series = intArrayOf(1, 0) // tx, rx
             val linePaints = arrayOf(paintTxLine, paintRxLine)
@@ -132,8 +165,8 @@ class TrafficGraphView(context: Context) : View(context) {
                     val idx = ((head - i) % MAX_SAMPLES + MAX_SAMPLES) % MAX_SAMPLES
                     val v = slots[idx * 2 + offset]
                     // EMA-сглаживание: текущий сэмпл 40% + предыдущая точка 60%
-                    val target = h - (v / max) * (h - 4f) - 2f
-                    val y = if (!started) target else prevY * 0.6f + target * 0.4f
+                    val pos = h - (v / max) * (h - topPad) - 2f
+                    val y = if (!started) pos else prevY * 0.6f + pos * 0.4f
                     if (!started) {
                         path.moveTo(x, y)
                         started = true
@@ -151,6 +184,24 @@ class TrafficGraphView(context: Context) : View(context) {
                 canvas.drawPath(fill, fillPaints[s])
                 canvas.drawPath(path, linePaints[s])
             }
+
+            // --- легенда: ▼ приём (rx, зелёный) · ▲ отправка (tx, синий) ---
+            var lx = 6f
+            paintLegendDot.color = 0xFF2E7D32.toInt()
+            canvas.drawCircle(lx + 6f, 14f, 5f, paintLegendDot)
+            canvas.drawText(context.getString(R.string.graph_legend_rx), lx + 15f, 19f, paintLegend)
+            lx += 15f + paintLegend.measureText(context.getString(R.string.graph_legend_rx)) + 14f
+            paintLegendDot.color = 0xFF1E88E5.toInt()
+            canvas.drawCircle(lx + 6f, 14f, 5f, paintLegendDot)
+            canvas.drawText(context.getString(R.string.graph_legend_tx), lx + 15f, 19f, paintLegend)
+
+            // --- метка окна истории ---
+            canvas.drawText(
+                context.getString(R.string.graph_window, MAX_SAMPLES / 2),
+                w - 4f,
+                h - 4f,
+                paintWindowLabel,
+            )
         }
     }
 

@@ -364,4 +364,13 @@
     <string name="sess_confirm_delete">Удалить сессию «%1$s»?</string>
     <string name="sess_on">Вкл</string>
     <string name="sess_off">Выкл</string>
+    <string name="sess_verify">Проверить подключение перед сохранением</string>
+    <string name="sess_add_now">Подключить сразу после добавления</string>
+    <string name="sess_probe_fail_add">Проба не пройдена: %1$s. Добавить без проверки?</string>
+    <string name="sess_anyway">Добавить без проверки</string>
+    <string name="dash_add_server">+ Добавить сервер</string>
+    <string name="traffic_device_rates">сеть устройства: вход %1$s выход %2$s</string>
+    <string name="graph_legend_rx">приём</string>
+    <string name="graph_legend_tx">отправка</string>
+    <string name="graph_window">%1$d с</string>
 </resources>

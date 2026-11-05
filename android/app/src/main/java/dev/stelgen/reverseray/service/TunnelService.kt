@@ -1172,7 +1172,9 @@ class TunnelService : Service() {
             } catch (e: Exception) {
                 lastError = e.message ?: "?"
                 failStreak++
-                r.sess?.id?.let { manager?.workerFailed(it, lastError) }
+                // v1.5.1 FIX: счётчик/backoff ведёт ТОЛЬКО workerFailed ниже
+                // (после цикла) — двойной инкремент задваивал errors и
+                // разгонял backoff вдвое быстрее (выглядело как «не подключается»).
                 updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, lastError))
                 // v0.8.1 КАНОН ФОЛЛБЕКА: новый модуль протокола сломал клиент →
                 // откатываемся на предыдущий рабочий (rrp1). Сервер НЕ откатываем

@@ -364,4 +364,13 @@
     <string name="sess_confirm_delete">Delete session «%1$s»?</string>
     <string name="sess_on">On</string>
     <string name="sess_off">Off</string>
+    <string name="sess_verify">Verify connection before saving</string>
+    <string name="sess_add_now">Connect right after adding</string>
+    <string name="sess_probe_fail_add">Probe failed: %1$s. Add without check?</string>
+    <string name="sess_anyway">Add without check</string>
+    <string name="dash_add_server">+ Add server</string>
+    <string name="traffic_device_rates">device network: down %1$s up %2$s</string>
+    <string name="graph_legend_rx">rx</string>
+    <string name="graph_legend_tx">tx</string>
+    <string name="graph_window">%1$d s</string>
 </resources>
