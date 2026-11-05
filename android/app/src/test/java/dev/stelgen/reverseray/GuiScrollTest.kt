@@ -44,7 +44,8 @@ class GuiScrollTest {
                     sp.layout(0, 0, 360, 400)
                     // SETTINGS содержит несколько карточек — гарантированно выше 400px
                 }
-                val settings = scrollPages.last()
+                // v1.5.0: настройки теперь scrollPages[4] (последняя — «Серверы»)
+                val settings = scrollPages[4]
                 assertTrue(
                     "настройки не скроллятся (высота контента ${settings.getChildAt(0).height})",
                     settings.getChildAt(0).height > 400,
