@@ -234,16 +234,24 @@ class DashboardView(context: Context) : LinearLayout(context) {
         }
         v.state.text = label
         v.state.setTextColor(color)
+        // v1.6.0: счётчики КАЖДЫЙ С НОВОЙ СТРОКИ — детерминированная высота
+        // карточки: растущие цифры не переносят строку и не «дёргают» layout.
         v.rates.text = "↓ " + Formats.rate(context, s.rxRate) +
-            "   ↑ " + Formats.rate(context, s.txRate) +
-            "   Σ " + Formats.bytes(context, s.rxTotal) + " / " + Formats.bytes(context, s.txTotal)
+            "\n↑ " + Formats.rate(context, s.txRate) +
+            "\nΣ " + Formats.bytes(context, s.rxTotal) + " / " + Formats.bytes(context, s.txTotal)
+        v.rates.maxLines = 3
+        v.rates.ellipsize = android.text.TextUtils.TruncateAt.END
         val proto = if (s.proto.isBlank()) RrpProtocolsLabel.auto(context) else s.proto
         v.details.text = proto +
             "  ·  RTT " + (if (s.rttMs > 0) "${s.rttMs} ms" else "—") +
             "  ·  " + context.getString(R.string.dash_uptime, Formats.uptime(context, s.uptimeMs))
+        v.details.maxLines = 1
+        v.details.ellipsize = android.text.TextUtils.TruncateAt.END
         v.counters.text = context.getString(R.string.dash_switches, s.switches.toInt()) +
-            "  ·  " + context.getString(R.string.dash_reconnects, s.reconnects.toInt()) +
-            "  ·  " + context.getString(R.string.dash_errors, s.errors.toInt())
+            "\n" + context.getString(R.string.dash_reconnects, s.reconnects.toInt()) +
+            "\n" + context.getString(R.string.dash_errors, s.errors.toInt())
+        v.counters.maxLines = 3
+        v.counters.ellipsize = android.text.TextUtils.TruncateAt.END
         // график: кормим сэмпл на каждом тике (500 мс) — как на главной
         v.graph.addSample(s.rxRate.toFloat(), s.txRate.toFloat())
         // кнопки по состоянию

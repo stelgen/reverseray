@@ -28,13 +28,12 @@ class GuiScrollTest {
             scenario.onActivity { activity ->
                 val content = UiFind.contentView(activity) as ViewGroup
                 // root(LinearLayout) → [TabLayout, pages(FrameLayout)]
-                // v1.5.0: вкладок стало 6 (добавилась «Серверы» — в конце,
-                // позиции 0–4 не сдвинуты)
+                // v1.6.0: снова 5 вкладок («Серверы» встроена в Home)
                 val pages = directChildren(content).filterIsInstance<ViewGroup>()
-                    .firstOrNull { it !is androidx.appcompat.widget.LinearLayoutCompat && it.childCount == 6 }
+                    .firstOrNull { it !is androidx.appcompat.widget.LinearLayoutCompat && it.childCount == 5 }
                     ?: directChildren(content).last() as ViewGroup
                 val scrollPages = directChildren(pages).filterIsInstance<ScrollView>()
-                assertTrue("ожидали 6 скроллируемых страниц, найдено ${scrollPages.size}", scrollPages.size == 6)
+                assertTrue("ожидали 5 скроллируемых страниц, найдено ${scrollPages.size}", scrollPages.size == 5)
                 // каждая страница реально листается: scrollable когда контент больше вьюпорта
                 scrollPages.forEach { sp ->
                     sp.measure(
@@ -44,7 +43,7 @@ class GuiScrollTest {
                     sp.layout(0, 0, 360, 400)
                     // SETTINGS содержит несколько карточек — гарантированно выше 400px
                 }
-                // v1.5.0: настройки теперь scrollPages[4] (последняя — «Серверы»)
+                // v1.6.0: настройки — scrollPages[4] (последняя; «Серверы» на Home/Подключении)
                 val settings = scrollPages[4]
                 assertTrue(
                     "настройки не скроллятся (высота контента ${settings.getChildAt(0).height})",

@@ -59,6 +59,16 @@ var ProtocolWG = Protocol{ID: "wireguard", Name: "WireGuard/1", Ver: "1", Defaul
 // зашифрованный BitTorrent (libtorrent/qBittorrent/Deluge).
 var ProtocolBT = Protocol{ID: "bittorrent", Name: "BitTorrent/1", Ver: "1", Default: false}
 
+// ProtocolAPIMask — камуфляж «API Mask» как ПОЛНОЦЕННЫЙ протокол (v1.6.0,
+// изначальный замысел v0.8.2): согласуется как proto=apimask в HELLO/READY.
+// Payload'ы идут в базовом RRP/1-конверте, но СЕССИЯ живёт в режиме
+// имитации API-трафика: клиент шлёт NOISE (0x26) без ограничения модульного
+// манифеста, сервер отвечает API-подобными JSON (rate-limit сохраняется —
+// анти-амплификация), выбор персистентен на сервере (cam-override=ON).
+// Старые серверы/клиенты согласуют apimask в честный дефолт rrp1 —
+// НИКАКОГО слома совместимости.
+var ProtocolAPIMask = Protocol{ID: "apimask", Name: "API Mask/1", Ver: "1", Default: false}
+
 // regMu защищает реестр: модули (modules.Syncer) применяют манифест
 // на горячую, параллельно идут хендшейки (v0.8).
 var regMu sync.RWMutex
@@ -67,7 +77,7 @@ var regMu sync.RWMutex
 // по умолчанию (пользовательский запрос: «сервер должен принимать все
 // протоколы по умолчанию»). Наполняется встроенными + манифестом модулей
 // (SetRegistry). rrp1 присутствует ВСЕГДА — это фундамент.
-var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT}
+var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT, ProtocolAPIMask}
 
 // registryVersion — версия реестра (берётся из манифеста модулей; пусто = встроенная).
 var registryVersion = ""
@@ -79,7 +89,7 @@ var registryVersion = ""
 // (v0.9.2: иначе сессия молча работала бы как rrp1, обе стороны думая,
 // что идёт заявленный протокол — прод-риск).
 // Будущий протокол добавляется кодом сюда — реестр подхватит из манифеста.
-var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT}
+var executableProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT, ProtocolAPIMask}
 
 // ExecutableIDs — протоколы, исполняемые этой сборкой сервера.
 func ExecutableIDs() []string {

@@ -592,7 +592,6 @@ class TunnelService : Service() {
         manager = ConnectionManager(sessionOwner)
         for (p in capped) startSession(p)
         registerNetworkWatching()
-        resetGraphHistory()
         startStatsLoop()
         // v1.5.0: балансер пер-сессионный (ConnectionManager тикает AUTO-сессии)
         val pHost = try { RrpUri.parse(capped.first().uri).host } catch (_: Exception) { "" }
@@ -684,7 +683,6 @@ class TunnelService : Service() {
                 // v1.5.0: per-сессионный снапшот для дашборда (JSON в extra)
                 val sessionsJson = sessionsJson()
                 // v0.9.2 (R4): история графика живёт в сервисе — переживает recreate
-                addGraphSample(drx * 1000f / STATS_INTERVAL_MS, dtx * 1000f / STATS_INTERVAL_MS)
 
                 // v0.8: счётчик за всё время (канон: RAM, запись на диск пореже)
                 prefs().edit()
@@ -1032,6 +1030,12 @@ class TunnelService : Service() {
         val cfg = RrpProtocols.camouflageConfig()
         // v0.9.5: локальный выбор клиента (0x2A) — выключено ⇒ шума нет вообще.
         if (prefs().getBoolean(KEY_CAMO_OFF, false)) return null
+        // v1.6.0: proto=apimask — камуфляж КАК ПРОТОКОЛ (изначальный замысел):
+        // пользователь ЯВНО выбрал имитацию API — шум работает даже без
+        // манифест-конфига (дефолтный бюджет 256КБ/день, как в манифесте).
+        if (!cfg.enabled && claimedProto() == Apimask.FEATURE) {
+            return apimaskDefaultPolicy()
+        }
         if (!cfg.enabled) return null
         val engine = Apimask.Engine(cfg)
         val label = RrpProtocols.camouflageLabel()
@@ -1050,7 +1054,25 @@ class TunnelService : Service() {
      * переживает офлайн клиента, применяется будущим сессиям.
      */
     private fun camCtlFlag(): Boolean? =
-        if (prefs().contains(KEY_CAMO_OFF)) !prefs().getBoolean(KEY_CAMO_OFF, false) else null
+        if (claimedProto() == Apimask.FEATURE) {
+            // v1.6.0: proto=apimask — серверный шум включаем сразу (0x2A on),
+            // выбор персистентен на сервере; явное 0x2A off от GUI всё ещё
+            // выключает (переписывает выбор).
+            true
+        } else if (prefs().contains(KEY_CAMO_OFF)) !prefs().getBoolean(KEY_CAMO_OFF, false) else null
+
+    /** v1.6.0: дефолтная политика шума для proto=apimask (без манифеста). */
+    private fun apimaskDefaultPolicy(): Apimask.NoisePolicy {
+        val cfg = Apimask.Config(Apimask.FEATURE, "API Mask", "1", true, 300, 900, 256 * 1024)
+        val engine = Apimask.Engine(cfg)
+        return Apimask.NoisePolicy(engine) { bytes, used, budget ->
+            if (bytes > 0) {
+                getString(R.string.apimask_beat, cfg.name, bytes, fmtBytes(used), fmtBytes(budget.toLong()))
+            } else {
+                getString(R.string.apimask_budget_done, cfg.name, fmtBytes(used), fmtBytes(budget.toLong()))
+            }
+        }
+    }
 
     /**
      * Управление камуфляжем из GUI (v0.9.5): сохранить выбор + честный лог +
@@ -1286,7 +1308,6 @@ class TunnelService : Service() {
         unregisterNetworkWatching()
         releaseWakeLock()
         persistUsageSafely()
-        resetGraphHistory()
         updateStatus(STATE_STOPPED, getString(R.string.status_stopped))
     }
 
@@ -1715,55 +1736,9 @@ class TunnelService : Service() {
             s == STATE_CONNECTED || s == STATE_PROTO
         @Volatile var lastProto: String = ""
 
-        /** v0.9.2 (R4): буфер графика живёт В СЕРВИСЕ (переживает recreate).
-         * Чередование [rx, tx], индекс головы, число валидных сэмплов (500мс).
-         * Служебные метрики: EMA-среднее и пик по окну истории. */
-        private const val GRAPH_SAMPLES = 120 // 60 c при 500 мс
-        private val graphLock = Any()
-        private val graph = FloatArray(GRAPH_SAMPLES * 2)
-        private var graphHead = 0
-        private var graphCount = 0
-        @Volatile private var graphAvgRxEma = 0f
-        @Volatile private var graphAvgTxEma = 0f
-        @Volatile private var graphPeak = 0f
-
-        /** Сэмпл скорости в историю графика (вызывается из stats-лупа). */
-        fun addGraphSample(rxRate: Float, txRate: Float) {
-            synchronized(graphLock) {
-                graphHead = (graphHead + 1) % GRAPH_SAMPLES
-                graph[graphHead * 2] = rxRate.coerceAtLeast(0f)
-                graph[graphHead * 2 + 1] = txRate.coerceAtLeast(0f)
-                if (graphCount < GRAPH_SAMPLES) graphCount++
-                graphAvgRxEma = graphAvgRxEma * 0.75f + rxRate.coerceAtLeast(0f) * 0.25f
-                graphAvgTxEma = graphAvgTxEma * 0.75f + txRate.coerceAtLeast(0f) * 0.25f
-                val peakNow = maxOf(rxRate, txRate).coerceAtLeast(0f)
-                if (peakNow > graphPeak) graphPeak = peakNow
-            }
-        }
-
-        /** Снимок истории для восстановления графика после recreate.
-         * Возвращает [rx, tx]-чередование, head, count. */
-        fun graphHistory(): Triple<FloatArray, Int, Int> {
-            synchronized(graphLock) {
-                return Triple(graph.copyOf(), graphHead, graphCount)
-            }
-        }
-
-        /** [avgRx, avgTx, peak] — сводка для подписей (байт/с). */
-        fun graphStats(): FloatArray = floatArrayOf(graphAvgRxEma, graphAvgTxEma, graphPeak)
-
-        /** Полный сброс истории (старт/стоп туннеля). */
-        fun resetGraphHistory() {
-            synchronized(graphLock) {
-                graph.fill(0f)
-                graphHead = 0
-                graphCount = 0
-            }
-            graphAvgRxEma = 0f
-            graphAvgTxEma = 0f
-            graphPeak = 0f
-        }
-
+        // v1.6.0: буфер графика УБРАН из сервиса — единственный источник
+        // истории главного графика: ui/GraphHistory (пишется ВСЕГДА:
+        // туннелем и общесистемным сэмплером Activity; переживает recreate).
         // v0.9.6: журнал ОДИН на всё приложение — LogStore (канал STATUS).
         // Окна (главная/обновление/лог) берут из него сообщения своего типа.
         fun snapshotLogs(): List<LogStore.Entry> = LogStore.snapshot(LogStore.Channel.STATUS)

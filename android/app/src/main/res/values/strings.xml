@@ -373,4 +373,8 @@
     <string name="graph_legend_rx">rx</string>
     <string name="graph_legend_tx">tx</string>
     <string name="graph_window">%1$d s</string>
+    <string name="btn_timeout">Timeout</string>
+    <string name="sess_bulk_add">Add all links</string>
+    <string name="sess_bulk_hint">One rrp:// link per line — bulk import</string>
+    <string name="sess_bulk_result">Added: %1$d · unrecognized: %2$d</string>
 </resources>

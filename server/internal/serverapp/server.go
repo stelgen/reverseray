@@ -572,6 +572,16 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.IdleTimeout = a.cfg.IdleTimeout()
 	scfg.PingInterval = a.cfg.PingInterval()
 	scfg.Protocol = proto
+	// v1.6.0: proto=apimask — камуфляж «API Mask» КАК ПРОТОКОЛ (изначальный
+	// замысел): персистентно включаем камуфляж устройства (cam-override=ON),
+	// READY заявляет features=["apimask"], NOISE ходят в обе стороны.
+	// Явное «выкл» клиента (0x2A) уважаем — не включаем обратно (канон).
+	if proto == rrp.ProtocolAPIMask.ID {
+		if !a.CamouflageOverrides()[device] {
+			a.setCamouflageOverride(device, true)
+		}
+		a.log.Info("rrp: apimask negotiated as protocol — camouflage ON", "device", device, "session", sid)
+	}
 	scfg.ProbeDialer = a.probeDialer()
 	// v0.9.2: обмен ключами mtproto2 — ВНУТРИ сессии (KEY_REQ уходит после
 	// старта Run, KEY_RESP читается Session.handle). Прежняя схема
@@ -633,7 +643,15 @@ func (a *App) handleTunnel(conn net.Conn) {
 		Protocols:    rrp.SupportedIDs(),
 		// v0.9.5: если клиент выключил apimask для этого устройства — features
 		// не заявляем (и локально, и в будущих сессиях: выбор персистентен).
-		Features: a.featuresFor(device),
+		// v1.6.0: proto=apimask — камуфляж КАК ПРОТОКОЛ: feature заявляем
+		// ВСЕГДА для такой сессии, независимо от состояния манифеста.
+		Features: func() []string {
+			f := a.featuresFor(device)
+			if proto == rrp.ProtocolAPIMask.ID && len(f) == 0 {
+				f = []string{rrp.ProtocolAPIMask.ID}
+			}
+			return f
+		}(),
 	}); err != nil {
 		_ = framed.Close()
 		return

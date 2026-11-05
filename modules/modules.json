@@ -1,50 +1,55 @@
 {
-  "schema": 1,
-  "version": "1.0.0",
-  "updated": "2026-10-24",
-  "protocols": [
-    {
-      "id": "rrp1",
-      "name": "RRP/1",
-      "ver": "1",
-      "default": true
+    "schema": 1,
+    "version": "1.0.0",
+    "updated": "2026-10-24",
+    "protocols": [
+        {
+            "id": "rrp1",
+            "name": "RRP/1",
+            "ver": "1",
+            "default": true
+        },
+        {
+            "id": "mtproto2",
+            "name": "MTProto/2",
+            "ver": "2.0"
+        },
+        {
+            "id": "wireguard",
+            "name": "WireGuard/1",
+            "ver": "1"
+        },
+        {
+            "id": "bittorrent",
+            "name": "BitTorrent/1",
+            "ver": "1"
+        },
+        {
+            "id": "apimask",
+            "name": "API Mask/1",
+            "ver": "1"
+        }
+    ],
+    "camouflage": {
+        "id": "apimask",
+        "name": "API Mask",
+        "ver": "1",
+        "enabled": true,
+        "min_interval_sec": 300,
+        "max_interval_sec": 900,
+        "max_bytes_per_day": 262144
     },
-    {
-      "id": "mtproto2",
-      "name": "MTProto/2",
-      "ver": "2.0"
+    "policy": {
+        "probe_default_target": "1.1.1.1:443",
+        "dns_probe_names": [
+            "o-o.myaddr.l.google.com",
+            "whoami.cloudflare"
+        ]
     },
-    {
-      "id": "wireguard",
-      "name": "WireGuard/1",
-      "ver": "1"
-    },
-    {
-      "id": "bittorrent",
-      "name": "BitTorrent/1",
-      "ver": "1"
+    "udp": {
+        "id": "udp",
+        "name": "UDP Relay",
+        "ver": "1",
+        "enabled": true
     }
-  ],
-  "camouflage": {
-    "id": "apimask",
-    "name": "API Mask",
-    "ver": "1",
-    "enabled": true,
-    "min_interval_sec": 300,
-    "max_interval_sec": 900,
-    "max_bytes_per_day": 262144
-  },
-  "policy": {
-    "probe_default_target": "1.1.1.1:443",
-    "dns_probe_names": [
-      "o-o.myaddr.l.google.com",
-      "whoami.cloudflare"
-    ]
-  },
-  "udp": {
-    "id": "udp",
-    "name": "UDP Relay",
-    "ver": "1",
-    "enabled": true
-  }
 }

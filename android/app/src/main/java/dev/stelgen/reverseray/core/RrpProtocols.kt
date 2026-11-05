@@ -29,7 +29,7 @@ object RrpProtocols {
     const val PREFERRED_AUTO = Wg.PROTO_ID
 
     /** Встроенные (манифест может расширить/выключить — кроме rrp1). */
-    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID)
+    val BUNDLED: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID, Apimask.FEATURE)
 
     /**
      * v0.9.2: протоколы, которые КЛИЕНТ УМЕЕТ ИСПОЛНЯТЬ (код конвертов
@@ -39,7 +39,7 @@ object RrpProtocols {
      * исполнять (зеркало server/internal/rrp: Negotiate смотрит только
      * исполняемые). Будущая реализация протокола добавляет себя сюда.
      */
-    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID)
+    val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID, Apimask.FEATURE)
 
     /** Умеет ли клиент исполнять протокол (не только показывать в GUI). */
     fun isExecutable(id: String?): Boolean {
@@ -64,9 +64,10 @@ object RrpProtocols {
     val BUNDLED_LABELS: Map<String, String> = mapOf(
         DEFAULT to "RRP/1", MtProto.PROTO_ID to "MTProto/2",
         Wg.PROTO_ID to "WireGuard/1", Torrent.PROTO_ID to "BitTorrent/1",
+        Apimask.FEATURE to "API Mask/1",
     )
     val BUNDLED_VERS: Map<String, String> =
-        mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0", Wg.PROTO_ID to "1", Torrent.PROTO_ID to "1")
+        mapOf(DEFAULT to "1", MtProto.PROTO_ID to "2.0", Wg.PROTO_ID to "1", Torrent.PROTO_ID to "1", Apimask.FEATURE to "1")
 
     // ---- динамический реестр (манифест модулей) ----
 

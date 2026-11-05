@@ -120,7 +120,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pageUpdate: View
     private lateinit var pageLog: View
     private lateinit var pageSettings: View
-    private lateinit var pageDash: View
     private lateinit var dashboard: DashboardView
 
     // ---------- главная ----------
@@ -444,9 +443,8 @@ class MainActivity : AppCompatActivity() {
             addTab(newTab().setText(R.string.tab_update))
             addTab(newTab().setText(R.string.tab_log))
             addTab(newTab().setText(R.string.tab_settings))
-            // v1.5.0: вкладка «Серверы» — В КОНЦЕ (позиции 0–4 не сдвигаются:
-            // скриншот-боты и логика showPage совместимы с v1.3.0)
-            addTab(newTab().setText(R.string.dash_tab))
+            // v1.6.0: вкладка «Серверы» УБРАНА — сессии живут на «Подключении»
+            // и графики серверов на Home (дашборд-вкладка была дублем).
             addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
                 override fun onTabSelected(tab: TabLayout.Tab) { showPage(tab.position) }
                 override fun onTabUnselected(tab: TabLayout.Tab) {}
@@ -461,8 +459,7 @@ class MainActivity : AppCompatActivity() {
         pageUpdate = buildUpdatePage()
         pageLog = buildLogPage()
         pageSettings = buildSettingsPage()
-        pageDash = buildDashboardPage()
-        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings, pageDash).forEach {
+        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEach {
             it.visibility = View.GONE
             pages.addView(it)
         }
@@ -478,7 +475,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPage(index: Int) {
-        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings, pageDash).forEachIndexed { i, p ->
+        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEachIndexed { i, p ->
             val show = i == index
             p.visibility = if (show) View.VISIBLE else View.GONE
             // v0.9.2 (R5): мягкий fade-переход вкладок (150мс, Views-канон)
@@ -492,9 +489,10 @@ class MainActivity : AppCompatActivity() {
         when (index) {
             2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
             3 -> { renderServiceLogs(); refreshLogFilterChips() }
-            4 -> { refreshSessionsCard(); refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
-            1 -> refreshConnLine()
-            5 -> if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
+            4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
+            // v1.6.0: сессии переехали на «Подключение» (вкладка 1) — там же
+            // мульти-ввод ссылок; Настройки больше не дублируют управление.
+            1 -> { refreshConnLine(); refreshSessionsCard() }
         }
     }
 
@@ -503,7 +501,10 @@ class MainActivity : AppCompatActivity() {
      * уходят в сервис командой ACTION_SESSION (connect/disconnect/reconnect/
      * probe/primary) — изолированно, без рестарта других сессий.
      */
-    private fun buildDashboardPage(): View {
+    // v1.6.0: дашборд сессий встроен в Home (вкладка «Серверы» удалена):
+    // общий график с полной сетевой инфой сверху, ниже — карточки по серверам
+    // с идентичными графиками. Действия — командами ACTION_SESSION.
+    private fun attachDashboardTo(parent: LinearLayout) {
         dashboard = DashboardView(this)
         dashboard.onAction = { id, cmd ->
             val i = Intent(this, TunnelService::class.java)
@@ -512,18 +513,16 @@ class MainActivity : AppCompatActivity() {
                 .putExtra(TunnelService.EXTRA_SESSION_CMD, cmd)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
         }
-        val p = page()
-        // v1.5.1: «+ Добавить сервер» ПРЯМО на вкладке «Серверы» — раньше
-        // добавление пряталось только в настройках (находили с трудом).
-        p.addView(
+        parent.addView(sectionTitle(R.string.sess_section_title, null))
+        parent.addView(
             row(
                 outlined(R.string.dash_add_server).apply {
                     setOnClickListener { showAddSessionDialog() }
                 },
             ),
         )
-        p.addView(dashboard)
-        return scrollWrap(p)
+        parent.addView(dashboard)
+        if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
     }
 
     /** Последний JSON-снапшот сессий из EXTRA_SESSIONS (пусто — сервис молчит). */
@@ -799,6 +798,10 @@ class MainActivity : AppCompatActivity() {
         inner.addView(connLineViews.last())
         p.addView(card(inner))
 
+        // v1.6.0: дашборд серверов на Home — общий график сверху (с полной
+        // сетевой инфой), ниже — карточка на каждый сервер с тем же графиком.
+        attachDashboardTo(p)
+
         // Единое консольное окно статуса (листается, live-кнопка в баре)
         homeConsole = StatusConsole(this).apply {
             setTitle(getString(R.string.console_title_service))
@@ -824,6 +827,47 @@ class MainActivity : AppCompatActivity() {
             textSize = 13f
             setPadding(0, dp(4), 0, dp(4))
         })
+
+        // v1.6.0: сессии (мульти-сервер) живут ЗДЕСЬ, на «Подключении» —
+        // раньше карточка была в «Настройках» (дубль, находили с трудом).
+        p.addView(sectionTitle(R.string.sess_section_title, null))
+        val sessionsCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
+        sessionsBox = sessionsCard.getChildAt(0) as LinearLayout
+        sessionsCard.addView(
+            row(outlined(R.string.sess_add).apply { setOnClickListener { showAddSessionDialog() } }),
+        )
+        p.addView(sessionsCard)
+        refreshSessionsCard()
+
+        // v1.6.0: МУЛЬТИ-ВВОД ссылок — многострочное окно: по ссылке на строку,
+        // импорт пачкой (вкл. по умолчанию, коннект — по кнопке Старт).
+        val bulkCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
+        val bulkInput = TextInputEditText(this).apply {
+            hint = getString(R.string.sess_bulk_hint)
+            minLines = 3
+            gravity = Gravity.TOP
+            setTextSize(12f)
+            setTypeface(Typeface.MONOSPACE)
+        }
+        bulkCard.addView(bulkInput)
+        bulkCard.addView(
+            row(
+                outlined(R.string.sess_bulk_add).apply {
+                    setOnClickListener {
+                        val text = bulkInput.text?.toString().orEmpty()
+                        val (okN, badN) = addBulkSessions(text)
+                        bulkInput.setText("")
+                        Toast.makeText(
+                            this@MainActivity,
+                            getString(R.string.sess_bulk_result, okN, badN),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        refreshSessionsCard()
+                    }
+                },
+            ),
+        )
+        p.addView(bulkCard)
 
         // v1.3.0: ссылка ОТОбражается (read-only, перенос строк); правка — через
         // кнопку «Изменить» с диалогом (Отмена/Очистить/ОК) и тестовым прогоном.
@@ -1078,15 +1122,8 @@ class MainActivity : AppCompatActivity() {
     private fun buildSettingsPage(): View {
         val p = page()
 
-        // v1.5.0: управление сессиями (мульти-сервер)
-        p.addView(sectionTitle(R.string.sess_section_title, null))
-        val sessionsCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
-        sessionsBox = sessionsCard.getChildAt(0) as LinearLayout
-        sessionsCard.addView(
-            row(outlined(R.string.sess_add).apply { setOnClickListener { showAddSessionDialog() } }),
-        )
-        p.addView(sessionsCard)
-        refreshSessionsCard()
+        // v1.6.0: карточка сессий перенесена на «Подключение» (дубль убран);
+        // здесь остаются тема/модули/лимиты/приложение.
 
         // Тема (v0.8.1): авто (настройка телефона; на старых Android — чёрная) / тёмная / светлая
         p.addView(buildThemeCard())
@@ -1489,7 +1526,22 @@ class MainActivity : AppCompatActivity() {
             else -> Mode.DISCONNECTED // STOPPED / INFO
         }
         applyButtonMode(mode)
+        // v1.6.0: тайм-аут подключения — 3 с без результата → красный «Тайм-аут»
+        // (попытки НЕ прекращаются: сервер/сеть медленные — это индикация, не сбой).
+        connectTimeoutHandler.removeCallbacks(connectTimeoutRunnable)
+        if (mode == Mode.CONNECTING) {
+            connectTimeoutHandler.postDelayed(connectTimeoutRunnable, CONNECT_TIMEOUT_MS)
+        }
     }
+
+    /** v1.6.0: 3 с в CONNECTING → красный «Тайм-аут» (канон владельца). */
+    private val connectTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val connectTimeoutRunnable = Runnable {
+        if (lastButtonMode == Mode.CONNECTING) applyButtonMode(Mode.TIMEOUT)
+    }
+
+    /** v1.6.0: тайм-аут-режим кнопки (красный «Тайм-аут», коннект продолжается). */
+    private val CONNECT_TIMEOUT_MS = 3_000L
 
     /**
      * v0.9.5 (канон владельца): Старт/Стоп — СИНЯЯ кнопка; подключение —
@@ -1502,6 +1554,7 @@ class MainActivity : AppCompatActivity() {
         CONNECTING(0xFFB26B00.toInt(), true, R.string.btn_connecting),
         CONNECTED(0xFF1565C0.toInt(), false, R.string.btn_stop_short),
         ERROR(0xFFC62828.toInt(), true, R.string.btn_error),
+        TIMEOUT(0xFFC62828.toInt(), true, R.string.btn_timeout),
     }
 
     private var buttonColorAnimator: android.animation.ValueAnimator? = null
@@ -1543,7 +1596,7 @@ class MainActivity : AppCompatActivity() {
         // «дыхание» (спокойная индикация живого туннеля), connecting —
         // современный indeterminate-дугу, иначе — скрыто. Смена цвета колец
         // следует режиму (connecting — янтарь, connected — зелень), трек — тема.
-        val ringState: Mode? = if (mode == Mode.CONNECTED || mode == Mode.CONNECTING) mode else null
+        val ringState: Mode? = if (mode == Mode.CONNECTED || mode == Mode.CONNECTING || mode == Mode.TIMEOUT) mode else null
         if (ringState != ringMode) {
             ringMode = ringState
             if (ringState == null) {
@@ -1552,7 +1605,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 pulseRing.visibility = View.VISIBLE
                 pulseRing.setColors(
-                    if (ringState == Mode.CONNECTING) 0xFFB26B00.toInt() else 0xFF39D98A.toInt(),
+                    when (ringState) {
+                        Mode.CONNECTING -> 0xFFB26B00.toInt()
+                        Mode.TIMEOUT -> 0xFFC62828.toInt()
+                        else -> 0xFF39D98A.toInt()
+                    },
                     0x26888888,
                 )
                 pulseRing.start(
@@ -1571,7 +1628,7 @@ class MainActivity : AppCompatActivity() {
         // не разрывая дыхание.
         if (mode != lastButtonMode) {
             lastButtonMode = mode
-            if (mode == Mode.CONNECTED || mode == Mode.CONNECTING) {
+            if (mode == Mode.CONNECTED || mode == Mode.CONNECTING || mode == Mode.TIMEOUT) {
                 if (breathMode != mode) {
                     breathMode = mode
                     breathing?.cancel()
@@ -1640,9 +1697,12 @@ class MainActivity : AppCompatActivity() {
         }
         // v0.9.5: первый пункт — AUTO (ссылка без proto=): сервер сам согласует
         // лучший общий протокол (wireguard → mtproto2 → rrp1).
+        // v1.6.0: в переключателе — ТОЛЬКО технические id протоколов
+        // (rrp1, mtproto2, wg1, torrent1, apimask) без версий/пояснений —
+        // профессиональный вид; версии остаются в строке статуса.
         val options = mutableListOf<String>()
         options.add(getString(R.string.proto_auto_label))
-        options.addAll(ids.map { RrpProtocols.displayName(it) })
+        options.addAll(ids.map { it })
         val checked = if (current.isBlank()) 0 else ids.indexOf(current).let { if (it < 0) 0 else it + 1 }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.proto_switch)
@@ -2955,6 +3015,31 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+    }
+
+    /**
+     * v1.6.0: пакетный импорт ссылок на «Подключении» (по одной на строку;
+     * бронепарсер чинит мусор сам). Добавляются включёнными — коннект по
+     * кнопке Старт (PRIMARY коннектится всегда, остальные — по enabled).
+     * @return (добавлено, нераспознано).
+     */
+    private fun addBulkSessions(text: String): Pair<Int, Int> {
+        if (text.isBlank()) return 0 to 0
+        val store = sessionStore()
+        var ok = 0
+        var bad = 0
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            val created = try {
+                val canonical = RrpUri.parse(line).serialize()
+                store.add(canonical, null, enabled = true)
+            } catch (_: Exception) {
+                null
+            }
+            if (created != null) ok++ else bad++
+        }
+        return ok to bad
     }
 
     private fun showRenameSessionDialog(id: String) {
