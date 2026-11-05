@@ -25,7 +25,9 @@ import dev.stelgen.reverseray.L10nUi
 import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
 import dev.stelgen.reverseray.core.AutoBalancer
+import dev.stelgen.reverseray.core.ConnectionManager
 import dev.stelgen.reverseray.core.LogStore
+import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.core.Msgs
 import dev.stelgen.reverseray.core.Negotiation
 import dev.stelgen.reverseray.core.ProtoFallback
@@ -92,6 +94,8 @@ class TunnelService : Service() {
     @Volatile private var lifetime: AtomicLong = AtomicLong(0)
 
     private inner class Runner(val target: Target) {
+        /** Сессия (профиль), к которой принадлежит раннер (v1.5.0). */
+        var sess: Sess? = null
         @Volatile var kick = false
         /** v0.9.2: раннер выведен из эксплуатации (смена протокола) — поток
          * runLoop обязан завершиться, а не пересоздать коннект (иначе
@@ -103,16 +107,31 @@ class TunnelService : Service() {
 
     private val runners = mutableListOf<Runner>()
 
-    // v1.0.2 (мультипоточность): состояние каждой сессии (ключ = порт) + ключ потока
-    private val sessionStates = java.util.concurrent.ConcurrentHashMap<Int, String>()
-    private val runnerStateKey = ThreadLocal<Int>()
+    // ---------- v1.5.0 «Multi-Server Core»: профили/сессии ----------
+
+    /** Хранилище профилей (миграция v1.3→v1.5 — в onCreate). */
+    private lateinit var sessionStore: SessionStore
+
+    /** Менеджер N сессий (живёт пока туннель поднят). */
+    @Volatile private var manager: ConnectionManager? = null
+
+    /** Сессия сервиса: профиль + точка агрегации состояния. */
+    private inner class Sess(val id: String, val profile: SessionStore.Profile)
+
+    private val sessById = java.util.concurrent.ConcurrentHashMap<String, Sess>()
+
+    /** Сессия, занятая валидационной сменой протокола (gate только для неё). */
+    @Volatile private var switchingSessionId: String? = null
+
+    // v1.0.2 (мультипоточность): состояние каждого раннера (ключ = sessId|порт)
+    private val sessionStates = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val runnerStateKey = ThreadLocal<String>()
     private val rnd = Random()
     private val lastNetKick = AtomicLong(0)
     @Volatile private var statsThread: Thread? = null
     private var lastTx = 0L
     private var lastRx = 0L
 
-    @Volatile private var config: RrpUriConfig? = null
     @Volatile private var stopping = true
     private var wakeLock: PowerManager.WakeLock? = null
     /** v0.9.6: Wi-Fi-lock — радио не засыпает в фоне (Android 4+, из коробки). */
@@ -123,98 +142,17 @@ class TunnelService : Service() {
     /** Идёт ли сейчас валидационная смена протокола. */
     @Volatile private var switchingProto = false
 
-    // ---------- v0.10: умный балансер протоколов (auto-режим) ----------
-
-    /** Решатель смены протоколов: гистерезис/кулдауны/round-robin. */
-    private val balancer = AutoBalancer()
-    @Volatile private var balancerThread: Thread? = null
-    @Volatile private var lastLiveSwitchBusy = false
-
-    private fun startBalancerLoop() {
-        if (balancerThread?.isAlive == true) return
-        balancer.reset(System.currentTimeMillis())
-        balancer.current = currentLiveProto()
-        val t = Thread({
-            while (!stopping) {
-                try {
-                    Thread.sleep(BAL_TICK_MS)
-                } catch (_: InterruptedException) {
-                    return@Thread
-                }
-                try {
-                    balancerTick()
-                } catch (_: Exception) {
-                }
-            }
-        }, "rrp-balancer").apply { isDaemon = true; start() }
-        balancerThread = t
-    }
-
-    /** Фактический протокол живой сессии (первого раннера). */
-    private fun currentLiveProto(): String {
-        val c = synchronized(runners) { runners.firstOrNull()?.client } ?: return RrpProtocols.PREFERRED_AUTO
-        return if (c.state == RrpClient.State.READY) c.negotiatedProto else RrpProtocols.PREFERRED_AUTO
-    }
-
-    /** Тик балансера: пробник → решение → бесшовная смена (без разрыва). */
-    private fun balancerTick() {
-        if (lastLiveSwitchBusy || switchingProto) return
-        val client = synchronized(runners) { runners.firstOrNull()?.client } ?: return
-        if (client.state != RrpClient.State.READY) return
-        // кандидаты для ЖИВОЙ смены: исполняемые клиентом ∩ реестр сервера,
-        // кроме rrp1 (возврат на rrp1 только через reconnect-путь)
-        balancer.candidates = RrpProtocols.EXECUTABLE.filter {
-            it != RrpProtocols.DEFAULT && client.serverProtocols.contains(it)
-        }
-        balancer.current = currentLiveProto()
-        when (val d = balancer.onSample(client.healthSample())) {
-            is AutoBalancer.Decision.Switch -> {
-                pushLog(
-                    Msgs.BAL_DEGRADED.t(
-                        d.reason, RrpProtocols.labelWithVer(balancer.current),
-                        RrpProtocols.labelWithVer(d.target),
-                    ),
-                )
-                lastLiveSwitchBusy = true
-                try {
-                    val ok = switchProtoLive(d.target)
-                    balancer.onSwitchResult(System.currentTimeMillis(), d.target, ok)
-                    if (ok) {
-                        val msg = getString(R.string.status_switch_done, RrpProtocols.labelWithVer(d.target))
-                        sendBroadcast(
-                            Intent(ACTION_STATUS).setPackage(packageName)
-                                .putExtra(EXTRA_STATE, STATE_CONNECTED)
-                                .putExtra(EXTRA_STATUS, msg)
-                                .putExtra(EXTRA_PROTO, d.target),
-                        )
-                    } else {
-                        pushLog(
-                            Msgs.BAL_FAIL_MARKED.t(
-                                RrpProtocols.labelWithVer(d.target),
-                                balancer.cooldownLeftSec(System.currentTimeMillis()),
-                            ),
-                        )
-                    }
-                } finally {
-                    lastLiveSwitchBusy = false
-                }
-            }
-            is AutoBalancer.Decision.Wait -> {
-                // деградация есть, но гистерезис/кулдаун молчат — DEBUG-канон,
-                // не спамим журнал: в лог попадает только реальная смена
-            }
-            AutoBalancer.Decision.Nothing -> {}
-        }
-    }
+    // ---------- v1.5.0: балансер пер-сессионный (в ConnectionManager);
+    // решение балансера исполняет sessionOwner.onBalancerSwitch (ниже).
 
     /**
-     * Бесшовная смена протокола во ВСЕХ живых сессиях (кадр 0x2C — согласование
-     * без разрыва связи). Ссылка НЕ меняется (AUTO остаётся AUTO — сервер
-     * переговорит при реконнекте сам). false — хоть одна сессия отказала.
+     * Бесшовная смена протокола в живых раннерах ОДНОЙ сессии (кадр 0x2C —
+     * согласование без разрыва связи). Ссылка НЕ меняется (AUTO остаётся AUTO —
+     * сервер переговорит при реконнекте сам). false — хоть один раннер отказал.
      */
-    private fun switchProtoLive(target: String): Boolean {
+    private fun switchProtoLiveOf(sess: Sess, target: String): Boolean {
         var all = true
-        val list = synchronized(runners) { runners.toList() }
+        val list = synchronized(runners) { runners.filter { it.sess === sess } }
         for (r in list) {
             val c = r.client
             if (c == null) {
@@ -229,15 +167,150 @@ class TunnelService : Service() {
         }
         return all
     }
+
+    /** Первый живой клиент сессии (для healthSample/proto снапшотов). */
+    private fun firstClientOf(sess: Sess): RrpClient? =
+        synchronized(runners) { runners.firstOrNull { it.sess === sess }?.client }
+
+    private fun runnersOf(sess: Sess): List<Runner> =
+        synchronized(runners) { runners.filter { it.sess === sess } }
+
+    private fun killRunnersOf(sess: Sess) {
+        val active = synchronized(runners) {
+            val list = runners.filter { it.sess === sess }
+            runners.removeAll { it.sess === sess }
+            list
+        }
+        active.forEach {
+            it.kick = true
+            it.retired = true
+            try { it.client?.close() } catch (_: Exception) {}
+        }
+    }
+
+    /** Сессия-владелец для менеджера: создаёт воркеры, принимает события. */
+    private val sessionOwner = object : ConnectionManager.Owner {
+        override fun createWorker(
+            profile: SessionStore.Profile,
+            sessionId: String,
+        ): ConnectionManager.Worker {
+            val sess = Sess(sessionId, profile)
+            sessById[sessionId] = sess
+            return SessionWorker(sess)
+        }
+
+        override fun onSessionLog(session: ConnectionManager.Session, message: String, kind: LogKind) {
+            pushLog("[${session.profile.name}] $message", kind)
+        }
+
+        override fun onSessionState(session: ConnectionManager.Session, state: String) {
+            sendBroadcast(
+                Intent(ACTION_STATUS).setPackage(packageName)
+                    .putExtra(EXTRA_STATE, state)
+                    .putExtra(EXTRA_STATUS, session.stateText.ifBlank { state })
+                    .putExtra(EXTRA_SESSION_ID, session.id)
+                    .putExtra(EXTRA_PROFILE_NAME, session.profile.name),
+            )
+            // дедлайн-обновление уведомления: постатрочное состояние сессий
+            try {
+                (applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                    .notify(NOTIF_ID, buildNotification(lastStatus))
+            } catch (_: Exception) {
+            }
+        }
+
+        override fun onSessionStats(session: ConnectionManager.Session, rxRate: Long, txRate: Long) {
+            // поля Session обновлены менеджером; сервис читает их в своём stats-лупе
+        }
+
+        override fun onBalancerSwitch(session: ConnectionManager.Session, target: String, reason: String) {
+            pushLog(
+                Msgs.BAL_DEGRADED.t(
+                    reason, RrpProtocols.labelWithVer(session.balancer.current),
+                    RrpProtocols.labelWithVer(target),
+                ),
+            )
+            val ok = switchProtoLiveOf(sessById[session.id] ?: return, target)
+            session.balancer.onSwitchResult(System.currentTimeMillis(), target, ok)
+            if (ok) {
+                val msg = getString(R.string.status_switch_done, RrpProtocols.labelWithVer(target))
+                sendBroadcast(
+                    Intent(ACTION_STATUS).setPackage(packageName)
+                        .putExtra(EXTRA_STATE, STATE_CONNECTED)
+                        .putExtra(EXTRA_STATUS, msg)
+                        .putExtra(EXTRA_PROTO, target)
+                        .putExtra(EXTRA_SESSION_ID, session.id)
+                        .putExtra(EXTRA_PROFILE_NAME, session.profile.name),
+                )
+            } else {
+                pushLog(
+                    Msgs.BAL_FAIL_MARKED.t(
+                        RrpProtocols.labelWithVer(target),
+                        session.balancer.cooldownLeftSec(System.currentTimeMillis()),
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Сетевой воркер одной сессии: раннеры по портам профиля (изолированно). */
+    private inner class SessionWorker(private val sess: Sess) : ConnectionManager.Worker {
+        override fun start() {
+            spawnRunnersFor(sess)
+        }
+
+        override fun stop() {
+            killRunnersOf(sess)
+        }
+
+        override fun kick() {
+            synchronized(runners) { runners.forEach { if (it.sess === sess) it.kick = true } }
+            if (runnersOf(sess).isEmpty() && !stopping) spawnRunnersFor(sess)
+        }
+
+        override fun bytesSnapshot(): Pair<Long, Long> {
+            var tx = 0L
+            var rx = 0L
+            synchronized(runners) {
+                runners.forEach { r ->
+                    if (r.sess !== sess) return@forEach
+                    r.client?.bytesSnapshot()?.let { (a, b) -> tx += a; rx += b }
+                }
+            }
+            return tx to rx
+        }
+
+        override fun healthSample(): AutoBalancer.Sample? = firstClientOf(sess)?.healthSample()
+
+        override fun negotiatedProto(): String = firstClientOf(sess)?.negotiatedProto ?: ""
+
+        override fun serverProtocols(): List<String> = firstClientOf(sess)?.serverProtocols ?: emptyList()
+
+        override fun switchProto(target: String): Boolean = switchProtoLiveOf(sess, target)
+
+        override fun isRunning(): Boolean = runnersOf(sess).isNotEmpty()
+
+        override fun autoBalance(): Boolean = claimedOf(sess.profile.uri).isBlank()
+    }
     /** Спидтест не молотит при каждом READY. */
     @Volatile private var speedTestBusy = false
     /** Ждун сброса лимита для авто-переподключения. */
     @Volatile private var limitWaitThread: Thread? = null
 
     private val clientListener = object : RrpClient.Listener {
+        /** Сессия, владеющая клиентом (v1.5.0: тегирование логов per-сессия). */
+        private fun sessOf(client: RrpClient): Sess? =
+            synchronized(runners) { runners.firstOrNull { it.client === client }?.sess }
+
         override fun onLog(client: RrpClient, message: String) {
             Log.d(TAG, "${client.host}:${client.port}: $message")
-            pushLog("${client.host}:${client.port}: $message")
+            val sess = sessOf(client)
+            if (sess != null) {
+                manager?.workerLog(sess.id, "${client.host}:${client.port}: $message", LogKind.INFO)
+                    ?: pushLog("[${sess.profile.name}] ${client.host}:${client.port}: $message")
+            } else {
+                pushLog("${client.host}:${client.port}: $message")
+            }
         }
 
         // v0.9.0: пин из ссылки не совпал — UI предлагает владельцу ЯВНО
@@ -253,6 +326,7 @@ class TunnelService : Service() {
 
         override fun onState(client: RrpClient, state: RrpClient.State) {
             if (state == RrpClient.State.READY) {
+                val sess = sessOf(client)
                 if (client.mtProtoActive) {
                     pushLog(getString(R.string.log_mtp_keys), LogKind.OK)
                 }
@@ -262,6 +336,12 @@ class TunnelService : Service() {
                         .putExtra(EXTRA_STATUS, client.negotiatedProto)
                         .putExtra(EXTRA_STATE, STATE_PROTO)
                         .putExtra(EXTRA_PROTO, client.negotiatedProto)
+                        .apply {
+                            sess?.let {
+                                putExtra(EXTRA_SESSION_ID, it.id)
+                                putExtra(EXTRA_PROFILE_NAME, it.profile.name)
+                            }
+                        }
                 )
                 maybeRunSpeedTest()
             }
@@ -323,8 +403,24 @@ class TunnelService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        ensureStore()
         lifetime = AtomicLong(prefs().getLong(KEY_TRAFFIC_LIFETIME, 0L))
     }
+
+    /** Ленивая инициализация SessionStore + ОДНОРАЗОВАЯ миграция v1.3→v1.5. */
+    private fun ensureStore() {
+        if (!::sessionStore.isInitialized) {
+            sessionStore = SessionStore(PrefsBackend(prefs()))
+            val migrated = sessionStore.migrateLegacy(prefs().getString(KEY_CONFIG, null))
+            if (migrated != null) {
+                pushLog(Msgs.SESSION_MIGRATED.t(migrated.name), LogKind.OK)
+            }
+        }
+    }
+
+    /** Профиль по id (или null). */
+    private fun profileById(id: String?): SessionStore.Profile? =
+        if (::sessionStore.isInitialized) sessionStore.byId(id) else null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -359,14 +455,24 @@ class TunnelService : Service() {
                 )
                 return START_STICKY
             }
+            ACTION_SESSION -> {
+                // v1.5.0: управление ОДНОЙ сессией из дашборда/настроек
+                ensureStore()
+                val id = intent.getStringExtra(EXTRA_SESSION_ID)
+                val cmd = intent.getStringExtra(EXTRA_SESSION_CMD) ?: ""
+                if (id != null) Thread({ handleSessionCommand(id, cmd) }, "rrp-sess").start()
+                return START_STICKY
+            }
             ACTION_ACCEPT_PIN -> {
                 // v0.9.0: владелец ЯВНО принял новый пин CA — обновляем ссылку,
                 // пишем в журнал и реконнектим. Никакого молчаливого доверия.
+                ensureStore()
                 val newPin = intent.getStringExtra(EXTRA_REAL_PIN)
                 val link = prefs().getString(KEY_CONFIG, null)
                 val updated = newPin?.let { RrpUri.replacePin(link ?: "", it) }
                 if (updated != null) {
-                    prefs().edit().putString(KEY_CONFIG, updated).apply()
+                    // v1.5.0: пин обновляется в URI PRIMARY-профиля + зеркало
+                    commitPrimaryUri(updated)
                     pushLog(Msgs.PIN_ACCEPTED.t(newPin ?: ""), LogKind.WARN)
                     startTunnel()
                 } else {
@@ -400,6 +506,20 @@ class TunnelService : Service() {
      * продолжала подключаться mtproto2. Теперь proto всегда из ссылки;
      * KEY_PROTO выведен из употребления (не читается).
      */
+    /** Протокол ИЗ URI профиля (исполняемая нормализация) — v1.5.0. */
+    internal fun protoOf(uri: String): String = try {
+        RrpProtocols.normalizeExecutable(RrpUri.parse(uri).proto)
+    } catch (_: Exception) {
+        RrpProtocols.PREFERRED_AUTO
+    }
+
+    /** Заявленный протокол ИЗ URI профиля ("" = AUTO) — v1.5.0. */
+    internal fun claimedOf(uri: String): String = try {
+        RrpUri.parse(uri).proto.trim()
+    } catch (_: Exception) {
+        ""
+    }
+
     /** Честное имя протокола для статусов: AUTO — словом, остальное — меткой. */
     internal fun protoDisplayName(id: String): String =
         if (id == PROTO_AUTO || id.isBlank()) getString(R.string.proto_auto_label)
@@ -431,26 +551,33 @@ class TunnelService : Service() {
     }
 
     private fun startTunnel() {
-        if (!stopping && runners.isNotEmpty()) {
+        ensureStore()
+        if (!stopping && sessById.isNotEmpty()) {
             updateStatus(STATE_INFO, getString(R.string.status_already_running))
             return
         }
-        val cfg = try {
-            prefs().getString(KEY_CONFIG, null)?.let { RrpUri.parse(it) }
-        } catch (e: Exception) {
-            Log.w(TAG, getString(R.string.log_config_parse_failed, e.message))
-            null
+        // v1.5.0: набор сессий = PRIMARY (всегда — главная кнопка/BootReceiver)
+        // + включённые профили; guardrail — максимум MAX_SESSIONS одновременных.
+        val primary = sessionStore.active()
+        val wanted = LinkedHashMap<String, SessionStore.Profile>()
+        primary?.let { wanted[it.id] = it }
+        for (p in sessionStore.profiles()) {
+            if (p.enabled && p.id != primary?.id) wanted[p.id] = p
         }
-        if (cfg == null) {
+        val capped = wanted.values.take(ConnectionManager.MAX_SESSIONS)
+        if (capped.isEmpty()) {
             updateStatus(STATE_ERROR, getString(R.string.status_no_config))
             stopSelf()
             return
         }
-        config = cfg
         stopping = false
         startForegroundCompat(getString(R.string.notif_starting))
         acquireWakeLock()
-        logDevicePreamble(cfg)
+        // преамбула устройства — по PRIMARY (канон одной строки на старт)
+        try {
+            val pcfg = RrpUri.parse(capped.first().uri)
+            logDevicePreamble(pcfg)
+        } catch (_: Exception) {}
 
         // v0.7.4: «только по Wi-Fi» — в мобильной сети туннель не поднимаем;
         // NetworkCallback дёрнет kickAll при появлении Wi-Fi.
@@ -461,31 +588,53 @@ class TunnelService : Service() {
             return
         }
 
-        spawnRunners()
+        manager = ConnectionManager(sessionOwner)
+        for (p in capped) startSession(p)
         registerNetworkWatching()
         resetGraphHistory()
         startStatsLoop()
-        // v0.10: auto-режим (ссылка без proto=) — умный балансер протоколов:
-        // мониторит качество (скважность/потери/RTT) и ротирует протоколы
-        // round-robin'ом по гистерезису, без «скакания» каждые 100 мс/5 с.
-        if (claimedProto().isBlank()) startBalancerLoop()
-        updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, cfg.host))
+        // v1.5.0: балансер пер-сессионный (ConnectionManager тикает AUTO-сессии)
+        val pHost = try { RrpUri.parse(capped.first().uri).host } catch (_: Exception) { "" }
+        updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, pHost))
     }
 
-    private fun spawnRunners() {
-        val cfg = config ?: return
-        val proto = currentProto()
+    /** Старт одной сессии (изолированно: неудача не роняет другие). */
+    private fun startSession(p: SessionStore.Profile) {
+        manager?.start(p)
+    }
+
+    /** Все сессии из реестра (для kickAll-поднятия после Wi-Fi). */
+    private fun startAllSessions() {
+        for (p in sessionStore.profiles()) {
+            if (p.enabled || p.id == sessionStore.activeId()) {
+                if (sessById.containsKey(p.id)) continue
+                if (sessById.size >= ConnectionManager.MAX_SESSIONS) break
+                startSession(p)
+            }
+        }
+    }
+
+    /** Раннеры ОДНОЙ сессии (по портам профиля) — v1.5.0. */
+    private fun spawnRunnersFor(sess: Sess) {
+        val cfg = try {
+            RrpUri.parse(sess.profile.uri)
+        } catch (_: Exception) {
+            return
+        }
+        val proto = protoOf(sess.profile.uri)
         for (port in cfg.ports) {
             val r = Runner(Target(cfg.host, port))
+            r.sess = sess
             synchronized(runners) { runners.add(r) }
+            val stateKey = "${sess.id}|$port"
             Thread({
-                runnerStateKey.set(port)
+                runnerStateKey.set(stateKey)
                 try {
                     runLoop(r, proto)
                 } finally {
-                    sessionStates.remove(port)
+                    sessionStates.remove(stateKey)
                 }
-            }, "rrp-conn-$port").start()
+            }, "rrp-conn-${sess.id.take(4)}-$port").start()
         }
     }
 
@@ -531,6 +680,8 @@ class TunnelService : Service() {
                 val drx = rx - lastRx
                 lastTx = tx
                 lastRx = rx
+                // v1.5.0: per-сессионный снапшот для дашборда (JSON в extra)
+                val sessionsJson = sessionsJson()
                 // v0.9.2 (R4): история графика живёт в сервисе — переживает recreate
                 addGraphSample(drx * 1000f / STATS_INTERVAL_MS, dtx * 1000f / STATS_INTERVAL_MS)
 
@@ -547,6 +698,7 @@ class TunnelService : Service() {
                         .putExtra(EXTRA_RX_RATE, drx * 1000L / STATS_INTERVAL_MS)
                         .putExtra(EXTRA_TX_TOTAL, tx)
                         .putExtra(EXTRA_RX_TOTAL, rx)
+                        .putExtra(EXTRA_SESSIONS, sessionsJson)
                         .putExtra(EXTRA_PKT_TX_COUNT, pk[0])
                         .putExtra(EXTRA_PKT_RX_COUNT, pk[1])
                         .putExtra(EXTRA_PKT_TX_SIZE, pk[2])
@@ -578,6 +730,48 @@ class TunnelService : Service() {
             }
         }, "rrp-stats").apply { isDaemon = true; start() }
         statsThread = t
+    }
+
+    /**
+     * v1.5.0: JSON-снапшот всех сессий для дашборда (EXTRA_SESSIONS):
+     * state/rates/totals/proto/rtt/реконнекты/ошибки/аптайм — по сессии.
+     */
+    private fun sessionsJson(): String {
+        val mgr = manager ?: return "[]"
+        val now = System.currentTimeMillis()
+        val arr = org.json.JSONArray()
+        for (s in mgr.all()) {
+            val proto = try { s.worker.negotiatedProto() } catch (_: Exception) { "" }
+            arr.put(
+                org.json.JSONObject()
+                    .put("id", s.id)
+                    .put("name", s.profile.name)
+                    .put("state", s.state)
+                    .put("rx_rate", s.rxRate)
+                    .put("tx_rate", s.txRate)
+                    .put("rx_total", s.rxTotal)
+                    .put("tx_total", s.txTotal)
+                    .put("proto", proto)
+                    .put("rtt_ms", s.lastRttMs)
+                    .put("reconnects", s.reconnects.get())
+                    .put("errors", s.errors.get())
+                    .put("switches", s.protoSwitches.get())
+                    .put("uptime_ms", if (s.startedAtMs.get() > 0) now - s.startedAtMs.get() else 0)
+                    .put("primary", s.id == sessionStore.activeId()),
+            )
+        }
+        return arr.toString()
+    }
+
+    /**
+     * Обновить URI PRIMARY-профиля + зеркало KEY_CONFIG (единая точка для
+     * всех legacy-писателей конфига: accept-pin, вставка ссылки в UI).
+     */
+    private fun commitPrimaryUri(canonical: String) {
+        ensureStore()
+        prefs().edit().putString(KEY_CONFIG, canonical).apply()
+        val active = sessionStore.active() ?: return
+        sessionStore.update(active.copy(uri = canonical))
     }
 
     // ---------- лимит трафика ----------
@@ -722,6 +916,10 @@ class TunnelService : Service() {
         val commitProtoId = if (newProto == PROTO_AUTO) "" else newProto
         val validateProto = if (newProto == PROTO_AUTO) RrpProtocols.PREFERRED_AUTO else newProto
         switchingProto = true
+        // v1.5.0: смена протокола — ОПЕРАЦИЯ НАД PRIMARY (главная кнопка/пикер);
+        // другие сессии живут своей жизнью (изоляция).
+        val primarySess = sessionStore.activeId()?.let { sessById[it] }
+        switchingSessionId = sessionStore.activeId()
         try {
             val cfg = try {
                 RrpUri.parse(p.getString(KEY_CONFIG, null) ?: "")
@@ -730,23 +928,20 @@ class TunnelService : Service() {
                 return
             }
             updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, protoDisplayName(newProto)))
-            // v0.9.2 (R1): АТОМАРНОСТЬ ПЕРЕКЛЮЧЕНИЯ — старые коннекты
+            // v0.9.2 (R1): АТОМАРНОСТЬ ПЕРЕКЛЮЧЕНИЯ — старые коннекты PRIMARY
             // гарантированно закрыты ДО provisional-коннекта с новым протоколом.
-            // Раньше валидационный коннект шёл поверх живых runners: сервер
-            // держал две сессии, реконнект-луп параллельно молотил свой набор
-            // коннектов (в логах «Already running», двойные AUTH, фоллбек в
-            // середине свитча). Теперь: kill → validate → commit → spawn.
-            killRunners()
+            // Теперь: kill → validate → commit → spawn (только PRIMARY-сессия).
+            primarySess?.let { killRunnersOf(it) }
             var lastErr = ""
             for (attempt in 1..SWITCH_RETRIES) {
                 val client = buildClient(cfg, validateProto, validate = true)
                 try {
                     client.connect()
                     // валидация (PROBE) уже прошла внутри connect() — коммитим
-                    commitProto(commitProtoId, cfg)
+                    commitProto(commitProtoId, cfg, primarySess)
                     updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, protoDisplayName(commitProtoId)))
                     try { client.close() } catch (_: Exception) {}
-                    spawnRunners()
+                    primarySess?.let { spawnRunnersFor(it) }
                     return
                 } catch (e: Exception) {
                     lastErr = e.message ?: "?"
@@ -769,9 +964,10 @@ class TunnelService : Service() {
                     .putExtra(EXTRA_PROTO, oldProto)
             )
             // v0.9.2 (R1): откат — рабочие коннекты старого протокола возрождаются
-            if (!stopping) spawnRunners()
+            if (!stopping) primarySess?.let { spawnRunnersFor(it) }
         } finally {
             switchingProto = false
+            switchingSessionId = null
         }
     }
 
@@ -779,35 +975,30 @@ class TunnelService : Service() {
      * Коммит ПОСЛЕ успешной валидации: протокол отражается в ссылке
      * (v0.9.2: единый источник — ссылка, KEY_PROTO больше не пишется).
      */
-    private fun commitProto(proto: String, cfg: RrpUriConfig) {
-        val updated = cfg.copy(proto = proto).serialize()
-        prefs().edit().putString(KEY_CONFIG, updated).apply()
-        pushLog(getString(R.string.log_proto_applied, proto))
-    }
-
     /**
-     * v0.9.2 (R1): kill всех рабочих коннектов БЕЗ перезапуска — идёт
-     * валидационная смена протокола. Раннеры получают retired=true:
-     * их потоки runLoop завершаются, а не пересоздают коннекты.
+     * Коммит ПОСЛЕ успешной валидации: протокол отражается в URI профиля
+     * (v1.5.0: профиль — источник правды; зеркало KEY_CONFIG — для PRIMARY).
      */
-    private fun killRunners() {
-        val active: List<Runner>
-        synchronized(runners) {
-            active = runners.toList()
-            runners.clear()
+    private fun commitProto(proto: String, cfg: RrpUriConfig, sess: Sess?) {
+        val updated = cfg.copy(proto = proto).serialize()
+        if (sess != null) {
+            sessionStore.update(sess.profile.copy(uri = updated))
+            if (sess.id == sessionStore.activeId()) {
+                prefs().edit().putString(KEY_CONFIG, updated).apply()
+            }
+        } else {
+            prefs().edit().putString(KEY_CONFIG, updated).apply()
         }
-        active.forEach {
-            it.kick = true
-            it.retired = true
-            try { it.client?.close() } catch (_: Exception) {}
-        }
+        pushLog(getString(R.string.log_proto_applied, proto))
     }
 
     /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
     private fun restartRunnersQuietly() {
         if (stopping) return
-        killRunners()
-        spawnRunners()
+        // v1.5.0: сессий может быть несколько — перезапускаем все живые
+        val sess = sessById.values.toList()
+        sess.forEach { killRunnersOf(it) }
+        sess.forEach { spawnRunnersFor(it) }
     }
 
     private fun buildClient(cfg: RrpUriConfig, proto: String, validate: Boolean): RrpClient {
@@ -893,7 +1084,6 @@ class TunnelService : Service() {
     }
 
     private fun runLoop(r: Runner, proto: String) {
-        var attempt = 0
         var lastError = "?"
         // v0.8.1: подряд идущие неудачи на ТЕКУЩЕМ протоколе (для фоллбека)
         var failStreak = 0
@@ -901,19 +1091,26 @@ class TunnelService : Service() {
         // «просили → дали» не спамит при каждом реконнекте
         var lastNegotiationNotice: String? = null
         while (!stopping) {
-            val cfg = config ?: break
+            // v1.5.0: конфиг сессии — ИЗ ПРОФИЛЯ (не из зеркала KEY_CONFIG;
+            // зеркало держим синхронным только для legacy-кода).
+            val profile = r.sess?.profile ?: return
+            val cfg = try {
+                RrpUri.parse(profile.uri)
+            } catch (_: Exception) {
+                return
+            }
             // v0.9.2 (R1): ГЕЙТ смены протокола — во время валидационного
-            // provisional-коннекта реконнект-луп не молотит свои попытки
-            // (атомарность: kill → validate → commit → spawn).
-            while (switchingProto && !stopping) {
+            // provisional-коннекта СЕССИИ-СВИТЧА реконнект-луп не молотит свои
+            // попытки (атомарность: kill → validate → commit → spawn);
+            // другие сессии живут своей жизнью (изоляция v1.5.0).
+            while (switchingProto && r.sess?.id == switchingSessionId && !stopping) {
                 try { Thread.sleep(200) } catch (_: InterruptedException) { return }
             }
             if (stopping || r.retired) return
             // протокол перечитываем КАЖДУЮ итерацию: так подхватывается
             // и смена протокола, и фоллбек, и заморозка обновлений (без пересоздания)
-            // v0.9.2 (R2): протокол — только из ссылки (proto=), не из KEY_PROTO
-            val useProto = currentProto()
-            val claimed = claimedProto()
+            val useProto = protoOf(profile.uri)
+            val claimed = claimedOf(profile.uri)
             // v0.9.2 (R9): честный лог — протокол заявлен модулем/ссылкой,
             // но эта сборка его ещё не исполняет → коннект на rrp1.
             if (claimed.isNotBlank() && claimed != useProto) {
@@ -929,7 +1126,7 @@ class TunnelService : Service() {
                 pin = cfg.pin,
                 allowLan = allowLan(),
                 listener = clientListener,
-                deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
+                deviceName = (cfg.name?.takeIf { it.isNotBlank() } ?: profile.name)?.takeIf { it.isNotBlank() } ?: "phone-1",
                 transport = cfg.transport,
                 agentName = "ReverseRay-Android/" + appVersion(),
                 noisePolicy = buildNoisePolicy(),
@@ -939,6 +1136,8 @@ class TunnelService : Service() {
             r.client = client
             try {
                 client.connect()
+                // v1.5.0: успех коннекта — сброс пер-сессионного backoff
+                r.sess?.id?.let { manager?.workerConnected(it) }
                 // v0.9.7 (канон «явные статусы согласования»): сервер ответил
                 // ДРУГИМ протоколом, чем запрошен (AUTO-предпочтение или явный
                 // proto=) — честный WARN вместо молчаливого даунгрейда.
@@ -949,7 +1148,6 @@ class TunnelService : Service() {
                     }
                 }
                 failStreak = 0
-                attempt = 0
                 updateStatus(STATE_CONNECTED, getString(R.string.status_connected, r.target.port))
                 while (!stopping && !switchingProto && client.state == RrpClient.State.READY) {
                     try {
@@ -968,10 +1166,12 @@ class TunnelService : Service() {
                 pushLog(getString(R.string.status_auth_failed), LogKind.ERR)
                 updateStatus(STATE_ERROR, getString(R.string.status_auth_failed))
                 r.client = null
+                r.sess?.id?.let { manager?.workerFatal(it, getString(R.string.status_auth_failed)) }
                 return
             } catch (e: Exception) {
                 lastError = e.message ?: "?"
                 failStreak++
+                r.sess?.id?.let { manager?.workerFailed(it, lastError) }
                 updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, lastError))
                 // v0.8.1 КАНОН ФОЛЛБЕКА: новый модуль протокола сломал клиент →
                 // откатываемся на предыдущий рабочий (rrp1). Сервер НЕ откатываем
@@ -979,9 +1179,9 @@ class TunnelService : Service() {
                 // может быть отключено — модули заморожены, это не должно ломать).
                 // v0.9.2 (R1): во время смены протокола фоллбек не срабатывает —
                 // откат сделает switchProtocol после валидации.
-                if (!switchingProto && ProtoFallback.shouldFallback(useProto, failStreak)) {
+                if (r.sess?.id != switchingSessionId && ProtoFallback.shouldFallback(useProto, failStreak)) {
                     pushLog(ProtoFallback.fallbackReason(useProto), LogKind.WARN)
-                    applyProtoFallback(useProto)
+                    applyProtoFallback(r.sess, useProto)
                     return
                 }
             } finally {
@@ -989,14 +1189,14 @@ class TunnelService : Service() {
             }
             r.client = null
             if (stopping || r.retired) return
-            if (switchingProto) {
+            if (r.sess?.id == switchingSessionId) {
                 // переход занят валидацией: попытка не считается, backoff сбросится
-                attempt = 0
                 failStreak = 0
                 continue
             }
-            attempt++
-            val delay = RrpClient.backoffDelayMs(attempt - 1, rnd)
+            // v1.5.0: пер-сессионный backoff ведёт ConnectionManager
+            val delay = r.sess?.let { manager?.workerFailed(it.id, lastError) }
+                ?: RrpClient.backoffDelayMs(0, rnd)
             // ERROR держится на экране минимум HOLD_ERROR_MS, чтобы юзер
             // успел прочитать причину, а не мигал «реконнект».
             try { Thread.sleep(ERROR_HOLD_MS) } catch (_: InterruptedException) {}
@@ -1011,13 +1211,23 @@ class TunnelService : Service() {
      * ссылку (proto= отражает реально работающий), перезапускаем коннекты.
      * UI получает STATE_PROTO_ROLLBACK и обновляет строку протокола.
      */
-    private fun applyProtoFallback(brokenProto: String) {
-        val p = prefs()
+    /**
+     * v0.8.1: клиентский фоллбек на фундамент (rrp1) — SCOPE ОДНОЙ СЕССИИ
+     * (v1.5.0): протокол отражается в URI профиля (и в зеркале — если сессия
+     * PRIMARY), перезапускаются только раннеры этой сессии.
+     */
+    private fun applyProtoFallback(sess: Sess?, brokenProto: String) {
         // v0.9.2 (R2): протокол живёт только в ссылке
         try {
-            val cfg = RrpUri.parse(p.getString(KEY_CONFIG, "") ?: "")
+            val cfg = RrpUri.parse(sess?.profile?.uri ?: "")
             if (cfg.proto != RrpProtocols.DEFAULT) {
-                p.edit().putString(KEY_CONFIG, cfg.copy(proto = RrpProtocols.DEFAULT).serialize()).apply()
+                val updated = cfg.copy(proto = RrpProtocols.DEFAULT).serialize()
+                if (sess != null) {
+                    sessionStore.update(sess.profile.copy(uri = updated))
+                    if (sess.id == sessionStore.activeId()) {
+                        prefs().edit().putString(KEY_CONFIG, updated).apply()
+                    }
+                }
             }
         } catch (_: Exception) {
         }
@@ -1027,8 +1237,9 @@ class TunnelService : Service() {
                 .putExtra(EXTRA_STATUS, ProtoFallback.fallbackReason(brokenProto))
                 .putExtra(EXTRA_PROTO, RrpProtocols.DEFAULT)
         )
-        if (!stopping) {
-            restartRunnersQuietly()
+        if (!stopping && sess != null) {
+            killRunnersOf(sess)
+            spawnRunnersFor(sess)
         }
     }
 
@@ -1052,8 +1263,10 @@ class TunnelService : Service() {
 
     private fun stopTunnel() {
         stopping = true
-        balancerThread?.interrupt()
-        balancerThread = null
+        // v1.5.0: все сессии через менеджер (каждая — изолированный stop)
+        manager?.stopAll()
+        manager = null
+        sessById.clear()
         val active: List<Runner>
         synchronized(runners) {
             active = runners.toList()
@@ -1125,9 +1338,12 @@ class TunnelService : Service() {
             updateStatus(STATE_INFO, getString(R.string.status_wait_wifi))
             return
         }
-        synchronized(runners) { runners.forEach { it.kick = true } }
+        manager?.kickAll()
         // если туннель ещё не поднимался из-за отсутствия Wi-Fi — поднимаем
-        if (runners.isEmpty() && !stopping) spawnRunners()
+        if (manager == null && sessById.isEmpty() && !stopping) {
+            manager = ConnectionManager(sessionOwner)
+            startAllSessions()
+        }
     }
 
     private fun unregisterNetworkWatching() {
@@ -1174,12 +1390,35 @@ class TunnelService : Service() {
             .setContentText(text)
             .setContentIntent(contentIntent)
             .setOngoing(true)
+        // v1.5.0: групповая нотификация — построчное состояние сессий (канал один)
+        val lines = manager?.all().orEmpty()
+        if (lines.size > 1 && Build.VERSION.SDK_INT >= 16) {
+            val style = Notification.InboxStyle()
+            for (s in lines) {
+                val mark = when (s.state) {
+                    STATE_CONNECTED, STATE_PROTO -> "●"
+                    STATE_CONNECTING, STATE_RETRY -> "◌"
+                    STATE_STOPPED -> "–"
+                    else -> "✕"
+                }
+                style.addLine("$mark ${s.profile.name}: ${sessionStateShort(s.state)}")
+            }
+            builder.setStyle(style)
+        }
         return if (Build.VERSION.SDK_INT >= 16) {
             builder.build()
         } else {
             @Suppress("DEPRECATION")
             builder.getNotification() // API 14-15: build() ещё нет
         }
+    }
+
+    /** Короткая метка состояния сессии для строки уведомления. */
+    private fun sessionStateShort(state: String): String = when (state) {
+        STATE_CONNECTED, STATE_PROTO -> getString(R.string.notif_session_up)
+        STATE_CONNECTING, STATE_RETRY -> getString(R.string.notif_session_connecting)
+        STATE_STOPPED -> getString(R.string.notif_session_off)
+        else -> getString(R.string.notif_session_error)
     }
 
     private fun createChannel() {
@@ -1234,22 +1473,36 @@ class TunnelService : Service() {
 
     // ---------- статус ----------
 
+    /** Приоритет агрегата статусов: PIN > LIMIT > CONNECTED > CONNECTING > ERROR. */
+    private fun aggregateStates(states: Collection<String>, fallback: String): String = when {
+        states.isEmpty() -> fallback
+        states.any { it == STATE_PIN_MISMATCH } -> STATE_PIN_MISMATCH
+        states.any { it == STATE_LIMIT_REACHED } -> STATE_LIMIT_REACHED
+        states.any { it == STATE_CONNECTED || it == STATE_PROTO } -> STATE_CONNECTED
+        states.any { it == STATE_CONNECTING || it == STATE_RETRY || it == STATE_PROTO_ROLLBACK } -> STATE_CONNECTING
+        states.any { it == STATE_ERROR } -> STATE_ERROR
+        else -> fallback
+    }
+
     private fun updateStatus(state: String, text: String) {
         lastStatus = text
         // v0.9.2 (R3): источник истины для UI — сервис (переживает recreate).
-        // v1.0.2 (мультипоточность): N сессий на устройство — АГРЕГАТНЫЙ статус
-        // (кнопка/уведомление не дёргаются разнобоем сессий; лог — честный,
-        // по факту конкретной сессии). Приоритет агрегата: PIN > LIMIT >
-        // CONNECTED > CONNECTING > ERROR.
+        // v1.5.0 (Multi-Server Core): агрегат ДВУХ уровней — внутри сессии
+        // (по портам) и глобальный (по сессиям менеджера). Кнопка/уведомление
+        // не дёргаются разнобоем; события сессий уходят с sessionId/name.
         val key = runnerStateKey.get()
-        if (key != null) sessionStates[key] = state
-        val agg = if (key == null || sessionStates.size <= 1) state else when {
-            sessionStates.values.any { it == STATE_PIN_MISMATCH } -> STATE_PIN_MISMATCH
-            sessionStates.values.any { it == STATE_LIMIT_REACHED } -> STATE_LIMIT_REACHED
-            sessionStates.values.any { it == STATE_CONNECTED || it == STATE_PROTO } -> STATE_CONNECTED
-            sessionStates.values.any { it == STATE_CONNECTING || it == STATE_RETRY || it == STATE_PROTO_ROLLBACK } -> STATE_CONNECTING
-            sessionStates.values.any { it == STATE_ERROR } -> STATE_ERROR
-            else -> state
+        var sessAgg: String? = null
+        if (key != null) {
+            sessionStates[key] = state
+            val sessId = key.substringBefore('|')
+            sessAgg = aggregateStates(sessionStates.filterKeys { it.startsWith("$sessId|") }.values, state)
+            manager?.workerState(sessId, sessAgg, text, "")
+        }
+        val mgr = manager
+        val agg = if (key == null || mgr == null || mgr.count() <= 1) {
+            sessAgg ?: state
+        } else {
+            aggregateStates(mgr.all().map { it.state }, state)
         }
         lastState = agg
         lastProto = claimedProto()
@@ -1266,11 +1519,84 @@ class TunnelService : Service() {
                 .setPackage(packageName)
                 .putExtra(EXTRA_STATUS, text)
                 .putExtra(EXTRA_STATE, agg)
+                .apply {
+                    if (key != null) {
+                        putExtra(EXTRA_SESSION_ID, key.substringBefore('|'))
+                        profileById(key.substringBefore('|'))?.let {
+                            putExtra(EXTRA_PROFILE_NAME, it.name)
+                        }
+                    }
+                }
         )
         try {
             (applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(NOTIF_ID, buildNotification(text))
         } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * v1.5.0: команды дашборда по сессии: connect/disconnect/reconnect/probe/
+     * primary. Изолированно — затрагивается только одна сессия.
+     */
+    private fun handleSessionCommand(id: String, cmd: String) {
+        val profile = profileById(id) ?: return
+        val mgr = manager
+        when (cmd) {
+            "connect" -> {
+                if (mgr == null || !sessById.containsKey(id)) {
+                    if (mgr != null && mgr.count() >= ConnectionManager.MAX_SESSIONS) {
+                        pushLog(getString(R.string.dash_sessions_limit, ConnectionManager.MAX_SESSIONS), LogKind.WARN)
+                        return
+                    }
+                    sessionStore.setEnabled(id, true)
+                    if (mgr != null) mgr.start(sessionStore.byId(id) ?: return)
+                    else startTunnel()
+                }
+            }
+            "disconnect" -> {
+                sessionStore.setEnabled(id, false)
+                mgr?.stop(id)
+                sessById.remove(id)
+            }
+            "reconnect" -> {
+                sessionStore.setEnabled(id, true)
+                mgr?.stop(id)
+                sessById.remove(id)
+                if (mgr == null) startTunnel() else mgr.start(sessionStore.byId(id) ?: return)
+            }
+            "probe" -> probeProfile(sessionStore.byId(id) ?: return)
+            "primary" -> {
+                sessionStore.setActive(id)
+                pushLog(getString(R.string.sess_primary_set, profile.name), LogKind.WARN)
+                sendBroadcast(
+                    Intent(ACTION_STATUS).setPackage(packageName)
+                        .putExtra(EXTRA_STATE, STATE_INFO)
+                        .putExtra(EXTRA_STATUS, getString(R.string.sess_primary_set, profile.name))
+                        .putExtra(EXTRA_SESSION_ID, id)
+                        .putExtra(EXTRA_PROFILE_NAME, profile.name),
+                )
+            }
+        }
+    }
+
+    /** Валидационный прогон профиля (TCP+TLS+пин+HELLO+PROBE) без подъёма сессии. */
+    private fun probeProfile(profile: SessionStore.Profile) {
+        val cfg = try {
+            RrpUri.parse(profile.uri)
+        } catch (e: Exception) {
+            pushLog("[${profile.name}] ${e.message}", LogKind.ERR)
+            return
+        }
+        pushLog("[${profile.name}] ${getString(R.string.log_probe_running)}")
+        val client = buildClient(cfg, RrpProtocols.PREFERRED_AUTO, validate = true)
+        try {
+            client.connect()
+            pushLog("[${profile.name}] ${getString(R.string.log_probe_ok)}", LogKind.OK)
+        } catch (e: Exception) {
+            pushLog("[${profile.name}] ${e.message}", LogKind.ERR)
+        } finally {
+            try { client.close() } catch (_: Exception) {}
         }
     }
 
@@ -1350,6 +1676,12 @@ class TunnelService : Service() {
         const val EXTRA_USAGE_BYTES = "usage_bytes"
         const val EXTRA_USAGE_LIMIT = "usage_limit"
         const val EXTRA_SPEEDTEST_TEXT = "speedtest_text" // v0.8: строка спидтеста
+        // v1.5.0: мульти-серверные события (старые экстра-ключи сохранены)
+        const val EXTRA_SESSION_ID = "session_id"
+        const val EXTRA_PROFILE_NAME = "profile_name"
+        const val EXTRA_SESSIONS = "sessions" // JSON-снапшот всех сессий (дашборд)
+        const val ACTION_SESSION = "dev.stelgen.reverseray.action.SESSION"
+        const val EXTRA_SESSION_CMD = "session_cmd" // connect|disconnect|reconnect|probe|primary
         private const val STATS_INTERVAL_MS = 500L
         /** v0.10: тик умного балансера (5с — только СБОР данных, решение — по гистерезису). */
         private const val BAL_TICK_MS = 5_000L
@@ -1463,4 +1795,15 @@ class TunnelService : Service() {
             }
         }
     }
+}
+
+/**
+ * SharedPreferences-адаптер для SessionStore (v1.5.0, APK).
+ * Тесты используют свою in-memory карту — core остаётся pure Kotlin.
+ */
+class PrefsBackend(private val p: android.content.SharedPreferences) : SessionStore.Backend {
+    override fun getString(key: String): String? = p.getString(key, null)
+    override fun putString(key: String, value: String) { p.edit().putString(key, value).apply() }
+    override fun remove(key: String) { p.edit().remove(key).apply() }
+    override fun contains(key: String): Boolean = p.contains(key)
 }

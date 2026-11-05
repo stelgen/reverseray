@@ -54,6 +54,8 @@ import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
 import dev.stelgen.reverseray.core.SecurityFacts
+import dev.stelgen.reverseray.core.SessionStore
+import dev.stelgen.reverseray.service.PrefsBackend
 import dev.stelgen.reverseray.core.ThemeMode
 import dev.stelgen.reverseray.ui.Formats
 import dev.stelgen.reverseray.ui.PulseRingView
@@ -1271,6 +1273,7 @@ class MainActivity : AppCompatActivity() {
         // сохраняем нормализованную ссылку (v0.9.5: proto= пишется только когда
         // выбран явно; отсутствует = режим AUTO — лучший общий протокол сервера)
         prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
+        syncPrimaryProfileUri(cfg.serialize())
         updateLinkValueView(cfg.serialize())
         // v0.8: лимит — король. Достигнут → НОЛЬ байт: окно предупреждения вместо старта.
         val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
@@ -1526,6 +1529,7 @@ class MainActivity : AppCompatActivity() {
         )
         val canonical = cfg.copy(transport = transport).serialize()
         prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+        syncPrimaryProfileUri(canonical)
         updateLinkValueView(canonical)
         refreshConnLine()
         val msg = getString(R.string.transport_applied, label)
@@ -1541,6 +1545,7 @@ class MainActivity : AppCompatActivity() {
             val cfg = RrpUri.parse(content) // бронепарсер чинит мусор сам
             val canonical = cfg.serialize()
             prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+            syncPrimaryProfileUri(canonical)
             updateLinkValueView(canonical)
             setLinkStatus(getString(R.string.link_status_ok))
             refreshConnLine()
@@ -1603,6 +1608,12 @@ class MainActivity : AppCompatActivity() {
                 dialog.dismiss()
                 if (text.isBlank()) {
                     prefs().edit().remove(TunnelService.KEY_CONFIG).apply()
+                    // v1.5.0: очистка ссылки = очистка профилей (single-server UX как в v1.3.0)
+                    try {
+                        val store = SessionStore(PrefsBackend(prefs()))
+                        store.migrateLegacy(prefs().getString(TunnelService.KEY_CONFIG, null))
+                        for (pr in store.profiles()) store.remove(pr.id)
+                    } catch (_: Exception) {}
                     updateLinkValueView("")
                     setLinkStatus(null)
                     Toast.makeText(this, R.string.link_clear, Toast.LENGTH_SHORT).show()
@@ -1612,6 +1623,7 @@ class MainActivity : AppCompatActivity() {
                     val cfg = RrpUri.parse(text)
                     val canonical = cfg.serialize()
                     prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+                    syncPrimaryProfileUri(canonical)
                     updateLinkValueView(canonical)
                     setLinkStatus(getString(R.string.link_status_ok))
                     refreshConnLine()
@@ -2544,6 +2556,21 @@ class MainActivity : AppCompatActivity() {
             PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+    }
+
+    /**
+     * v1.5.0: зеркало канона ссылки в URI PRIMARY-профиля (SessionStore) —
+     * legacy-писатели конфига (вставка/правка ссылки, транспорт) остаются
+     * источником правды для PRIMARY, профиль не рассинхронизируется.
+     */
+    private fun syncPrimaryProfileUri(canonical: String) {
+        try {
+            val p = prefs()
+            val store = SessionStore(PrefsBackend(p))
+            store.migrateLegacy(p.getString(TunnelService.KEY_CONFIG, null))
+            store.active()?.let { store.update(it.copy(uri = canonical)) }
+        } catch (_: Exception) {
         }
     }
 

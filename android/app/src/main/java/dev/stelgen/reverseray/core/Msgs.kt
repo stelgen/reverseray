@@ -221,6 +221,12 @@ object Msgs {
         "пин CA обновлён (подтверждено владельцем): %s — реконнект с новым пином",
     )
 
+    // ── v1.5.0: мульти-серверное ядро ───────────────────────────────
+    val SESSION_MIGRATED = Msg(
+        "config migrated to multi-server profile: %s (PRIMARY)",
+        "конфиг перенесён в мульти-серверный профиль: %s (PRIMARY)",
+    )
+
     // ── RrpFrame: границы/размеры ────────────────────────────────────────
     val FRAME_PAYLOAD_LIMIT = Msg(
         "payload %s > limit %s for type 0x%s",
