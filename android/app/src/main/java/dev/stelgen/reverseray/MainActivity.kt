@@ -58,6 +58,7 @@ import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.service.PrefsBackend
 import dev.stelgen.reverseray.core.ThemeMode
 import dev.stelgen.reverseray.ui.Formats
+import dev.stelgen.reverseray.ui.DashboardView
 import dev.stelgen.reverseray.ui.PulseRingView
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
@@ -117,6 +118,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pageUpdate: View
     private lateinit var pageLog: View
     private lateinit var pageSettings: View
+    private lateinit var pageDash: View
+    private lateinit var dashboard: DashboardView
 
     // ---------- главная ----------
     private lateinit var bigButton: MaterialButton
@@ -203,6 +206,11 @@ class MainActivity : AppCompatActivity() {
             intent ?: return
             when (intent.action) {
                 TunnelService.ACTION_STATS -> {
+                    // v1.5.0: дашборд сессий (EXTRA_SESSIONS — JSON-снапшот)
+                    intent.getStringExtra(TunnelService.EXTRA_SESSIONS)?.let {
+                        lastSessionsJson = it
+                        renderDashboard(it)
+                    }
                     val rx = intent.getLongExtra(TunnelService.EXTRA_RX_RATE, 0L)
                     val tx = intent.getLongExtra(TunnelService.EXTRA_TX_RATE, 0L)
                     trafficGraph.addSample(rx.toFloat(), tx.toFloat())
@@ -231,6 +239,11 @@ class MainActivity : AppCompatActivity() {
                 TunnelService.ACTION_STATUS -> {
                     val state = intent.getStringExtra(TunnelService.EXTRA_STATE)
                         ?: TunnelService.STATE_INFO
+                    // v1.5.0: сервис остановлен — дашборд в оффлайн-снапшот профилей
+                    if (state == TunnelService.STATE_STOPPED) {
+                        lastSessionsJson = ""
+                        dashboard.update(offlineStats())
+                    }
                     intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusText ->
                         renderServiceLogs()
                         if (state == TunnelService.STATE_LIMIT_REACHED) {
@@ -371,6 +384,9 @@ class MainActivity : AppCompatActivity() {
             addTab(newTab().setText(R.string.tab_update))
             addTab(newTab().setText(R.string.tab_log))
             addTab(newTab().setText(R.string.tab_settings))
+            // v1.5.0: вкладка «Серверы» — В КОНЦЕ (позиции 0–4 не сдвигаются:
+            // скриншот-боты и логика showPage совместимы с v1.3.0)
+            addTab(newTab().setText(R.string.dash_tab))
             addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
                 override fun onTabSelected(tab: TabLayout.Tab) { showPage(tab.position) }
                 override fun onTabUnselected(tab: TabLayout.Tab) {}
@@ -385,7 +401,8 @@ class MainActivity : AppCompatActivity() {
         pageUpdate = buildUpdatePage()
         pageLog = buildLogPage()
         pageSettings = buildSettingsPage()
-        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEach {
+        pageDash = buildDashboardPage()
+        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings, pageDash).forEach {
             it.visibility = View.GONE
             pages.addView(it)
         }
@@ -401,7 +418,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPage(index: Int) {
-        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEachIndexed { i, p ->
+        listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings, pageDash).forEachIndexed { i, p ->
             val show = i == index
             p.visibility = if (show) View.VISIBLE else View.GONE
             // v0.9.2 (R5): мягкий fade-переход вкладок (150мс, Views-канон)
@@ -417,7 +434,81 @@ class MainActivity : AppCompatActivity() {
             3 -> renderServiceLogs()
             4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
             1 -> refreshConnLine()
+            5 -> if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
         }
+    }
+
+    /**
+     * v1.5.0: страница «Серверы» — дашборд сессий. Действия по карточкам
+     * уходят в сервис командой ACTION_SESSION (connect/disconnect/reconnect/
+     * probe/primary) — изолированно, без рестарта других сессий.
+     */
+    private fun buildDashboardPage(): View {
+        dashboard = DashboardView(this)
+        dashboard.onAction = { id, cmd ->
+            val i = Intent(this, TunnelService::class.java)
+                .setAction(TunnelService.ACTION_SESSION)
+                .putExtra(TunnelService.EXTRA_SESSION_ID, id)
+                .putExtra(TunnelService.EXTRA_SESSION_CMD, cmd)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        }
+        val p = page()
+        p.addView(dashboard)
+        return scrollWrap(p)
+    }
+
+    /** Последний JSON-снапшот сессий из EXTRA_SESSIONS (пусто — сервис молчит). */
+    @Volatile private var lastSessionsJson: String = ""
+
+    /** Оффлайн-снапшот из профилей (сервис не шлёт статсы: stopped/disabled). */
+    private fun offlineStats(): List<DashboardView.Stat> {
+        return try {
+            val store = SessionStore(PrefsBackend(prefs()))
+            store.migrateLegacy(prefs().getString(TunnelService.KEY_CONFIG, null))
+            val active = store.activeId()
+            store.profiles().map { pr ->
+                DashboardView.Stat(
+                    id = pr.id, name = pr.name,
+                    state = if (pr.enabled) TunnelService.STATE_STOPPED else "disabled",
+                    rxRate = 0, txRate = 0, rxTotal = 0, txTotal = 0,
+                    proto = "", rttMs = 0, reconnects = 0, errors = 0, switches = 0,
+                    uptimeMs = 0, primary = pr.id == active,
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Рендер дашборда по JSON из сервиса (ACTION_STATS). */
+    private fun renderDashboard(json: String) {
+        val list = ArrayList<DashboardView.Stat>()
+        try {
+            val arr = org.json.JSONArray(json)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                list.add(
+                    DashboardView.Stat(
+                        id = o.optString("id"),
+                        name = o.optString("name"),
+                        state = o.optString("state"),
+                        rxRate = o.optLong("rx_rate"),
+                        txRate = o.optLong("tx_rate"),
+                        rxTotal = o.optLong("rx_total"),
+                        txTotal = o.optLong("tx_total"),
+                        proto = o.optString("proto"),
+                        rttMs = o.optLong("rtt_ms"),
+                        reconnects = o.optLong("reconnects"),
+                        errors = o.optLong("errors"),
+                        switches = o.optLong("switches"),
+                        uptimeMs = o.optLong("uptime_ms"),
+                        primary = o.optBoolean("primary"),
+                    ),
+                )
+            }
+        } catch (_: Exception) {
+        }
+        dashboard.update(list)
     }
 
     private fun page(): LinearLayout = LinearLayout(this).apply {

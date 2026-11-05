@@ -29,4 +29,21 @@ object Formats {
         bytesPerSec >= 1L shl 10 -> String.format(Locale.US, ctx.getString(R.string.rate_kb), bytesPerSec / 1024f)
         else -> String.format(Locale.US, ctx.getString(R.string.rate_b), bytesPerSec)
     }
+
+    /** Аптайм (мс) → «3d 04:05:06» / «04:05:06» / «05:06» (v1.5.0, дашборд). */
+    fun uptime(ctx: Context, ms: Long): String {
+        if (ms <= 0) return "—"
+        val totalSec = ms / 1000
+        val s = (totalSec % 60).toInt()
+        val m = ((totalSec / 60) % 60).toInt()
+        val h = ((totalSec / 3600) % 24).toInt()
+        val d = (totalSec / 86400).toInt()
+        return if (d > 0) {
+            String.format(Locale.US, "%dd %02d:%02d:%02d", d, h, m, s)
+        } else if (h > 0) {
+            String.format(Locale.US, "%02d:%02d:%02d", h, m, s)
+        } else {
+            String.format(Locale.US, "%02d:%02d", m, s)
+        }
+    }
 }
