@@ -1,8 +1,5 @@
 package dev.stelgen.reverseray.core
 
-import org.json.JSONArray
-import org.json.JSONObject
-
 /**
  * Хранилище профилей/сессий мульти-серверного ядра (v1.5.0 «Multi-Server Core»).
  *
@@ -94,7 +91,7 @@ class SessionStore(private val backend: Backend) {
         val legacy = legacyConfig?.takeIf { it.isNotBlank() }
         if (legacy == null) {
             // чистая установка: пустой список, PRIMARY нет
-            backend.putString(KEY_SESSIONS, JSONArray().toString())
+            backend.putString(KEY_SESSIONS, "[]")
             return@synchronized null
         }
         // канонизируем, но при ошибке парсера СОХРАНЯЕМ сырьё (потеря недопустима)
@@ -110,7 +107,7 @@ class SessionStore(private val backend: Backend) {
         }
         val name = cfg?.name?.takeIf { it.isNotBlank() } ?: cfg?.host ?: "server-1"
         val p = Profile(newId(), name, canonical, enabled = true, createdAt = System.currentTimeMillis())
-        backend.putString(KEY_SESSIONS, JSONArray().put(toJson(p)).toString())
+        backend.putString(KEY_SESSIONS, "[" + toJson(p) + "]")
         backend.putString(KEY_ACTIVE, p.id)
         p
     }
@@ -229,25 +226,37 @@ class SessionStore(private val backend: Backend) {
 
     // ---------------------------------------------------------------- JSON
 
-    private fun toJson(p: Profile): JSONObject = JSONObject()
-        .put("id", p.id)
-        .put("name", p.name)
-        .put("uri", p.uri)
-        .put("enabled", p.enabled)
-        .put("createdAt", p.createdAt)
-        .put("lastState", p.lastState)
+    /**
+     * Сериализация профиля — БЕЗ org.json: в JVM unit-тестах Gradle
+     * android.jar-заглушки org.json бросают «not mocked», а core обязан
+     * быть чистым (прецедент — RrpFrame: «pure Kotlin, без org.json»).
+     */
+    private fun toJson(p: Profile): String = buildString {
+        append('{')
+        // MiniJson (RrpFrame) — общий pure-Kotlin JSON-хелпер core-слоя
+        append("\"id\":").append(MiniJson.q(p.id)).append(',')
+        append("\"name\":").append(MiniJson.q(p.name)).append(',')
+        append("\"uri\":").append(MiniJson.q(p.uri)).append(',')
+        append("\"enabled\":").append(p.enabled).append(',')
+        append("\"createdAt\":").append(p.createdAt).append(',')
+        append("\"lastState\":").append(MiniJson.q(p.lastState))
+        append('}')
+    }
 
-    private fun fromJson(o: JSONObject): Profile? {
-        val id = o.optString("id")
-        val uri = o.optString("uri")
+    private fun fromMap(m: Map<String, Any?>): Profile? {
+        val id = (m["id"] as? String) ?: return null
+        val uri = (m["uri"] as? String) ?: return null
         if (id.isBlank() || uri.isBlank()) return null
+        val createdAt = (m["createdAt"] as? Long)
+            ?: ((m["createdAt"] as? Double)?.toLong())
+            ?: 0L
         return Profile(
             id = id,
-            name = o.optString("name"),
+            name = (m["name"] as? String) ?: "",
             uri = uri,
-            enabled = o.optBoolean("enabled", false),
-            createdAt = o.optLong("createdAt", 0L),
-            lastState = o.optString("lastState"),
+            enabled = m["enabled"] == true,
+            createdAt = createdAt,
+            lastState = (m["lastState"] as? String) ?: "",
         )
     }
 
@@ -255,16 +264,150 @@ class SessionStore(private val backend: Backend) {
         val raw = backend.getString(KEY_SESSIONS) ?: return emptyList()
         if (raw.isBlank()) return emptyList()
         return try {
-            val arr = JSONArray(raw)
-            (0 until arr.length()).mapNotNull { fromJson(arr.getJSONObject(it)) }
+            val parsed = SessionJson.parse(raw)
+            (parsed as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let { m -> fromMap(m as Map<String, Any?>) } }
+                ?: emptyList()
         } catch (_: Exception) {
             emptyList()
         }
     }
 
     private fun writeProfiles(list: List<Profile>) {
-        val arr = JSONArray()
-        for (p in list) arr.put(toJson(p))
-        backend.putString(KEY_SESSIONS, arr.toString())
+        backend.putString(KEY_SESSIONS, list.joinToString(",", "[", "]") { toJson(it) })
+    }
+
+}
+
+/**
+ * Минималистичный JSON-парсер (pure Kotlin, без org.json — канон core):
+ * только то, что нужно SessionStore — объекты/массивы/строки/числа/bool/null.
+ * Битые входы бросают IllegalArgumentException — вызывающий ловит.
+ * Поддерживает экранирование \" \\ / b f n r t uXXXX.
+ */
+internal object SessionJson {
+
+    fun parse(s: String): Any? {
+        val p = Parser(s)
+        p.ws()
+        val v = p.value()
+        return v
+    }
+
+    private class Parser(val s: String) {
+        var i = 0
+
+        fun ws() {
+            while (i < s.length && s[i].isWhitespace()) i++
+        }
+
+        fun value(): Any? {
+            ws()
+            if (i >= s.length) throw IllegalArgumentException("eof")
+            return when (s[i]) {
+                '{' -> obj()
+                '[' -> arr()
+                '"' -> str()
+                't' -> { expect("true"); true }
+                'f' -> { expect("false"); false }
+                'n' -> { expect("null"); null }
+                else -> num()
+            }
+        }
+
+        fun expect(w: String) {
+            if (!s.startsWith(w, i)) throw IllegalArgumentException("at $i")
+            i += w.length
+        }
+
+        fun obj(): Map<String, Any?> {
+            i++ // {
+            val m = LinkedHashMap<String, Any?>()
+            ws()
+            if (i < s.length && s[i] == '}') { i++; return m }
+            while (true) {
+                ws()
+                val k = str()
+                ws()
+                if (i >= s.length || s[i] != ':') throw IllegalArgumentException("at $i")
+                i++
+                m[k] = value()
+                ws()
+                if (i >= s.length) throw IllegalArgumentException("at $i")
+                when (s[i]) {
+                    ',' -> i++
+                    '}' -> { i++; return m }
+                    else -> throw IllegalArgumentException("at $i")
+                }
+            }
+        }
+
+        fun arr(): List<Any?> {
+            i++ // [
+            val l = ArrayList<Any?>()
+            ws()
+            if (i < s.length && s[i] == ']') { i++; return l }
+            while (true) {
+                l.add(value())
+                ws()
+                if (i >= s.length) throw IllegalArgumentException("at $i")
+                when (s[i]) {
+                    ',' -> i++
+                    ']' -> { i++; return l }
+                    else -> throw IllegalArgumentException("at $i")
+                }
+            }
+        }
+
+        fun str(): String {
+            if (i >= s.length || s[i] != '"') throw IllegalArgumentException("at $i")
+            i++
+            val sb = StringBuilder()
+            while (true) {
+                if (i >= s.length) throw IllegalArgumentException("eof in string")
+                val c = s[i]
+                when {
+                    c == '"' -> { i++; return sb.toString() }
+                    c == '\\' -> { i++; sb.append(esc()) }
+                    else -> { sb.append(c); i++ }
+                }
+            }
+        }
+
+        fun esc(): Char {
+            if (i >= s.length) throw IllegalArgumentException("eof in escape")
+            val c = s[i]
+            i++
+            return when (c) {
+                'n' -> '\n'
+                't' -> '\t'
+                'r' -> '\r'
+                'b' -> '\b'
+                'f' -> ''
+                '/' -> '/'
+                '\\' -> '\\'
+                '"' -> '"'
+                'u' -> {
+                    if (i + 4 > s.length) throw IllegalArgumentException("eof in uXXXX")
+                    val hex = s.substring(i, i + 4)
+                    i += 4
+                    hex.toInt(16).toChar()
+                }
+                else -> c
+            }
+        }
+
+        fun num(): Any {
+            val start = i
+            while (i < s.length &&
+                (s[i].isDigit() || s[i] == '-' || s[i] == '+' || s[i] == '.' || s[i] == 'e' || s[i] == 'E')
+            ) i++
+            val t = s.substring(start, i)
+            if (t.isEmpty()) throw IllegalArgumentException("at $start")
+            return if (t.contains('.') || t.contains('e') || t.contains('E')) {
+                t.toDouble()
+            } else {
+                t.toLong()
+            }
+        }
     }
 }
