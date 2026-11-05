@@ -2,7 +2,7 @@
 # AGP пин 8.7.3: 8.13+ мержит манифесты тест-зависимостей (processDebugUnitTestManifest)
 # и игнорирует tools:overrideLibrary — несовместимо с minSdk 14. Только координированный апгрейд (PR #18 отклонён).
 agp = "8.7.3"
-kotlin = "2.4.21"
+kotlin = "2.4.21" # БАМПЫ КОТЛИН ТРЕБУЮТ КООРДИНАЦИИ R8: kotlin 2.4 => R8 >= 9.1.29, задаётся в android/build.gradle.kts (buildscript classpath), не бандлом AGP
 
 # Пин AndroidX: последние версии с minSdk 14 (до требования AndroidX minSdk 19, окт 2023)
 appcompat = "1.6.1"
