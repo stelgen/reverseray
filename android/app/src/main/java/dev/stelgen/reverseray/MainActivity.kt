@@ -166,6 +166,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceInfoBox: LinearLayout
     private lateinit var appInfoBox: LinearLayout
     private lateinit var netInfoBox: LinearLayout
+    private lateinit var sessionsBox: LinearLayout
     private lateinit var usageSummaryView: TextView
     private lateinit var limitNextView: TextView
 
@@ -437,7 +438,7 @@ class MainActivity : AppCompatActivity() {
         when (index) {
             2 -> { refreshVersionRow(); refreshModulesInfo(); refreshUpdateConsole() }
             3 -> { renderServiceLogs(); refreshLogFilterChips() }
-            4 -> { refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
+            4 -> { refreshSessionsCard(); refreshDevicePanel(); refreshAppPanel(); refreshNetPanel(); refreshUsageSummary(); refreshLimitNext() }
             1 -> refreshConnLine()
             5 -> if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
         }
@@ -1013,6 +1014,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildSettingsPage(): View {
         val p = page()
+
+        // v1.5.0: управление сессиями (мульти-сервер)
+        p.addView(sectionTitle(R.string.sess_section_title, null))
+        val sessionsCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
+        sessionsBox = sessionsCard.getChildAt(0) as LinearLayout
+        sessionsCard.addView(
+            row(outlined(R.string.sess_add).apply { setOnClickListener { showAddSessionDialog() } }),
+        )
+        p.addView(sessionsCard)
+        refreshSessionsCard()
 
         // Тема (v0.8.1): авто (настройка телефона; на старых Android — чёрная) / тёмная / светлая
         p.addView(buildThemeCard())
@@ -2716,6 +2727,181 @@ class MainActivity : AppCompatActivity() {
             store.active()?.let { store.update(it.copy(uri = canonical)) }
         } catch (_: Exception) {
         }
+    }
+
+    // ================================================================= Сессии (v1.5.0)
+
+    /** SessionStore поверх prefs (миграция идемпотентна). */
+    private fun sessionStore(): SessionStore {
+        val store = SessionStore(PrefsBackend(prefs()))
+        store.migrateLegacy(prefs().getString(TunnelService.KEY_CONFIG, null))
+        return store
+    }
+
+    /** Команда дашборда/настроек в сервис по сессии (изоляция). */
+    private fun sendSessionCmd(id: String, cmd: String) {
+        val i = Intent(this, TunnelService::class.java)
+            .setAction(TunnelService.ACTION_SESSION)
+            .putExtra(TunnelService.EXTRA_SESSION_ID, id)
+            .putExtra(TunnelService.EXTRA_SESSION_CMD, cmd)
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+    }
+
+    /** Пересборка списка сессий в настройках. */
+    private fun refreshSessionsCard() {
+        if (!this::sessionsBox.isInitialized) return
+        sessionsBox.removeAllViews()
+        val store = sessionStore()
+        val active = store.activeId()
+        for (pr in store.profiles()) {
+            val line = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            line.addView(TextView(this).apply {
+                text = (if (pr.id == active) "★ " else "") + pr.name +
+                    "  ·  " + getString(if (pr.enabled) R.string.dash_state_connected else R.string.dash_state_disabled)
+                textSize = 13f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, dp(6), 0, dp(2))
+            })
+            line.addView(TextView(this).apply {
+                text = pr.uri
+                textSize = 11f
+                setTypeface(Typeface.MONOSPACE)
+                setTextColor(0xFF8FA3D9.toInt())
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            line.addView(row(
+                outlined(if (pr.enabled) R.string.sess_off else R.string.sess_on).apply {
+                    setOnClickListener {
+                        store.setEnabled(pr.id, !pr.enabled)
+                        sendSessionCmd(pr.id, if (pr.enabled) "disconnect" else "connect")
+                        refreshSessionsCard()
+                    }
+                },
+                outlined(R.string.sess_rename).apply { setOnClickListener { showRenameSessionDialog(pr.id) } },
+                outlined(R.string.dash_session_primary).apply {
+                    visibility = if (pr.id == active) View.GONE else View.VISIBLE
+                    setOnClickListener {
+                        store.setActive(pr.id)
+                        sendSessionCmd(pr.id, "primary")
+                        refreshSessionsCard()
+                        dashboard.update(offlineStats())
+                    }
+                },
+                outlined(R.string.sess_delete).apply {
+                    setOnClickListener { confirmDeleteSession(pr.id) }
+                },
+            ))
+            sessionsBox.addView(line)
+        }
+    }
+
+    /** Диалог добавления сервера: ссылка + имя; probe ДО сохранения (канон). */
+    private fun showAddSessionDialog() {
+        val input = TextInputEditText(this).apply {
+            hint = getString(R.string.sess_add_hint)
+            minLines = 1
+            setTextSize(12f)
+            setTypeface(Typeface.MONOSPACE)
+        }
+        val nameInput = TextInputEditText(this).apply {
+            hint = getString(R.string.sess_name_hint)
+            setTextSize(12f)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = dp(16)
+            setPadding(pad, pad, pad, 0)
+            addView(input)
+            addView(nameInput)
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.sess_add_title)
+            .setView(container)
+            .setPositiveButton(R.string.link_ok, null)
+            .setNegativeButton(R.string.link_cancel, null)
+            .create()
+        dialog.show()
+        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val raw = input.text?.toString()?.trim().orEmpty()
+                val name = nameInput.text?.toString()?.trim().orEmpty()
+                val cfg = try {
+                    RrpUri.parse(raw)
+                } catch (e: Exception) {
+                    Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                val canonical = cfg.serialize()
+                kotlin.concurrent.thread {
+                    val (ok, msg) = try {
+                        probeServer(cfg)
+                    } catch (e: Exception) {
+                        ProbeOut(false, e.message ?: "?")
+                    }
+                    runOnUiThread {
+                        dialog.dismiss()
+                        if (ok) {
+                            val store = sessionStore()
+                            val created = store.add(canonical, name.ifBlank { null })
+                            if (created != null) {
+                                Toast.makeText(this, getString(R.string.sess_added, created.name), Toast.LENGTH_LONG).show()
+                                refreshSessionsCard()
+                                dashboard.update(offlineStats())
+                            }
+                        } else {
+                            Toast.makeText(this, getString(R.string.sess_probe_failed) + " (" + msg + ")", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+    }
+
+    private fun showRenameSessionDialog(id: String) {
+        val store = sessionStore()
+        val pr = store.byId(id) ?: return
+        val input = TextInputEditText(this).apply {
+            setText(pr.name)
+            setTextSize(12f)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = dp(16)
+            setPadding(pad, pad, pad, 0)
+            addView(input)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.sess_rename)
+            .setView(container)
+            .setPositiveButton(R.string.link_ok) { d, _ ->
+                d.dismiss()
+                val name = input.text?.toString()?.trim().orEmpty()
+                if (name.isNotBlank() && store.rename(id, name)) {
+                    Toast.makeText(this, R.string.sess_renamed, Toast.LENGTH_SHORT).show()
+                    refreshSessionsCard()
+                    dashboard.update(offlineStats())
+                }
+            }
+            .setNegativeButton(R.string.link_cancel, null)
+            .show()
+    }
+
+    private fun confirmDeleteSession(id: String) {
+        val store = sessionStore()
+        val pr = store.byId(id) ?: return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.sess_delete)
+            .setMessage(getString(R.string.sess_confirm_delete, pr.name))
+            .setPositiveButton(R.string.link_ok) { d, _ ->
+                d.dismiss()
+                if (store.remove(id)) {
+                    sendSessionCmd(id, "disconnect")
+                    Toast.makeText(this, R.string.sess_removed, Toast.LENGTH_SHORT).show()
+                    refreshSessionsCard()
+                    dashboard.update(offlineStats())
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun prefs() = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE)

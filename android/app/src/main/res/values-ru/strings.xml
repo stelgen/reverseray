@@ -357,4 +357,11 @@
     <string name="log_probe_running">Валидационный прогон (TCP+TLS+HELLO+PROBE)…</string>
     <string name="log_probe_ok">Валидационный прогон пройден</string>
     <string name="log_filter_all">Все</string>
+    <string name="sess_section_title">Сессии (мульти-сервер)</string>
+    <string name="sess_add">Добавить сервер</string>
+    <string name="sess_rename">Переименовать</string>
+    <string name="sess_delete">Удалить</string>
+    <string name="sess_confirm_delete">Удалить сессию «%1$s»?</string>
+    <string name="sess_on">Вкл</string>
+    <string name="sess_off">Выкл</string>
 </resources>

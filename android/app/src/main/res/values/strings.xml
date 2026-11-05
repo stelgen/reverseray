@@ -357,4 +357,11 @@
     <string name="log_probe_running">Validation run (TCP+TLS+HELLO+PROBE)…</string>
     <string name="log_probe_ok">Validation run passed</string>
     <string name="log_filter_all">All</string>
+    <string name="sess_section_title">Sessions (multi-server)</string>
+    <string name="sess_add">Add server</string>
+    <string name="sess_rename">Rename</string>
+    <string name="sess_delete">Delete</string>
+    <string name="sess_confirm_delete">Delete session «%1$s»?</string>
+    <string name="sess_on">On</string>
+    <string name="sess_off">Off</string>
 </resources>
