@@ -88,6 +88,6 @@ object GraphHistory {
         avgRxEma = 0f; avgTxEma = 0f; peak = 0f
     }
 
-    /** кортеж без зависимостей. */
-    class Quad(val rx: FloatArray, val tx: FloatArray, val head: Int, val valid: Int)
+    /** Кортеж без зависимостей (data class — деструктуризация по компонентам). */
+    data class Quad(val rx: FloatArray, val tx: FloatArray, val head: Int, val valid: Int)
 }
