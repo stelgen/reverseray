@@ -377,6 +377,12 @@
     <string name="log_connect_cancelled">Подключение отменено владельцем</string>
     <string name="sess_bulk_add">Добавить все</string>
     <string name="sess_bulk_title">Импорт ссылок</string>
+    <string name="sess_edit">Правка</string>
+    <string name="sess_edit_title">Правка: %1$s</string>
+    <string name="sess_updated">Сервер обновлён</string>
+    <string name="sess_off_state">Отключён</string>
+    <string name="config_tools_title">Конфиг</string>
+    <string name="home_device_title">Сеть телефона</string>
     <string name="sess_bulk_hint">По одной rrp://-ссылке на строку</string>
     <string name="sess_bulk_result">Добавлено: %1$d · нераспознано: %2$d</string>
 </resources>

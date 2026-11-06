@@ -75,13 +75,17 @@ class MainActivityApi31Test {
         try {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 scenario.onActivity { activity ->
-                    // v1.3.0: ссылка отображается read-only (TextView), правка —
-                    // через диалог «Изменить».
+                    // v1.7.0: ссылка отображается СТРОКОЙ СЕРВЕРА на
+                    // «Подключении» (имя + host:port из ссылки), правка —
+                    // через диалог «Правка» сессии; сырая ссылка больше
+                    // не красится в UI.
+                    val cfg = RrpUri.parse(validConfig)
+                    val host = cfg.host + ":" + cfg.ports.first()
                     val view = UiFind.texts(UiFind.contentView(activity))
-                        .firstOrNull { it.text.toString() == validConfig }
-                    assertTrue("ссылка не отображается на вкладке", view != null)
+                        .firstOrNull { it.text.toString() == host }
+                    assertTrue("host:port сервера не отображается на вкладке", view != null)
                     // и парсится тем же кодеком, что и скан QR
-                    assertEquals("Home", RrpUri.parse(validConfig).name)
+                    assertEquals("Home", cfg.name)
                 }
             }
         } finally {

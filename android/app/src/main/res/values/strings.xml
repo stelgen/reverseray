@@ -377,6 +377,12 @@
     <string name="log_connect_cancelled">Connect cancelled by user</string>
     <string name="sess_bulk_add">Add all</string>
     <string name="sess_bulk_title">Import links</string>
+    <string name="sess_edit">Edit</string>
+    <string name="sess_edit_title">Edit: %1$s</string>
+    <string name="sess_updated">Server updated</string>
+    <string name="sess_off_state">Disabled</string>
+    <string name="config_tools_title">Config</string>
+    <string name="home_device_title">Device network</string>
     <string name="sess_bulk_hint">One rrp:// link per line</string>
     <string name="sess_bulk_result">Added: %1$d · unrecognized: %2$d</string>
 </resources>

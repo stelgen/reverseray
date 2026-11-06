@@ -56,6 +56,13 @@ func SPKIPin(cert *x509.Certificate) string {
 // leaves reissued when <30d of life left). Ошибки ЗАПИСИ не фатальны:
 // ключи/сертификаты остаются в памяти (Bundle.Ephemeral=true) — сервер
 // стартует всегда; фатальны только ошибки чтения битых существующих файлов.
+// LeafNeedsRenewal — пора ли перевыпускать лист (< leafRenewBefore до конца).
+// v1.7.0: рантайм-тикер сервера вызывает это раз в сутки; CA не трогаем —
+// SPKI-пин клиентов остаётся валидным.
+func LeafNeedsRenewal(b *Bundle) bool {
+	return time.Until(b.Leaf.Leaf.NotAfter) <= leafRenewBefore
+}
+
 func LoadOrCreate(stateDir string, hosts []string) (*Bundle, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err

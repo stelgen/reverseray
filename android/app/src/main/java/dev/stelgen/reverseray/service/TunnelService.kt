@@ -1027,16 +1027,13 @@ class TunnelService : Service() {
      * лога — на языке приложения (ресурсы), честно: сколько байт, бюджет.
      */
     private fun buildNoisePolicy(): Apimask.NoisePolicy? {
-        val cfg = RrpProtocols.camouflageConfig()
-        // v0.9.5: локальный выбор клиента (0x2A) — выключено ⇒ шума нет вообще.
-        if (prefs().getBoolean(KEY_CAMO_OFF, false)) return null
-        // v1.6.0: proto=apimask — камуфляж КАК ПРОТОКОЛ (изначальный замысел):
-        // пользователь ЯВНО выбрал имитацию API — шум работает даже без
-        // манифест-конфига (дефолтный бюджет 256КБ/день, как в манифесте).
-        if (!cfg.enabled && claimedProto() == Apimask.FEATURE) {
-            return apimaskDefaultPolicy()
-        }
-        if (!cfg.enabled) return null
+        // v1.7.0 КАНОН: API Mask — ТОЛЬКО протокол (proto=apimask), не модуль.
+        // Шум живёт исключительно в сессиях, согласованных как apimask;
+        // модульная секция манифеста больше не управляет шумом.
+        if (claimedProto() != Apimask.FEATURE) return null
+        val cfg = RrpProtocols.camouflageConfig().takeIf { it.enabled } ?: Apimask.Config(
+            Apimask.FEATURE, "API Mask", "1", true, 300, 900, 256 * 1024,
+        )
         val engine = Apimask.Engine(cfg)
         val label = RrpProtocols.camouflageLabel()
         return Apimask.NoisePolicy(engine) { bytes, used, budget ->
@@ -1054,12 +1051,8 @@ class TunnelService : Service() {
      * переживает офлайн клиента, применяется будущим сессиям.
      */
     private fun camCtlFlag(): Boolean? =
-        if (claimedProto() == Apimask.FEATURE) {
-            // v1.6.0: proto=apimask — серверный шум включаем сразу (0x2A on),
-            // выбор персистентен на сервере; явное 0x2A off от GUI всё ещё
-            // выключает (переписывает выбор).
-            true
-        } else if (prefs().contains(KEY_CAMO_OFF)) !prefs().getBoolean(KEY_CAMO_OFF, false) else null
+        // v1.7.0: 0x2A — только для proto=apimask (включить серверный шум).
+        if (claimedProto() == Apimask.FEATURE) true else null
 
     /** v1.6.0: дефолтная политика шума для proto=apimask (без манифеста). */
     private fun apimaskDefaultPolicy(): Apimask.NoisePolicy {

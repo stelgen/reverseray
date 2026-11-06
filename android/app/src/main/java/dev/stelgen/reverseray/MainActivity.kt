@@ -131,6 +131,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var trafficLabel: TextView
     private lateinit var packetsLabel: TextView
     private lateinit var netFlag: ImageView
+    private var mainStatusDot: View? = null
     private lateinit var netInfoView: TextView
     private lateinit var localIpView: TextView
     private lateinit var dnsLineView: TextView
@@ -224,8 +225,8 @@ class MainActivity : AppCompatActivity() {
                     syncGraphVisibility()
                     // v1.5.1: среднее (EMA) и пик окна — из GraphHistory (пишется всегда)
                     val (avgEma, peakNow) = GraphHistory.stats()
-                    trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx)) +
-                        "   ·   " + getString(R.string.traffic_stats, fmtRate(avgEma.toLong()), fmtRate(peakNow.toLong()))
+                    trafficLabel.text = getString(R.string.traffic_rates, fmtRate(rx), fmtRate(tx)) + "\n" +
+                        getString(R.string.traffic_stats, fmtRate(avgEma.toLong()), fmtRate(peakNow.toLong()))
                     val pkTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_COUNT, 0L)
                     val pkRx = intent.getLongExtra(TunnelService.EXTRA_PKT_RX_COUNT, 0L)
                     val szTx = intent.getLongExtra(TunnelService.EXTRA_PKT_TX_SIZE, 0L)
@@ -515,13 +516,7 @@ class MainActivity : AppCompatActivity() {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
         }
         parent.addView(sectionTitle(R.string.sess_section_title, null))
-        parent.addView(
-            row(
-                outlined(R.string.dash_add_server).apply {
-                    setOnClickListener { showAddSessionDialog() }
-                },
-            ),
-        )
+        // v1.7.0: кнопка добавления переехала в начало «Подключения»
         parent.addView(dashboard)
         if (lastSessionsJson.isBlank()) preserveScroll { dashboard.update(offlineStats()) }
     }
@@ -766,8 +761,27 @@ class MainActivity : AppCompatActivity() {
         buttonBox.addView(bigButton)
         p.addView(buttonBox)
 
-        // Карточка трафика: шапка состояния как в консоли
+        // Карточка трафика (v1.7.0): шапка как у серверных карточек —
+        // статус-точка (цвет кнопки), заголовок, флаг страны; цифры —
+        // каждая с новой строки (детерминированная высота).
         val inner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val mainHead = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        mainStatusDot = statusDot(0xFF8FA3D9.toInt(), false)
+        mainHead.addView(mainStatusDot)
+        mainHead.addView(TextView(this).apply {
+            setText(R.string.home_device_title)
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xFFFFFFFF.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        netFlag = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(22), dp(15))
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            visibility = View.GONE
+        }
+        mainHead.addView(netFlag)
+        inner.addView(mainHead)
         trafficGraph = TrafficGraphView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(84),
@@ -778,6 +792,7 @@ class MainActivity : AppCompatActivity() {
             setText(R.string.traffic_idle)
             textSize = 12f
             setPadding(0, dp(2), 0, 0)
+            maxLines = 3
         }
         inner.addView(trafficLabel)
         packetsLabel = TextView(this).apply {
@@ -787,23 +802,11 @@ class MainActivity : AppCompatActivity() {
         }
         inner.addView(packetsLabel)
 
-        val netRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), 0, 0)
-        }
-        netFlag = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(22), dp(15)).apply { setMargins(0, 0, dp(6), 0) }
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            visibility = View.GONE
-        }
-        netRow.addView(netFlag)
         netInfoView = TextView(this).apply {
             setText(R.string.netinfo_loading)
             textSize = 12f
         }
-        netRow.addView(netInfoView)
-        inner.addView(netRow)
+        inner.addView(netInfoView)
         localIpView = TextView(this).apply {
             textSize = 12f
             setTextColor(0xFF6B7280.toInt())
@@ -853,49 +856,21 @@ class MainActivity : AppCompatActivity() {
     private fun buildLinkPage(): View {
         val p = page()
 
-        // ── 1. ПОДКЛЮЧЕНИЕ: каноническая ссылка (read-only) + правка/QR ──
-        val linkCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        linkCard.addView(sectionTitle(R.string.config_hint_title, null))
-        linkStatusView = TextView(this).apply {
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(2), 0, dp(4))
-            visibility = View.GONE
-        }
-        linkCard.addView(linkStatusView)
-        linkValueView = TextView(this).apply {
-            textSize = 12f
-            setTypeface(Typeface.MONOSPACE)
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            setTextIsSelectable(true)
-            val cur = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
-            text = if (cur.isBlank()) getString(R.string.link_empty) else cur
-        }
-        linkCard.addView(linkValueView)
-        linkCard.addView(
-            row(
-                outlined(R.string.link_edit).apply { setOnClickListener { showEditLinkDialog() } },
-                outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
-                outlined(R.string.qr_show).apply { setOnClickListener { showQr() } }.apply {
-                    visibility = if (qrSupported) View.VISIBLE else View.GONE
-                },
-            )
-        )
-        p.addView(card(linkCard))
+        // ── 1. ДОБАВИТЬ СЕРВЕР — первой кнопкой вкладки (канон v1.7.0) ──
+        p.addView(row(filled(R.string.sess_add).apply { setOnClickListener { showAddSessionDialog() } }))
 
-        // ── 2. СЕРВЕРЫ: сессии мульти-серверного ядра (v1.6.0 перенесено
-        // из «Настроек»; v1.6.2 — единый лаконичный каркас вкладки) ──
-        val sessionsCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
-        sessionsBox = sessionsCard.getChildAt(0) as LinearLayout
-        sessionsCard.addView(
-            row(outlined(R.string.sess_add).apply { setOnClickListener { showAddSessionDialog() } }),
-        )
-        p.addView(sessionsCard)
+        // ── 2. СЕРВЕРЫ: статус-точка (пульс) + имя + хост + действия ──
+        // v1.7.0 FIX наложений: содержимое добавляется В inner-LinearLayout
+        // карточки, а не в MaterialCardView (FrameLayout — дети СКЛАДЫВАЛИСЬ
+        // друг на друга — тот самый «мусор» вверху вкладки).
+        val sessionsInner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        p.addView(card(sessionsInner))
+        sessionsBox = sessionsInner
         refreshSessionsCard()
 
-        // ── 3. ИМПОРТ: пачка ссылок (по одной на строку) ──
-        val bulkCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
-        bulkCard.addView(sectionTitle(R.string.sess_bulk_title, null))
+        // ── 3. ИМПОРТ ПАЧКОЙ (по одной rrp://-ссылке на строку) ──
+        val bulkInner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        bulkInner.addView(sectionTitle(R.string.sess_bulk_title, null))
         val bulkInput = TextInputEditText(this).apply {
             hint = getString(R.string.sess_bulk_hint)
             minLines = 2
@@ -903,8 +878,8 @@ class MainActivity : AppCompatActivity() {
             setTextSize(12f)
             setTypeface(Typeface.MONOSPACE)
         }
-        bulkCard.addView(bulkInput)
-        bulkCard.addView(
+        bulkInner.addView(bulkInput)
+        bulkInner.addView(
             row(
                 outlined(R.string.sess_bulk_add).apply {
                     setOnClickListener {
@@ -921,26 +896,7 @@ class MainActivity : AppCompatActivity() {
                 },
             ),
         )
-        p.addView(bulkCard)
-
-        if (fileIoSupported) {
-            p.addView(
-                row(
-                    outlined(R.string.export_config).also {
-                        it.setOnClickListener { exportFileLauncher.launch("reverseray-config.txt") }
-                    },
-                    outlined(R.string.import_config).also {
-                        it.setOnClickListener {
-                            try {
-                                importFileLauncher.launch(arrayOf("text/*", "application/octet-stream"))
-                            } catch (e: ActivityNotFoundException) {
-                                Toast.makeText(this, R.string.file_error_no_picker, Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                )
-            )
-        }
+        p.addView(card(bulkInner))
 
         // ── Модули (v0.9.5): чекбокс-каркас для вкл/выкл модулей ──
         // Правила UX: один чекбокс = один модуль, мгновенный отклик,
@@ -953,43 +909,6 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF6B7280.toInt())
             setPadding(0, dp(2), 0, dp(6))
         })
-        val camoCfg = RrpProtocols.camouflageConfig()
-        if (camoCfg.id.isNotBlank()) {
-            val camoRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            val camoCheck = CheckBox(this).apply {
-                textSize = 14f
-                text = getString(R.string.app_modules_row2_name_fmt, RrpProtocols.camouflageLabel(), camoCfg.ver)
-                isChecked = camoCfg.enabled && !prefs().getBoolean(TunnelService.KEY_CAMO_OFF, false)
-                if (!camoCfg.enabled) isEnabled = false
-                setOnCheckedChangeListener { _, checked ->
-                    if (!camoCfg.enabled) {
-                        isChecked = false
-                        return@setOnCheckedChangeListener
-                    }
-                    // v0.9.5: через сервис (ACTION_CAMO) — работает и без
-                    // активного подключения; итог придёт статусом/логом.
-                    val i = android.content.Intent(this@MainActivity, TunnelService::class.java)
-                        .setAction(TunnelService.ACTION_CAMO)
-                        .putExtra(TunnelService.EXTRA_ENABLED, checked)
-                    // startService (не foreground): модуль-переключатель не
-                    // поднимает туннель, только передаёт выбор сервису.
-                    startService(i)
-                    Toast.makeText(
-                        this@MainActivity,
-                        getString(if (checked) R.string.modules_camo_toast_on else R.string.modules_camo_toast_off),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                }
-            }
-            camoRow.addView(camoCheck)
-            camoRow.addView(TextView(this).apply {
-                setText(R.string.modules_camo_desc)
-                textSize = 12f
-                setTextColor(0xFF6B7280.toInt())
-                setPadding(dp(32), 0, 0, dp(4))
-            })
-            modsCard.addView(camoRow)
-        }
         // v1.0.0: модуль UDP-релей — галочка рядом с API Mask; гейт на клиенте
         // (телефон — точка egress UDP): выкл → UDP_ASSOC отклоняется, ноль дейтаграмм
         val udpCfg = Modules.lastUdp
@@ -1364,6 +1283,45 @@ class MainActivity : AppCompatActivity() {
             )
         )
         p.addView(card(shareCard))
+
+        // v1.7.0: инструменты конфига — сюда же переехали импорт/экспорт
+        // и QR (канон: ввод/обмен конфигом — настройки, не подключение).
+        val toolsCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        toolsCard.addView(sectionTitle(R.string.config_tools_title, null))
+        // legacy-представление ссылки (статус/значение): создаётся скрытым —
+        // импортеры/сканер/транспорт пишут в него, видимость не нужна
+        // (канон ссылки показывает список серверов на «Подключении»).
+        val legacyBox = LinearLayout(this).apply { visibility = View.GONE }
+        linkStatusView = TextView(this).apply { visibility = View.GONE }
+        linkValueView = TextView(this).apply { visibility = View.GONE }
+        legacyBox.addView(linkStatusView)
+        legacyBox.addView(linkValueView)
+        toolsCard.addView(legacyBox)
+        toolsCard.addView(
+            row(
+                outlined(R.string.import_config).also {
+                    it.setOnClickListener {
+                        try {
+                            importFileLauncher.launch(arrayOf("text/*", "application/octet-stream"))
+                        } catch (e: ActivityNotFoundException) {
+                            Toast.makeText(this, R.string.file_error_no_picker, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                outlined(R.string.export_config).also {
+                    it.setOnClickListener { exportFileLauncher.launch("reverseray-config.txt") }
+                },
+            ),
+        )
+        if (qrSupported) {
+            toolsCard.addView(
+                row(
+                    outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
+                    outlined(R.string.qr_show).apply { setOnClickListener { showQr() } },
+                ),
+            )
+        }
+        p.addView(card(toolsCard))
         return scrollWrap(p)
     }
 
@@ -1626,6 +1584,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyButtonMode(mode: Mode) {
         bigButtonIsStart = mode.isStart
+        // v1.7.0: статус-точка главной карточки = цвет кнопки (+пульс в активных)
+        mainStatusDot?.let { dot ->
+            val (color, pulse) = when (mode) {
+                Mode.CONNECTED -> 0xFF39D98A.toInt() to false
+                Mode.CONNECTING -> 0xFFB26B00.toInt() to true
+                Mode.TIMEOUT, Mode.ERROR -> 0xFFC62828.toInt() to true
+                else -> 0xFFC62828.toInt() to false
+            }
+            (dot.background as? android.graphics.drawable.GradientDrawable)?.setColor(color)
+            if (pulse && dot.alpha == 1f) {
+                android.animation.ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.25f).apply {
+                    duration = 700
+                    repeatMode = android.animation.ValueAnimator.REVERSE
+                    repeatCount = android.animation.ValueAnimator.INFINITE
+                    start()
+                }
+            } else if (!pulse) {
+                dot.animate().cancel()
+                dot.alpha = 1f
+            }
+        }
         // v0.9.9 (канон M2 «смена состояния — fade», M3 «без jump-cut»):
         // кроссфейд подписи Старт/Подключение/Стоп, синхронный плавному цвету
         val newLabel = getString(mode.labelRes)
@@ -2936,32 +2915,101 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
     }
 
-    /** Пересборка списка сессий в настройках. */
+    /** Цвета статусов = канон цветов главной кнопки (v1.7.0). second — пульсировать. */
+    private fun stateStyle(state: String): Pair<Int, Boolean> = when (state) {
+        "CONNECTED", "PROTO", "up" -> 0xFF39D98A.toInt() to false
+        "CONNECTING", "RETRY", "PROTO_ROLLBACK", "connecting" -> 0xFFB26B00.toInt() to true
+        "ERROR", "LIMIT_REACHED", "PIN_MISMATCH" -> 0xFFC62828.toInt() to true
+        else -> 0xFFC62828.toInt() to false // отключён/остановлен — красная без пульса
+    }
+
+    /** Снимок состояний живых сессий (EXTRA_SESSIONS): id → state. */
+    private fun sessionStatesSnapshot(): Map<String, String> = try {
+        val arr = org.json.JSONArray(lastSessionsJson)
+        val m = HashMap<String, String>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            m[o.optString("id")] = o.optString("state")
+        }
+        m
+    } catch (_: Exception) {
+        emptyMap()
+    }
+
+    /** Пульсирующая статус-точка строки сервера (v1.7.0). */
+    private fun statusDot(color: Int, pulse: Boolean): View {
+        val dot = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(10), dp(10)).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setMargins(0, 0, dp(8), 0)
+            }
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(color)
+            }
+        }
+        if (pulse) {
+            android.animation.ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.25f).apply {
+                duration = 700
+                repeatMode = android.animation.ValueAnimator.REVERSE
+                repeatCount = android.animation.ValueAnimator.INFINITE
+                start()
+            }
+        }
+        return dot
+    }
+
+    /**
+     * Пересборка списка серверов на «Подключении» (v1.7.0): строка =
+     * статус-точка + имя + хост из ссылки + кнопки равной ширины
+     * [Изменить · Вкл/Выкл · PRIMARY · Удалить].
+     */
     private fun refreshSessionsCard() {
         if (!this::sessionsBox.isInitialized) return
         preserveScroll {
             sessionsBox.removeAllViews()
             val store = sessionStore()
             val active = store.activeId()
+            val states = sessionStatesSnapshot()
             for (pr in store.profiles()) {
+                val (color, pulse) = stateStyle(states[pr.id] ?: "")
                 val line = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                line.addView(TextView(this).apply {
-                    text = (if (pr.id == active) "★ " else "") + pr.name +
-                        "  ·  " + getString(if (pr.enabled) R.string.dash_state_connected else R.string.dash_state_disabled)
-                    textSize = 13f
+                val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                head.addView(statusDot(color, pulse))
+                head.addView(TextView(this).apply {
+                    text = (if (pr.id == active) "★ " else "") + pr.name
+                    textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
-                    setPadding(0, dp(6), 0, dp(2))
+                    setTextColor(0xFFFFFFFF.toInt())
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 })
+                head.addView(TextView(this).apply {
+                    text = states[pr.id]?.let { st ->
+                        getString(
+                            when (st) {
+                                "CONNECTED", "PROTO" -> R.string.dash_state_connected
+                                "CONNECTING", "RETRY", "PROTO_ROLLBACK" -> R.string.dash_state_connecting
+                                else -> R.string.dash_state_error
+                            },
+                        )
+                    } ?: getString(if (pr.enabled) R.string.dash_state_disabled else R.string.sess_off_state)
+                    textSize = 12f
+                })
+                line.addView(head)
                 line.addView(TextView(this).apply {
-                    text = pr.uri
+                    text = try {
+                        val c = RrpUri.parse(pr.uri)
+                        c.host + ":" + c.ports.first()
+                    } catch (_: Exception) {
+                        pr.uri
+                    }
                     textSize = 11f
                     setTypeface(Typeface.MONOSPACE)
                     setTextColor(0xFF8FA3D9.toInt())
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    setPadding(0, dp(2), 0, 0)
                 })
-                // v1.6.2: кнопки РАВНОЙ ширины (weight=1) — «Rename» больше не
-                // переносится на две строки, высота строки стабильна.
                 val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                 fun addBtn(labelRes: Int, onClick: () -> Unit) {
                     btnRow.addView(outlined(labelRes).apply {
@@ -2970,12 +3018,12 @@ class MainActivity : AppCompatActivity() {
                             .apply { setMargins(0, dp(6), dp(6), 0) }
                     })
                 }
+                addBtn(R.string.sess_edit) { showEditSessionDialog(pr.id) }
                 addBtn(if (pr.enabled) R.string.sess_off else R.string.sess_on) {
                     store.setEnabled(pr.id, !pr.enabled)
                     sendSessionCmd(pr.id, if (pr.enabled) "disconnect" else "connect")
                     refreshSessionsCard()
                 }
-                addBtn(R.string.sess_rename) { showRenameSessionDialog(pr.id) }
                 if (pr.id != active) addBtn(R.string.dash_session_primary) {
                     store.setActive(pr.id)
                     sendSessionCmd(pr.id, "primary")
@@ -2987,6 +3035,61 @@ class MainActivity : AppCompatActivity() {
                 sessionsBox.addView(line)
             }
         }
+    }
+
+    /**
+     * v1.7.0: редактирование сервера — то же окно, что и добавление, но с
+     * предзаполненными ссылкой и именем. PRIMARY синхронизирует зеркало
+     * KEY_CONFIG; живая сессия переподключается с новым конфигом.
+     */
+    private fun showEditSessionDialog(id: String) {
+        val store = sessionStore()
+        val pr = store.byId(id) ?: return
+        val input = TextInputEditText(this).apply {
+            hint = getString(R.string.sess_add_hint)
+            minLines = 1
+            setTextSize(12f)
+            setTypeface(Typeface.MONOSPACE)
+            setText(pr.uri)
+        }
+        val nameInput = TextInputEditText(this).apply {
+            hint = getString(R.string.sess_name_hint)
+            setTextSize(12f)
+            setText(pr.name)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = dp(16)
+            setPadding(pad, pad, pad, 0)
+            addView(input)
+            addView(nameInput)
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.sess_edit_title, pr.name))
+            .setView(container)
+            .setPositiveButton(R.string.link_ok, null)
+            .setNegativeButton(R.string.link_cancel, null)
+            .create()
+        dialog.show()
+        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener { d ->
+                val raw = input.text?.toString()?.trim().orEmpty()
+                val name = nameInput.text?.toString()?.trim().orEmpty()
+                val canonical = try {
+                    RrpUri.parse(raw).serialize()
+                } catch (e: Exception) {
+                    Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                val wasActive = pr.id == store.activeId()
+                store.update(pr.copy(uri = canonical, name = name.ifBlank { pr.name }))
+                if (wasActive) {
+                    prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+                }
+                Toast.makeText(this, R.string.sess_updated, Toast.LENGTH_SHORT).show()
+                refreshSessionsCard()
+                sendSessionCmd(pr.id, "reconnect")
+            }
     }
 
     /**

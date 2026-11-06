@@ -87,6 +87,9 @@ type App struct {
 	store  *auth.Store
 	hub    *hub.Hub
 	bundle *tlscert.Bundle
+	// v1.7.0: горячая замена TLS-листа (runtime-перевыпуск) — чтение
+	// на каждом коннекте, запись при необходимости.
+	bundleMu sync.RWMutex
 	met    *Metrics
 	// egress — кешированный внешний IP сервера для /status и веб-морды
 	egress egressIP
@@ -223,7 +226,43 @@ func dedupNonEmpty(in []string, extra ...string) []string {
 }
 
 // CAPin exposes the CA SPKI pin for `enroll`.
-func (a *App) CAPin() string { return a.bundle.CAPin }
+// certRenewLoop — суточный тикер перевыпуска TLS-листа (v1.7.0).
+// Канон безопасности: CA не ротируется рантаймом (SPKI-пин клиентов жив),
+// обновляется только лист. LoadOrCreate атомарно перезаписывает файлы;
+// при ошибке — честный WARN и работа текущим листом (коннект не падает).
+func (a *App) certRenewLoop(ctx context.Context) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		a.bundleMu.RLock()
+		need := tlscert.LeafNeedsRenewal(a.bundle)
+		a.bundleMu.RUnlock()
+		if !need {
+			continue
+		}
+		nb, err := tlscert.LoadOrCreate(a.cfg.StateDir, a.cfg.Listen.TLSHosts)
+		if err != nil {
+			a.log.Warn("TLS leaf renewal failed — serving current leaf", "err", err)
+			continue
+		}
+		a.bundleMu.Lock()
+		a.bundle = nb
+		a.bundleMu.Unlock()
+		a.log.Info("TLS leaf renewed", "not_after", nb.Leaf.Leaf.NotAfter.UTC().Format(time.RFC3339))
+		a.ev.Add("info", "cert", "TLS-сертификат перевыпущен (лист), CA не менялся")
+	}
+}
+
+func (a *App) CAPin() string {
+	a.bundleMu.RLock()
+	defer a.bundleMu.RUnlock()
+	return a.bundle.CAPin
+}
 
 // Devices lists known device names (для тестов bootstrap).
 func (a *App) Devices() []string { return a.store.Devices() }
@@ -234,6 +273,9 @@ func (a *App) Run(ctx context.Context) error {
 	defer stop()
 	go a.reloadLoop(ctx)
 	go a.logConnectInfo(ctx)
+	// v1.7.0: runtime-перевыпуск TLS-листа (CA НЕ меняется — пины живы;
+	// неудача продления — фоллбек: продолжаем текущим листом).
+	go a.certRenewLoop(ctx)
 	// v0.8: фоновая синхронизация модулей (первый прогон при старте)
 	if a.cfg.Modules.Auto {
 		go a.modSync.Run(ctx)
@@ -436,6 +478,10 @@ func tuneTCP(conn net.Conn) {
 
 func (a *App) tunnelTLSConfig() *tls.Config {
 	// Present [leaf, CA] so clients can verify against the pinned CA SPKI.
+	// v1.7.0: лист читается под RLock — перевыпуск подменяет его атомарно,
+	// живые коннекты не рвутся, новые идут уже с обновлённым листом.
+	a.bundleMu.RLock()
+	defer a.bundleMu.RUnlock()
 	leaf := a.bundle.Leaf
 	chain := make([][]byte, 0, 2)
 	chain = append(chain, leaf.Certificate...)
