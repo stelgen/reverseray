@@ -538,6 +538,11 @@ class MainActivity : AppCompatActivity() {
      * после перелайаута; страховочный пост через 64 мс).
      */
     private fun preserveScroll(block: () -> Unit) {
+        // во время buildUi страницы ещё не собраны — просто выполняем блок
+        if (!this::pageHome.isInitialized) {
+            block()
+            return
+        }
         val sv = when (currentTab) {
             0 -> pageHome; 1 -> pageLink; 2 -> pageUpdate; 3 -> pageLog; 4 -> pageSettings; else -> null
         } as? android.widget.ScrollView
