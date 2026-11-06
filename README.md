@@ -174,7 +174,7 @@ sequenceDiagram
 | Манифест | Один `modules.json` для APK и сервера | [`modules/`](modules/README.md) |
 | Протокол | Спецификация RRP/1 + UDP + WS + mtproto2 + NOISE | [`docs/protocol.md`](docs/protocol.md) |
 | Деплой | Автопилот `rr.sh` | [`deploy/rr.sh`](deploy/rr.sh) |
-| Entware | Бинар для роутеров (Netcraze NC-1812 aarch64) | [`deploy/entware/`](deploy/entware/README.md) |
+| Entware | Бинар для роутеров (Netcraze NC-1812 aarch64) + автопилот `deploy/rr-entware.sh` | [`deploy/entware/`](deploy/entware/README.md) |
 | CI | Тесты, приватность, модули, скриншоты, секреты | `.github/workflows/` |
 
 </details>

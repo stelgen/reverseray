@@ -1,48 +1,72 @@
-# ReversERay сервер — Netcraze Ultra NC-1812 (Entware, aarch64)
+# ReversERay сервер — Entware-роутер (Netcraze Ultra NC-1812 и любые aarch64/armv7)
 
-Статический бинарный сервер для роутера **Netcraze Ultra NC-1812**
-(SoC MediaTek Filogic 820, 3× ARM Cortex-A73, **ARMv8-A / aarch64**,
-Entware через OPKG — поддерживается производителем штатно).
+Сервер ReversERay на роутере **без Docker**: статический бинарь из GitHub
+Releases + init-скрипт Entware. NC-1812 (Netcraze Ultra, MT7988D,
+3×Cortex-A73, aarch64) — целевая платформа; подойдёт любой Entware-роутер.
 
-## Что нужно
+## Канон модем-сервера (v1.7.1)
 
-- Артефакт `reverseray-linux-arm64` из GitHub Releases (статическая сборка
-  Go, CGO выключен — динамические библиотеки Entware не нужны).
-- Entware, установленный во внутреннюю память или на USB
-  (CLI: `opkg install /opt/...` — см. штатную инструкцию Netcraze
-  «Installing OPKG Entware»).
+- **Веб-морда закрыта**: admin слушает `127.0.0.1` (или unix-сокет) — наружу не торчит;
+- **диск не страдает**: лог — в tmpfs `/tmp` или `/dev/null` (настраивается);
+- **один конфиг всего**: `/opt/etc/reverseray/reverseray.conf` (порт, бинды,
+  лог, имя устройства, версия релиза);
+- **валидация в комплекте**: процесс, healthz, листенеры, бинды «наружу»,
+  sha256 артефакта, RAM-footprint.
 
-## Установка
+## Установка — один скрипт (на роутере)
 
 ```sh
-# 1. на роутере (Entware ssh/opkg-окружение)
-curl -L -o /opt/tmp/reverseray https://github.com/stelgen/reverseray/releases/download/v1.5.1/reverseray-linux-arm64
-mkdir -p /opt/bin /opt/etc/reverseray
-install -m 0755 /opt/tmp/reverseray /opt/bin/reverseray
-
-# 2. конфиг (enroll-ссылка генерируется сервером при первом старте)
-/opt/bin/reverseray --help   # посмотреть флаги
-/opt/bin/reverseray          # первый запуск — в stdout будет enroll-ссылка rrp://…
-
-# 3. init-скрипт Entware
-cat > /opt/etc/init.d/S99reverseray <<'EOF'
-#!/bin/sh
-### INIT-скрипт Entware: reverseray сервер
-case "$1" in
-  start)  /opt/bin/reverseray >/opt/etc/reverseray/log.txt 2>&1 & ;;
-  stop)   killall reverseray ;;
-  restart) killall reverseray; sleep 1; $0 start ;;
-  *) echo "usage: $0 start|stop|restart" ;;
-esac
-EOF
-chmod +x /opt/etc/init.d/S99reverseray
-/opt/etc/init.d/S99reverseray start
+# скачать скрипт на роутер и запустить (нужны curl/wget, sha256sum)
+curl -fsSL https://raw.githubusercontent.com/stelgen/reverseray/main/deploy/rr-entware.sh -o /opt/tmp/rr-entware.sh
+sh /opt/tmp/rr-entware.sh            # установка/обновление до последнего релиза
 ```
 
-## Примечания
+Скрипт сам: определит архитектуру (aarch64 → `reverseray-linux-arm64`),
+скачает бинарь, сверит sha256, проверит что бинарь живёт на этом ядре,
+создаст конфиги и init-скрипт, запустит сервис, прогонит валидацию,
+зарегистрирует телефон (enroll) и напечатает **ссылку `rrp://` для APK**
+и **какие порты пробросить** в файрвол роутера (TCP туннеля + TCP/UDP прокси).
 
-- Фаервол роутера: откройте порт туннеля (по умолчанию из флагов запуска).
-- Клиент-APK: вкладка «Серверы» → «+ Добавить сервер» → вставьте rrp://-ссылку
-  сервера → «Проверить подключение» + «Подключить сразу».
-- NC-1812 — aarch64: бинар собран `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`,
-  работает без opkg-зависимостей.
+```sh
+sh /opt/tmp/rr-entware.sh --validate   # повторная валидация без переустановки
+sh /opt/tmp/rr-entware.sh --reset      # обнулить state (токены/CA) и пере-enroll
+sh /opt/tmp/rr-entware.sh --tag v1.7.1 # зафиксировать версию
+```
+
+## Конфиг: /opt/etc/reverseray/reverseray.conf
+
+| Ключ | Смысл | Дефолт |
+|---|---|---|
+| `RR_TAG` | версия релиза | `latest` |
+| `RR_TUNNEL_BIND` | слушатель туннеля телефона (TLS) | `:4433` |
+| `RR_MIXED_BIND` | прокси SOCKS5+HTTP (egress через телефон) | `:1080` |
+| `RR_ADMIN_BIND` | админ/веб-морда — канон модема `127.0.0.1:…`, пусто = unix-сокет | `127.0.0.1:9090` |
+| `RR_LOG_MODE` | `ram` (tmpfs) / `none` / `file` | `ram` |
+| `RR_ENROLL_NAME` | имя устройства в ссылке | `phone-1` |
+| `RR_SESSIONS` | мультипоточность 1–8 (порт дублируется в ссылке) | `1` |
+| `RR_PUBLIC_HOST` | WAN-IP/DDNS для ссылки (пусто = авто) | авто |
+
+После правки: `sh /opt/etc/init.d/S99reverseray restart`.
+
+## Как это работает
+
+- **Телефон = egress-узел** (канон ReversERay): прокси-порт (`mixed`) и
+  туннель обслуживают трафик через подключенный APK-клиент. Без телефона
+  egress честно отсутствует — это норма, скрипт валидации это учитывает.
+- **Наружу** пробрасываются только порт туннеля (TCP) и порт прокси
+  (TCP/UDP, если нужен внешний SOCKS5). Веб-морда не пробрасывается никогда.
+- State (токены/CA) пишется только в `RR_STATE_DIR` — небольшие файлы;
+  логи — в tmpfs, чтобы не изнашивать флешку модема.
+
+## Вручную (если скрипт не подходит)
+
+```sh
+curl -L -o /opt/tmp/reverseray https://github.com/stelgen/reverseray/releases/download/v1.7.1/reverseray-linux-arm64
+mkdir -p /opt/bin /opt/etc/reverseray
+install -m 0755 /opt/tmp/reverseray /opt/bin/reverseray
+/opt/bin/reverseray run -config /opt/etc/reverseray/config.json   # конфиг — см. скрипт
+/opt/bin/reverseray enroll -state-dir /opt/var/lib/reverseray -name phone-1 -host <WAN_IP>
+```
+
+Артефакты релиза: `reverseray-linux-arm64` (NC-1812), `-armv7`, `-amd64`,
+`SHA256SUMS`. Бинарь статический (CGO выключен) — зависимости Entware не нужны.

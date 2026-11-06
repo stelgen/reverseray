@@ -614,6 +614,18 @@ class MainActivity : AppCompatActivity() {
     private fun scrollWrap(content: LinearLayout): View = android.widget.ScrollView(this).apply {
         isFillViewport = true
         isVerticalScrollBarEnabled = true
+        // v1.7.1 КАНОН «фокус не прыгает» (канон владельца: нажатие кнопки /
+        // пересборка списков НИКОГДА не уносят вид). Механизм прыжка:
+        // фокусный fallback ViewRootImpl после layout поднимает
+        // focusableInTouchMode-потомка (консоль с selectable-текстом и т.п.) →
+        // ScrollView едет к нему (smoothScroll переживает и
+        // preserveScroll-восстановление). Рецепт: страница сама гасит
+        // touch-фокус → fallback приходит в ScrollView, а не в глубину →
+        // scrollToChild не вызывается вовсе. Прямые requestFocus от ввода
+        // (TextInputEditText на «Подключении») это не ломает.
+        setDescendantFocusability(ViewGroup.FOCUS_BEFORE_DESCENDANTS)
+        isFocusable = true
+        isFocusableInTouchMode = true
         addView(
             content,
             ViewGroup.LayoutParams(

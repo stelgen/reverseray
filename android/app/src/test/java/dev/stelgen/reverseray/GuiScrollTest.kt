@@ -78,4 +78,57 @@ class GuiScrollTest {
             }
         }
     }
+
+    /**
+     * v1.7.1 КАНОН «фокус не прыгает»: нажатия/пересборки не уносят вид.
+     * Страница гасит touch-фокус (FOCUS_BEFORE_DESCENDANTS + focusableInTouchMode
+     * на самом ScrollView) — фокусный fallback ViewRootImpl не поднимает
+     * фокусируемых потомков (консоль с selectable-текстом) и не едет за ними.
+     */
+    @Test
+    fun `page absorbs touch focus and churn does not move scroll`() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            var home: ScrollView? = null
+            var capturedY = -1
+            scenario.onActivity { activity ->
+                val content = UiFind.contentView(activity) as ViewGroup
+                val pages = directChildren(content).filterIsInstance<ViewGroup>()
+                    .firstOrNull { it !is androidx.appcompat.widget.LinearLayoutCompat && it.childCount == 5 }
+                    ?: directChildren(content).last() as ViewGroup
+                val scrollPages = directChildren(pages).filterIsInstance<ScrollView>()
+                assertTrue("5 страниц", scrollPages.size == 5)
+                val h = scrollPages[0]
+                // канон-инвариант: страница сама принимает touch-фокус
+                assertTrue(
+                    "страница должна гасить touch-фокус (FOCUS_BEFORE_DESCENDANTS)",
+                    h.descendantFocusability == ViewGroup.FOCUS_BEFORE_DESCENDANTS,
+                )
+                assertTrue("страница должна быть focusableInTouchMode", h.isFocusableInTouchMode)
+                home = h
+            }
+            // layout + скролл в середину, затем churn как при нажатии кнопки
+            scenario.onActivity {
+                val h = home!!
+                h.measure(
+                    View.MeasureSpec.makeMeasureSpec(360, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY),
+                )
+                h.layout(0, 0, 360, 640)
+                h.scrollTo(0, 300)
+                assertTrue("контент Home должен превышать вьюпорт", h.scrollY > 0)
+                capturedY = h.scrollY
+                // перерисовка консоли (путь «после нажатия»: логи сервисного потока)
+                MainActivity::class.java.getDeclaredMethod("renderServiceLogs").apply {
+                    isAccessible = true
+                }.invoke(it)
+            }
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            scenario.onActivity {
+                assertTrue(
+                    "churn сдвинул страницу: ${home!!.scrollY} != $capturedY",
+                    home!!.scrollY == capturedY,
+                )
+            }
+        }
+    }
 }

@@ -157,7 +157,12 @@ class StatusConsole @JvmOverloads constructor(
     }
 
     private fun scrollToBottom() {
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        // v1.7.1: без fullScroll(FOCUS_DOWN) — он несёт фокусную семантику и
+        // анимированный скролл; чистый scrollTo кладёт консоль в низ без
+        // побочных эффектов для фокуса страницы.
+        scroll.post {
+            scroll.scrollTo(0, (body.height - scroll.height).coerceAtLeast(0))
+        }
     }
 
     /** Высота тела в dp (не меняет положение при переключении вкладок). */
