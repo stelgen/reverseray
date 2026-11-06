@@ -292,7 +292,7 @@ button.act.dw:hover{border-color:#ff6b6b}
  <div class="grid kpis" id="kpis"></div>
  <div class="grid" style="margin-top:10px">
   <div class="panel">
-   <h3><span>Управление телефонами</span><span class="ctrl dim">токен хранится хэшем — полную ссылку выдаёт enroll</span></h3>
+   <h3><span>Управление телефонами</span><span class="ctrl dim">hash-only</span></h3>
    <div style="overflow-x:auto"><table id="devs"><thead><tr>
     <th>Устройство</th><th>Сессий</th><th>Протоколы</th><th>↓ релей</th><th>↑ релей</th><th>API Mask</th><th>Действия</th>
    </tr></thead><tbody></tbody></table></div>
@@ -395,7 +395,7 @@ async function tick(){
    rows+='<tr><td class="s"><b>'+esc(x.device)+'</b></td><td class="s">'+esc(protoLabel(x.proto,s))+'</td><td class="s dim">'+esc(x.proto===undefined?'':(x.transport||'tcp'))+'</td><td>'+rtt+'</td><td>'+x.streams+'</td><td>'+win+'</td><td>'+fmtB(x.relay_in)+'</td><td>'+fmtB(x.relay_out)+'</td><td class="s">'+ri+'</td><td class="s">'+ro+'</td><td>'+(x.open_errors?'<span class="warn">'+x.open_errors+'</span>':'<span class="ok">0</span>')+'</td><td class="dim">'+fmtUp(x.uptime_sec)+'</td></tr>';
   });
   document.querySelector('#sess tbody').innerHTML=rows||'<tr><td colspan="12" class="dim">нет активных туннелей</td></tr>';
-  document.getElementById('parkinfo').textContent='буфер: '+fmtUp(s.parked_streams!=null?s.parked_streams*2:0);
+  document.getElementById('parkinfo').textContent='в буфере: '+(s.parked_streams||0);
   var pl=(s.protocols||[]).map(function(p){return '<span class="pill">'+esc(protoLabel(p,s))+'</span>'}).join(' ');
   document.getElementById('protos').innerHTML='<div style="margin-bottom:6px">Реестр протоколов: '+pl+'</div><div>Протокол по умолчанию: <b>'+esc(protoLabel(s.default_proto,s))+'</b></div><div style="margin-top:4px">Сессии на не-дефолтном протоколе: '+s.proto_sessions_non_default+'</div>';
   document.getElementById('facts').innerHTML=(s.facts||[]).map(function(f){return '· '+esc(f)}).join('<br>');
@@ -475,7 +475,7 @@ async function tickDevices(){
    var s=lastStatus||{},d=b.dataset.copy;
    var port=((s.listen_tunnels||':4433').split(':').pop())||'4433';
    var link='rrp://<ТОКЕН>@'+location.hostname+':'+port+'/?pin='+encodeURIComponent(s.ca_pin||'')+'&name='+encodeURIComponent(d);
-   (navigator.clipboard&&navigator.clipboard.writeText(link)||Promise.reject()).then(function(){b.textContent='Скопировано';setTimeout(function(){b.textContent='Копировать'},1200)},function(){window.prompt('Скопируйте шаблон (токен — из enroll):',link)});
+   (navigator.clipboard&&navigator.clipboard.writeText(link)||Promise.reject()).then(function(){b.textContent='Скопировано';setTimeout(function(){b.textContent='Копировать'},1200)},function(){window.prompt('Токен — из enroll:',link)});
   }});
  }catch(e){}
 }

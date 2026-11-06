@@ -249,7 +249,7 @@ class MainActivity : AppCompatActivity() {
                     // v1.5.0: сервис остановлен — дашборд в оффлайн-снапшот профилей
                     if (state == TunnelService.STATE_STOPPED) {
                         lastSessionsJson = ""
-                        dashboard.update(offlineStats())
+                        preserveScroll { dashboard.update(offlineStats()) }
                     }
                     intent.getStringExtra(TunnelService.EXTRA_STATUS)?.let { statusText ->
                         renderServiceLogs()
@@ -475,6 +475,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPage(index: Int) {
+        currentTab = index
         listOf(pageHome, pageLink, pageUpdate, pageLog, pageSettings).forEachIndexed { i, p ->
             val show = i == index
             p.visibility = if (show) View.VISIBLE else View.GONE
@@ -522,11 +523,31 @@ class MainActivity : AppCompatActivity() {
             ),
         )
         parent.addView(dashboard)
-        if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
+        if (lastSessionsJson.isBlank()) preserveScroll { dashboard.update(offlineStats()) }
     }
 
     /** Последний JSON-снапшот сессий из EXTRA_SESSIONS (пусто — сервис молчит). */
     @Volatile private var lastSessionsJson: String = ""
+
+    /** v1.6.2: текущая вкладка (для стабилизации скролла при пересборках). */
+    private var currentTab = 0
+
+    /**
+     * v1.6.2: пересборка списков НЕ должна двигать экран: фиксируем scrollY
+     * активной вкладки, выполняем пересборку, возвращаем позицию (post —
+     * после перелайаута; страховочный пост через 64 мс).
+     */
+    private fun preserveScroll(block: () -> Unit) {
+        val sv = when (currentTab) {
+            0 -> pageHome; 1 -> pageLink; 2 -> pageUpdate; 3 -> pageLog; 4 -> pageSettings; else -> null
+        } as? android.widget.ScrollView
+        val y = sv?.scrollY ?: 0
+        block()
+        if (sv != null) {
+            sv.post { sv.scrollTo(0, y) }
+            sv.postDelayed({ sv.scrollTo(0, y) }, 64)
+        }
+    }
 
     /** Оффлайн-снапшот из профилей (сервис не шлёт статсы: stopped/disabled). */
     private fun offlineStats(): List<DashboardView.Stat> {
@@ -576,7 +597,8 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {
         }
-        dashboard.update(list)
+        // v1.6.2: дашборд пересобирается каждые 500 мс — скролл Home не дёргается
+        preserveScroll { dashboard.update(list) }
     }
 
     private fun page(): LinearLayout = LinearLayout(this).apply {
@@ -825,15 +847,39 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildLinkPage(): View {
         val p = page()
-        p.addView(TextView(this).apply {
-            setText(R.string.link_tab_hint)
-            textSize = 13f
-            setPadding(0, dp(4), 0, dp(4))
-        })
 
-        // v1.6.0: сессии (мульти-сервер) живут ЗДЕСЬ, на «Подключении» —
-        // раньше карточка была в «Настройках» (дубль, находили с трудом).
-        p.addView(sectionTitle(R.string.sess_section_title, null))
+        // ── 1. ПОДКЛЮЧЕНИЕ: каноническая ссылка (read-only) + правка/QR ──
+        val linkCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        linkCard.addView(sectionTitle(R.string.config_hint_title, null))
+        linkStatusView = TextView(this).apply {
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(2), 0, dp(4))
+            visibility = View.GONE
+        }
+        linkCard.addView(linkStatusView)
+        linkValueView = TextView(this).apply {
+            textSize = 12f
+            setTypeface(Typeface.MONOSPACE)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setTextIsSelectable(true)
+            val cur = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
+            text = if (cur.isBlank()) getString(R.string.link_empty) else cur
+        }
+        linkCard.addView(linkValueView)
+        linkCard.addView(
+            row(
+                outlined(R.string.link_edit).apply { setOnClickListener { showEditLinkDialog() } },
+                outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
+                outlined(R.string.qr_show).apply { setOnClickListener { showQr() } }.apply {
+                    visibility = if (qrSupported) View.VISIBLE else View.GONE
+                },
+            )
+        )
+        p.addView(card(linkCard))
+
+        // ── 2. СЕРВЕРЫ: сессии мульти-серверного ядра (v1.6.0 перенесено
+        // из «Настроек»; v1.6.2 — единый лаконичный каркас вкладки) ──
         val sessionsCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
         sessionsBox = sessionsCard.getChildAt(0) as LinearLayout
         sessionsCard.addView(
@@ -842,12 +888,12 @@ class MainActivity : AppCompatActivity() {
         p.addView(sessionsCard)
         refreshSessionsCard()
 
-        // v1.6.0: МУЛЬТИ-ВВОД ссылок — многострочное окно: по ссылке на строку,
-        // импорт пачкой (вкл. по умолчанию, коннект — по кнопке Старт).
+        // ── 3. ИМПОРТ: пачка ссылок (по одной на строку) ──
         val bulkCard = card(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL })
+        bulkCard.addView(sectionTitle(R.string.sess_bulk_title, null))
         val bulkInput = TextInputEditText(this).apply {
             hint = getString(R.string.sess_bulk_hint)
-            minLines = 3
+            minLines = 2
             gravity = Gravity.TOP
             setTextSize(12f)
             setTypeface(Typeface.MONOSPACE)
@@ -871,38 +917,6 @@ class MainActivity : AppCompatActivity() {
             ),
         )
         p.addView(bulkCard)
-
-        // v1.3.0: ссылка ОТОбражается (read-only, перенос строк); правка — через
-        // кнопку «Изменить» с диалогом (Отмена/Очистить/ОК) и тестовым прогоном.
-        val linkCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        linkCard.addView(sectionTitle(R.string.config_hint_title, null))
-        linkStatusView = TextView(this).apply {
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(2), 0, dp(4))
-            visibility = View.GONE
-        }
-        linkCard.addView(linkStatusView)
-        linkValueView = TextView(this).apply {
-            textSize = 12f
-            setTypeface(Typeface.MONOSPACE)
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            setTextIsSelectable(true)
-            val cur = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
-            text = if (cur.isBlank()) getString(R.string.link_empty) else cur
-        }
-        linkCard.addView(linkValueView)
-        linkCard.addView(
-            row(
-                outlined(R.string.link_edit).apply { setOnClickListener { showEditLinkDialog() } },
-                outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
-            )
-        )
-        p.addView(card(linkCard))
-
-        if (qrSupported) {
-            p.addView(row(outlined(R.string.qr_show).apply { setOnClickListener { showQr() } }))
-        }
 
         if (fileIoSupported) {
             p.addView(
@@ -1008,23 +1022,6 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showTransportPicker() }
         })
         p.addView(card(protoCard))
-
-        // Поделиться приложением: ссылка или APK (модули вшиты, настроек нет)
-        val shareCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        shareCard.addView(sectionTitle(R.string.btn_share_app, null))
-        shareCard.addView(TextView(this).apply {
-            setText(R.string.share_choose)
-            textSize = 12f
-            setTextColor(0xFF6B7280.toInt())
-            setPadding(0, dp(2), 0, dp(4))
-        })
-        shareCard.addView(
-            row(
-                filled(R.string.share_link).apply { setOnClickListener { shareAppLink() } },
-                outlined(R.string.share_apk).apply { setOnClickListener { shareAppApk() } },
-            )
-        )
-        p.addView(card(shareCard))
         return scrollWrap(p)
     }
 
@@ -1350,6 +1347,18 @@ class MainActivity : AppCompatActivity() {
             }
         })
         p.addView(card(probe))
+
+        // v1.6.2: «Поделиться приложением» переехал со вкладки «Подключение»
+        // в «Настройки» (канон: распространение — настройка, не подключение).
+        val shareCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        shareCard.addView(sectionTitle(R.string.btn_share_app, null))
+        shareCard.addView(
+            row(
+                filled(R.string.share_link).apply { setOnClickListener { shareAppLink() } },
+                outlined(R.string.share_apk).apply { setOnClickListener { shareAppApk() } },
+            )
+        )
+        p.addView(card(shareCard))
         return scrollWrap(p)
     }
 
@@ -2925,49 +2934,53 @@ class MainActivity : AppCompatActivity() {
     /** Пересборка списка сессий в настройках. */
     private fun refreshSessionsCard() {
         if (!this::sessionsBox.isInitialized) return
-        sessionsBox.removeAllViews()
-        val store = sessionStore()
-        val active = store.activeId()
-        for (pr in store.profiles()) {
-            val line = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            line.addView(TextView(this).apply {
-                text = (if (pr.id == active) "★ " else "") + pr.name +
-                    "  ·  " + getString(if (pr.enabled) R.string.dash_state_connected else R.string.dash_state_disabled)
-                textSize = 13f
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(0, dp(6), 0, dp(2))
-            })
-            line.addView(TextView(this).apply {
-                text = pr.uri
-                textSize = 11f
-                setTypeface(Typeface.MONOSPACE)
-                setTextColor(0xFF8FA3D9.toInt())
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-            })
-            line.addView(row(
-                outlined(if (pr.enabled) R.string.sess_off else R.string.sess_on).apply {
-                    setOnClickListener {
-                        store.setEnabled(pr.id, !pr.enabled)
-                        sendSessionCmd(pr.id, if (pr.enabled) "disconnect" else "connect")
-                        refreshSessionsCard()
-                    }
-                },
-                outlined(R.string.sess_rename).apply { setOnClickListener { showRenameSessionDialog(pr.id) } },
-                outlined(R.string.dash_session_primary).apply {
-                    visibility = if (pr.id == active) View.GONE else View.VISIBLE
-                    setOnClickListener {
-                        store.setActive(pr.id)
-                        sendSessionCmd(pr.id, "primary")
-                        refreshSessionsCard()
-                        dashboard.update(offlineStats())
-                    }
-                },
-                outlined(R.string.sess_delete).apply {
-                    setOnClickListener { confirmDeleteSession(pr.id) }
-                },
-            ))
-            sessionsBox.addView(line)
+        preserveScroll {
+            sessionsBox.removeAllViews()
+            val store = sessionStore()
+            val active = store.activeId()
+            for (pr in store.profiles()) {
+                val line = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                line.addView(TextView(this).apply {
+                    text = (if (pr.id == active) "★ " else "") + pr.name +
+                        "  ·  " + getString(if (pr.enabled) R.string.dash_state_connected else R.string.dash_state_disabled)
+                    textSize = 13f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setPadding(0, dp(6), 0, dp(2))
+                })
+                line.addView(TextView(this).apply {
+                    text = pr.uri
+                    textSize = 11f
+                    setTypeface(Typeface.MONOSPACE)
+                    setTextColor(0xFF8FA3D9.toInt())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                })
+                // v1.6.2: кнопки РАВНОЙ ширины (weight=1) — «Rename» больше не
+                // переносится на две строки, высота строки стабильна.
+                val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                fun addBtn(labelRes: Int, onClick: () -> Unit) {
+                    btnRow.addView(outlined(labelRes).apply {
+                        setOnClickListener { onClick() }
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                            .apply { setMargins(0, dp(6), dp(6), 0) }
+                    })
+                }
+                addBtn(if (pr.enabled) R.string.sess_off else R.string.sess_on) {
+                    store.setEnabled(pr.id, !pr.enabled)
+                    sendSessionCmd(pr.id, if (pr.enabled) "disconnect" else "connect")
+                    refreshSessionsCard()
+                }
+                addBtn(R.string.sess_rename) { showRenameSessionDialog(pr.id) }
+                if (pr.id != active) addBtn(R.string.dash_session_primary) {
+                    store.setActive(pr.id)
+                    sendSessionCmd(pr.id, "primary")
+                    refreshSessionsCard()
+                    preserveScroll { dashboard.update(offlineStats()) }
+                }
+                addBtn(R.string.sess_delete) { confirmDeleteSession(pr.id) }
+                line.addView(btnRow)
+                sessionsBox.addView(line)
+            }
         }
     }
 
@@ -3015,7 +3028,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, getString(R.string.sess_added, created.name), Toast.LENGTH_LONG).show()
                 refreshSessionsCard()
                 if (connectNow) sendSessionCmd(created.id, "connect")
-                if (lastSessionsJson.isBlank()) dashboard.update(offlineStats())
+                if (lastSessionsJson.isBlank()) preserveScroll { dashboard.update(offlineStats()) }
             }
         }
         dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -3110,7 +3123,7 @@ class MainActivity : AppCompatActivity() {
                 if (name.isNotBlank() && store.rename(id, name)) {
                     Toast.makeText(this, R.string.sess_renamed, Toast.LENGTH_SHORT).show()
                     refreshSessionsCard()
-                    dashboard.update(offlineStats())
+                    preserveScroll { dashboard.update(offlineStats()) }
                 }
             }
             .setNegativeButton(R.string.link_cancel, null)
@@ -3129,7 +3142,7 @@ class MainActivity : AppCompatActivity() {
                     sendSessionCmd(id, "disconnect")
                     Toast.makeText(this, R.string.sess_removed, Toast.LENGTH_SHORT).show()
                     refreshSessionsCard()
-                    dashboard.update(offlineStats())
+                    preserveScroll { dashboard.update(offlineStats()) }
                 }
             }
             .setNegativeButton(R.string.cancel, null)

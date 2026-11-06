@@ -63,7 +63,7 @@
     <string name="btn_stop_short">СТОП</string>
 
     <!-- Связь -->
-    <string name="link_tab_hint">Вставь rrp://-ссылку — парсер сам почистит мусор: невидимые символы, кавычки, текст вокруг ссылки, точки и запятые на концах.</string>
+    <string name="link_tab_hint">Вставь rrp://-ссылку</string>
     <string name="link_fix">Проверить и починить</string>
     <string name="link_fixed">Ссылка валидна: %1$s</string>
 
@@ -80,7 +80,7 @@
         <string name="modules_camo_toast_on">Модуль включён — лог и статус обновлены</string>
     <string name="modules_camo_toast_off">Модуль выключен — выбор уйдёт на сервер</string>
     <string name="app_modules_row2_name_fmt">%1$s · v%2$s</string>
-<string name="modules_hint">Вкл/выкл одним чекбоксом; выбор синхронизируется с сервером и переживает офлайн.</string>
+<string name="modules_hint">Синхронизируется с сервером, переживает офлайн.</string>
     <string name="modules_camo_desc">Фоновый обмен API-подобными кадрами внутри туннеля.</string>
 <string name="proto_switch">Сменить протокол</string>
     <string name="transport_switch">Транспорт</string>
@@ -357,7 +357,7 @@
     <string name="log_probe_running">Валидационный прогон (TCP+TLS+HELLO+PROBE)…</string>
     <string name="log_probe_ok">Валидационный прогон пройден</string>
     <string name="log_filter_all">Все</string>
-    <string name="sess_section_title">Сессии (мульти-сервер)</string>
+    <string name="sess_section_title">Серверы</string>
     <string name="sess_add">Добавить сервер</string>
     <string name="sess_rename">Переименовать</string>
     <string name="sess_delete">Удалить</string>
@@ -375,7 +375,8 @@
     <string name="graph_window">%1$d с</string>
     <string name="btn_timeout">Тайм-аут</string>
     <string name="log_connect_cancelled">Подключение отменено владельцем</string>
-    <string name="sess_bulk_add">Добавить все ссылки</string>
-    <string name="sess_bulk_hint">По одной rrp://-ссылке на строку — пакетный импорт</string>
+    <string name="sess_bulk_add">Добавить все</string>
+    <string name="sess_bulk_title">Импорт ссылок</string>
+    <string name="sess_bulk_hint">По одной rrp://-ссылке на строку</string>
     <string name="sess_bulk_result">Добавлено: %1$d · нераспознано: %2$d</string>
 </resources>

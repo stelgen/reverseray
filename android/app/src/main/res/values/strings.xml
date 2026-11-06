@@ -63,7 +63,7 @@
     <string name="btn_stop_short">STOP</string>
 
     <!-- Connection -->
-    <string name="link_tab_hint">Paste an rrp:// link — the parser cleans up junk by itself: invisible chars, quotes, surrounding text, trailing dots and commas.</string>
+    <string name="link_tab_hint">Paste an rrp:// link</string>
     <string name="link_fix">Check &amp; fix</string>
     <string name="link_fixed">Link is valid: %1$s</string>
 
@@ -80,7 +80,7 @@
         <string name="modules_camo_toast_on">Module enabled — log and status updated</string>
     <string name="modules_camo_toast_off">Module disabled — choice will sync to the server</string>
     <string name="app_modules_row2_name_fmt">%1$s · v%2$s</string>
-<string name="modules_hint">Toggle with one checkbox; the choice syncs to the server and survives offline.</string>
+<string name="modules_hint">Synced with the server, survives offline.</string>
     <string name="modules_camo_desc">Background API-like chatter inside the tunnel.</string>
 <string name="proto_switch">Switch protocol</string>
     <string name="proto_switching">Switching to %1$s (validating with real traffic…)</string>
@@ -357,7 +357,7 @@
     <string name="log_probe_running">Validation run (TCP+TLS+HELLO+PROBE)…</string>
     <string name="log_probe_ok">Validation run passed</string>
     <string name="log_filter_all">All</string>
-    <string name="sess_section_title">Sessions (multi-server)</string>
+    <string name="sess_section_title">Servers</string>
     <string name="sess_add">Add server</string>
     <string name="sess_rename">Rename</string>
     <string name="sess_delete">Delete</string>
@@ -375,7 +375,8 @@
     <string name="graph_window">%1$d s</string>
     <string name="btn_timeout">Timeout</string>
     <string name="log_connect_cancelled">Connect cancelled by user</string>
-    <string name="sess_bulk_add">Add all links</string>
-    <string name="sess_bulk_hint">One rrp:// link per line — bulk import</string>
+    <string name="sess_bulk_add">Add all</string>
+    <string name="sess_bulk_title">Import links</string>
+    <string name="sess_bulk_hint">One rrp:// link per line</string>
     <string name="sess_bulk_result">Added: %1$d · unrecognized: %2$d</string>
 </resources>
