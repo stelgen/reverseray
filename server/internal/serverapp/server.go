@@ -90,7 +90,7 @@ type App struct {
 	// v1.7.0: горячая замена TLS-листа (runtime-перевыпуск) — чтение
 	// на каждом коннекте, запись при необходимости.
 	bundleMu sync.RWMutex
-	met    *Metrics
+	met      *Metrics
 	// egress — кешированный внешний IP сервера для /status и веб-морды
 	egress egressIP
 
