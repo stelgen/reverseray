@@ -57,6 +57,13 @@ type StatusReport struct {
 	ApimaskBytes  uint64          `json:"apimask_bytes_total"`
 	// v0.9.5: выборы камуфляжа клиентов (кадр 0x2A): устройство → выключен.
 	CamoOverrides map[string]bool `json:"camouflage_off,omitempty"`
+	// v1.6.1: веб-управление телефонами — публичные материалы для «Копировать
+	// подключение» (host:port слушателя туннелей + CA SPKI pin; сам токен
+	// хранится ТОЛЬКО хэшем — полную ссылку выдаёт `enroll`, канон hash-only).
+	Listen string `json:"listen_tunnels,omitempty"`
+	CAPin  string `json:"ca_pin,omitempty"`
+	// v1.6.1: живые WS-туннели (отдельно от TCP) для панели сети.
+	WsTunnels int64 `json:"ws_tunnels,omitempty"`
 	// v0.9.1: паритет фактов с APK — «О сервере» и «Константы защиты»
 	GoVersion    string   `json:"go_version,omitempty"`
 	GOOS         string   `json:"goos,omitempty"`
@@ -185,6 +192,9 @@ func (a *App) statusJSON() []byte {
 	s.BytesRelayed = a.met.BytesRelayed.Load()
 	s.UdpDatagrams = a.udpDatagrams()
 	s.CamoOverrides = a.CamouflageOverrides() // v0.9.5: выборы клиентов
+	s.Listen = a.cfg.Listen.Tunnels
+	s.CAPin = a.CAPin()
+	s.WsTunnels = a.met.WsTunnels.Load()
 	s.Facts = facts
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -261,6 +271,10 @@ tr:hover td{background:#1d2025}
 .facts{font-size:11.5px;color:var(--dim);line-height:1.7}
 .foot{margin-top:14px;color:var(--dim);font-size:11px;display:flex;gap:14px;flex-wrap:wrap}
 .pill{padding:1px 7px;border-radius:3px;background:var(--panel2);border:1px solid var(--border)}
+button.act{font:inherit;font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid #2a2f3a;background:#171a21;color:#d8dce6;cursor:pointer}
+button.act:hover{border-color:#5794f2;color:#fff}
+button.act.dw{color:#ff6b6b;border-color:#3a2226}
+button.act.dw:hover{border-color:#ff6b6b}
 </style>
 </head>
 <body>
@@ -276,6 +290,14 @@ tr:hover td{background:#1d2025}
 </div>
 <div class="wrap">
  <div class="grid kpis" id="kpis"></div>
+ <div class="grid" style="margin-top:10px">
+  <div class="panel">
+   <h3><span>Управление телефонами</span><span class="ctrl dim">токен хранится хэшем — полную ссылку выдаёт enroll</span></h3>
+   <div style="overflow-x:auto"><table id="devs"><thead><tr>
+    <th>Устройство</th><th>Сессий</th><th>Протоколы</th><th>↓ релей</th><th>↑ релей</th><th>API Mask</th><th>Действия</th>
+   </tr></thead><tbody></tbody></table></div>
+  </div>
+ </div>
  <div class="grid row2" style="margin-top:10px">
   <div class="panel">
    <h3><span>Трафик через туннель</span>
@@ -297,7 +319,7 @@ tr:hover td{background:#1d2025}
   <div class="panel">
    <h3><span>Устройства и туннели</span><span class="ctrl dim" id="parkinfo"></span></h3>
    <div style="overflow-x:auto"><table id="sess"><thead><tr>
-    <th>Устройство</th><th>Протокол</th><th>Транспорт</th><th>RTT</th><th>Потоки</th><th>Окно</th><th>↓ всего</th><th>↑ всего</th><th>Ошибки диала</th><th>Аптайм</th>
+    <th>Устройство</th><th>Протокол</th><th>Транспорт</th><th>RTT</th><th>Потоки</th><th>Окно</th><th>↓ всего</th><th>↑ всего</th><th>↓/с</th><th>↑/с</th><th>Ошибки диала</th><th>Аптайм</th>
    </tr></thead><tbody></tbody></table></div>
   </div>
  </div>
@@ -317,7 +339,7 @@ tr:hover td{background:#1d2025}
  </div>
 </div>
 <script>
-var hist=[],lastRelay={},lastAt=0,period=150,unit='kb',logCache=[],logFilter='all',lastLogKey='';
+var hist=[],lastRelay={},lastAt=0,lastStatus={},period=150,unit='kb',logCache=[],logFilter='all',lastLogKey='';
 function fmtB(b){if(b==null)return'—';var u=['Б','КБ','МБ','ГБ','ТБ'],i=0,x=Number(b);while(x>=1024&&i<4){x/=1024;i++}return(i?x.toFixed(1):x)+' '+u[i]}
 function fmtR(b){if(b==null||b<0)return'—';var u=['Б/с','КБ/с','МБ/с','ГБ/с'],i=0,x=b;while(x>=1024&&i<3){x/=1024;i++}return x.toFixed(i?1:0)+' '+u[i]}
 function fmtUp(s){s=Math.max(0,s|0);var d=(s/86400)|0,h=((s%86400)/3600)|0,m=((s%3600)/60)|0;return(d?d+' д ':'')+(h?h+' ч ':'')+m+' мин'}
@@ -328,7 +350,7 @@ function protoLabel(id,s){var l=(s.protocol_labels||{})[id]||id,v=(s.protocol_ve
 function stat(label,val,cls,sub){if(val===null||val===undefined||val==='')return'';return'<div class="panel stat '+(cls||'')+'"><h3>'+label+'</h3><div class="v">'+val+(sub?' <small>'+sub+'</small>':'')+'</div></div>'}
 async function tick(){
  try{
-  var r=await fetch('/status',{cache:'no-store'}),s=await r.json();
+  var r=await fetch('/status',{cache:'no-store'}),s=await r.json();lastStatus=s;
   document.getElementById('dot').className='dot'+(s.tunnels_up>0?'':' warn');
   document.getElementById('ver').textContent='v'+s.version;
   document.getElementById('upt').textContent=fmtUp(s.uptime_sec);
@@ -344,6 +366,10 @@ async function tick(){
    stat('Авторизаций устройств',s.auth_ok_total||null,'ok'),
    stat('Отклонено рукопожатий',s.auth_failures_total||null,'mut'),
    stat('UDP-дейтаграмм',s.udp_datagrams_total||null,'mut'),
+   stat('Зондов отброшено (tarpit)',s.hardening_dropped_total||null,'mut'),
+   stat('Отказов по лимиту',s.hardening_limited_total||null,'mut'),
+   stat('API Mask: байтов',s.apimask_bytes_total!=null?fmtB(s.apimask_bytes_total):null,'mut'),
+   stat('WS-туннелей',s.ws_tunnels||null,'mut'),
    stat('Сканирований отклонено',s.hardening_scans_total||null,'mut'),
    stat('RAM (Go heap)',s.mem_alloc_mb?fmtB(s.mem_alloc_mb*1048576):null,'mut'),
    stat('События',s.events_info!=null?('<span class="dim">'+s.events_info+'</span> / <span class="warn">'+(s.events_warn||0)+'</span>'):'','mut','info/warn')
@@ -352,7 +378,8 @@ async function tick(){
   // скорости из дельт релея по сессиям
   var now=Date.now(),dIn=0,dOut=0,rows='';
   var sess=s.sessions||[];
-  if(lastAt){var dt=Math.max(1,(now-lastAt)/1000);
+  var prev=lastRelay,dt=0;
+  if(lastAt){dt=Math.max(1,(now-lastAt)/1000);
    sess.forEach(function(x){var p=lastRelay[x.session];if(p){dIn+=Math.max(0,(x.relay_in||0)-p[0]);dOut+=Math.max(0,(x.relay_out||0)-p[1])}});
    hist.push({t:now,in:dIn/dt,out:dOut/dt});if(hist.length>1800)hist.shift();
   }
@@ -363,9 +390,11 @@ async function tick(){
    var rtt=x.rtt_ms>0?x.rtt_ms+' мс':'—';
    var win=x.window_grant>0?(x.window_grant/1048576).toFixed(1)+' МБ':'—';
    var gr=x.window_grant>0?fmtB(x.relay_in):fmtB(x.relay_in);
-   rows+='<tr><td class="s"><b>'+esc(x.device)+'</b></td><td class="s">'+esc(protoLabel(x.proto,s))+'</td><td class="s dim">'+esc(x.proto===undefined?'':(x.transport||'tcp'))+'</td><td>'+rtt+'</td><td>'+x.streams+'</td><td>'+win+'</td><td>'+fmtB(x.relay_in)+'</td><td>'+fmtB(x.relay_out)+'</td><td>'+(x.open_errors?'<span class="warn">'+x.open_errors+'</span>':'<span class="ok">0</span>')+'</td><td class="dim">'+fmtUp(x.uptime_sec)+'</td></tr>';
+   var pr=prev[x.session],ri='—',ro='—';
+   if(pr&&dt){ri=fmtR(Math.max(0,(x.relay_in||0)-pr[0])/dt);ro=fmtR(Math.max(0,(x.relay_out||0)-pr[1])/dt)}
+   rows+='<tr><td class="s"><b>'+esc(x.device)+'</b></td><td class="s">'+esc(protoLabel(x.proto,s))+'</td><td class="s dim">'+esc(x.proto===undefined?'':(x.transport||'tcp'))+'</td><td>'+rtt+'</td><td>'+x.streams+'</td><td>'+win+'</td><td>'+fmtB(x.relay_in)+'</td><td>'+fmtB(x.relay_out)+'</td><td class="s">'+ri+'</td><td class="s">'+ro+'</td><td>'+(x.open_errors?'<span class="warn">'+x.open_errors+'</span>':'<span class="ok">0</span>')+'</td><td class="dim">'+fmtUp(x.uptime_sec)+'</td></tr>';
   });
-  document.querySelector('#sess tbody').innerHTML=rows||'<tr><td colspan="10" class="dim">нет активных туннелей</td></tr>';
+  document.querySelector('#sess tbody').innerHTML=rows||'<tr><td colspan="12" class="dim">нет активных туннелей</td></tr>';
   document.getElementById('parkinfo').textContent='буфер: '+fmtUp(s.parked_streams!=null?s.parked_streams*2:0);
   var pl=(s.protocols||[]).map(function(p){return '<span class="pill">'+esc(protoLabel(p,s))+'</span>'}).join(' ');
   document.getElementById('protos').innerHTML='<div style="margin-bottom:6px">Реестр протоколов: '+pl+'</div><div>Протокол по умолчанию: <b>'+esc(protoLabel(s.default_proto,s))+'</b></div><div style="margin-top:4px">Сессии на не-дефолтном протоколе: '+s.proto_sessions_non_default+'</div>';
@@ -418,7 +447,39 @@ document.querySelectorAll('[data-p]').forEach(function(b){b.onclick=function(){
 document.getElementById('unit').onchange=function(e){unit=e.target.value;draw()};
 document.getElementById('fall').onclick=function(){logFilter='all';document.getElementById('fall').classList.add('on');document.getElementById('fwarn').classList.remove('on');renderLogs()};
 document.getElementById('fwarn').onclick=function(){logFilter='warn';document.getElementById('fwarn').classList.add('on');document.getElementById('fall').classList.remove('on');renderLogs()};
-tick();setInterval(tick,2000);
+async function tickDevices(){
+ try{
+  var r=await fetch('/devices',{cache:'no-store'}),list=await r.json();
+  var rows='';
+  (list||[]).forEach(function(d){
+   var camo=d.camouflage_off?'<span class="warn">выкл (клиент)</span>':'<span class="ok">вкл</span>';
+   var online=d.online>0?'<span class="ok">'+d.online+'</span>':'<span class="dim">0</span>';
+   var protos=(d.protocols||[]).join(', ')||'—';
+   rows+='<tr><td class="s"><b>'+esc(d.device)+'</b></td><td>'+online+'</td><td class="s">'+esc(protos)+'</td><td>'+fmtB(d.relay_in)+'</td><td>'+fmtB(d.relay_out)+'</td><td>'+camo+'</td>'
+    +'<td><button class="act" data-kick="'+esc(d.device)+'">Отключить</button> '
+    +'<button class="act" data-copy="'+esc(d.device)+'">Копировать</button> '
+    +'<button class="act dw" data-del="'+esc(d.device)+'">Удалить</button></td></tr>';
+  });
+  document.querySelector('#devs tbody').innerHTML=rows||'<tr><td colspan="7" class="dim">устройств нет</td></tr>';
+  document.querySelectorAll('[data-kick]').forEach(function(b){b.onclick=function(){
+   var d=b.dataset.kick;
+   if(!confirm('Отключить телефон «'+d+'»?\n\nВНИМАНИЕ: без реконнекта со стороны телефона соединение может упасть НАВСЕГДА — телефон вернётся только сам.'))return;
+   fetch('/devices/kick?device='+encodeURIComponent(d),{method:'POST'}).then(function(){pollLogs()});
+  }});
+  document.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   var d=b.dataset.del;
+   if(!confirm('УДАЛИТЬ телефон «'+d+'» из авторизации?\n\nТокен отзывается (hash-only), живые сессии глушатся. Возврат — только повторный enroll на сервере.'))return;
+   fetch('/devices/delete?device='+encodeURIComponent(d),{method:'POST'}).then(function(r){if(!r.ok)r.text().then(function(t){alert('Не удалено: '+t)});tickDevices()});
+  }});
+  document.querySelectorAll('[data-copy]').forEach(function(b){b.onclick=function(){
+   var s=lastStatus||{},d=b.dataset.copy;
+   var port=((s.listen_tunnels||':4433').split(':').pop())||'4433';
+   var link='rrp://<ТОКЕН>@'+location.hostname+':'+port+'/?pin='+encodeURIComponent(s.ca_pin||'')+'&name='+encodeURIComponent(d);
+   (navigator.clipboard&&navigator.clipboard.writeText(link)||Promise.reject()).then(function(){b.textContent='Скопировано';setTimeout(function(){b.textContent='Копировать'},1200)},function(){window.prompt('Скопируйте шаблон (токен — из enroll):',link)});
+  }});
+ }catch(e){}
+}
+tick();setInterval(tick,2000);tickDevices();setInterval(tickDevices,5000);
 </script>
 </body>
 </html>`

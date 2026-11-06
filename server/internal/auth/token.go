@@ -138,6 +138,19 @@ func (s *Store) Devices() []string {
 	return out
 }
 
+// RemoveDevice отзывает устройство (v1.6.1, hash-only): удаляет запись
+// хэша из памяти. Файл tokens.json перезаписывает ВЫЗЫВАЮЩИЙ (сервер-приложение
+// владеет путём). false — устройства с таким именем нет.
+func (s *Store) RemoveDevice(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tokens[name]; !ok {
+		return false
+	}
+	delete(s.tokens, name)
+	return true
+}
+
 // Verify returns the device name if any stored hash authenticates.
 func (s *Store) Verify(nonceB64, sessionID, providedHMAC string) (string, bool) {
 	s.mu.RLock()

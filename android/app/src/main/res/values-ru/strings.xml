@@ -374,6 +374,7 @@
     <string name="graph_legend_tx">отправка</string>
     <string name="graph_window">%1$d с</string>
     <string name="btn_timeout">Тайм-аут</string>
+    <string name="log_connect_cancelled">Подключение отменено владельцем</string>
     <string name="sess_bulk_add">Добавить все ссылки</string>
     <string name="sess_bulk_hint">По одной rrp://-ссылке на строку — пакетный импорт</string>
     <string name="sess_bulk_result">Добавлено: %1$d · нераспознано: %2$d</string>

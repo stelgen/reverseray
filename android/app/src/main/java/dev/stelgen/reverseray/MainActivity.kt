@@ -703,7 +703,10 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
             }
             setOnClickListener {
-                if (bigButtonIsStart) startTunnel() else stopTunnel()
+                // v1.6.1: анти-спам машина (психованные мульти-нажатия):
+                // стоп/отмена коннекта проходят ВСЕГДА, старт — с дебаунсом
+                // и кулдауном после стопа; статус всегда синхронен сервису.
+                handleMainButtonPress()
             }
             // v0.9.3 (канон анимаций 2026): тактильный отклик нажатия —
             // лёгкое сжатие 3% (120мс, Decelerate) и упругий возврат
@@ -1478,6 +1481,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ================================================================= Действия
+
+    /**
+     * v1.6.1: ЕДИНАЯ точка нажатий главной кнопки — анти-спам канон:
+     *  - СТОП/ОТМЕНА проходит ВСЕГДА (независимо от раздрая: юзер всегда
+     *    может отключиться); нажатие во время подключения = ОТМЕНА коннекта
+     *    (ACTION_STOP) — сервис глушит раннеры, UI честно STOPPED;
+     *  - СТАРТ: дебаунс 700 мс (двойной тап не плодит start-intents) и
+     *    кулдаун 1.2 с после стопа (раздрай процессов не залипает в
+     *    start/stop-пинг-понг); кнопка на кулдауне на пару секунд «неактивна»
+     *    ТОЛЬКО для старта (полупрозрачность — визуальный намёк), стоп жив.
+     *  - СИНХРОННОСТЬ: источник истины — TunnelService.lastState + броадкасты
+     *    (setUiState), UI никогда не «догоняет» сервис догадками.
+     */
+    private var lastStartPressMs = 0L
+    private var lastStopPressMs = 0L
+
+    private fun handleMainButtonPress() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val mode = lastButtonMode
+        if (!bigButtonIsStart || mode == Mode.CONNECTING || mode == Mode.TIMEOUT) {
+            // стоп/отмена: защита от дребезга 400 мс (двойное событие одного тапа)
+            if (now - lastStopPressMs < 400) return
+            lastStopPressMs = now
+            if (mode == Mode.CONNECTING || mode == Mode.TIMEOUT) {
+                TunnelService.pushLog(getString(R.string.log_connect_cancelled), LogKind.WARN)
+            }
+            stopTunnel()
+            return
+        }
+        if (now - lastStartPressMs < 700) return
+        lastStartPressMs = now
+        if (now - lastStopPressMs < START_COOLDOWN_MS) {
+            // раздрай: краткий неактив только для СТАРТА — визуальный намёк
+            bigButton.animate().cancel()
+            bigButton.animate().alpha(0.55f).setDuration(120).withEndAction {
+                bigButton.animate().alpha(1f).setDuration(280).start()
+            }.start()
+            return
+        }
+        startTunnel()
+    }
+
+    private val START_COOLDOWN_MS = 1_200L
 
     private fun startTunnel() {
         val raw = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
