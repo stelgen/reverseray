@@ -2,6 +2,52 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.8.0] — 2026-11-18
+
+### Добавлено
+- **Авто-режим: end-to-end детект сигнатурной блокировки (ТСПУ/DPI)** —
+  пробник полезной нагрузки `core/E2eProbe.kt`: сквозной путь
+  OPEN→DATA→ответ через туннель (маленький HTTP generate_204) с
+  классификацией исходов: успех / RST / read-timeout / троттлинг; таймаут
+  калибруется от RTT-базлайна (failure detector = таймер: длинный таймаут
+  даёт ложно-живые соединения). Мёртвый исход (RST/read-timeout) кормится в
+  AutoBalancer как deadLoss — смена протокола ВНЕ гистерезиса (кулдауны,
+  память провалов и анти-мигание сохранены); троттлинг идёт через обычный
+  гистерезис. Пробник ходит раз в 60 с в отдельном потоке (не задерживает
+  пинги). Причина: PING/EWMA/PROBE живут внутри сессии (контрольные кадры)
+  и при резке payload-кадров показывали «ложно-живую» связь.
+- **Режим «Ротация» в меню «Переключить протокол»** — автосмена протоколов
+  каждые 30 минут строго по порядку (round-robin по executable ∩ реестру
+  сервера, начиная со следующего после текущего; первый тик якорит
+  расписание). Отдельная альтернатива авто-режиму — режимы выбора
+  взаимоисключающие (включение ротации гасит пер-сессионный балансер,
+  обычный выбор гасит ротацию); смены бесшовные (0x2C), каждая — запись в
+  журнал с причиной; `"rotate"` перехватывается до normalize (не сворачивается
+  в rrp1).
+
+### Изменено
+- **Сервер: apimask приведён к канону «протокол» в веб-морде и /metrics**:
+  KPI «API Mask: байтов» → «Протокол apimask: байтов»; статус-блок —
+  «Камуфляж-протокол apimask … · обменов NOISE: N» (без «кадров» и модульных
+  формулировок); счётчик кадров → пар NOISE (`apimask_pairs_total`);
+  метрики переименованы нейтрально: `reverseray_apimask_protocol_pairs_total`,
+  `reverseray_apimask_protocol_bytes_total`. Согласование HELLO/READY
+  (`proto=apimask`, `features=["apimask"]`, fallback rrp1) НЕ тронуто —
+  старые клиенты работают как раньше; state/camouflage.json совместим.
+- **Дробление крупных файлов (pure refactor — поведение не менялось)**:
+  сервер — `rrp/session.go` (1569 строк) → `session_noise/udp/outbound/stats/
+  switch/stream.go`; `serverapp/server.go` → `metrics.go` (/metrics);
+  `serverapp/ui.go` → `ui_html.go` (HTML/JS-блоб). Клиент — `MainActivity.kt`
+  → `ui/Dialogs.kt` (диалоги/пикеры/link-зона); `TunnelService.kt` →
+  `service/TunnelRotate.kt` (зона ротации); `RrpClient.kt` →
+  `core/RrpClientProber.kt` (PROBE + E2E + socketpair). `Msgs.kt`/`RrpFrame.kt`
+  остаются едиными (object/sealed — одна зона ответственности).
+
+### Тесты
+- Клиент: 243 → **266** (+23: `E2eProbeTest` 9, `AutoBalancerE2eTest` 7 —
+  A/B старого vs нового детекта на одних fixture-снимках, `ProtoRotatorTest` 7).
+- Сервер: `go test ./...` зелёный; `-race` на serverapp/rrp/apimasq — зелёный.
+
 ## [1.7.1] — 2026-11-06
 
 ### Исправлено
