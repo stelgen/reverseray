@@ -117,9 +117,9 @@ class TunnelService : Service() {
     @Volatile private var manager: ConnectionManager? = null
 
     /** Сессия сервиса: профиль + точка агрегации состояния. */
-    private inner class Sess(val id: String, val profile: SessionStore.Profile)
+    internal inner class Sess(val id: String, val profile: SessionStore.Profile)
 
-    private val sessById = java.util.concurrent.ConcurrentHashMap<String, Sess>()
+    internal val sessById = java.util.concurrent.ConcurrentHashMap<String, Sess>()
 
     /** Сессия, занятая валидационной сменой протокола (gate только для неё). */
     @Volatile private var switchingSessionId: String? = null
@@ -133,7 +133,7 @@ class TunnelService : Service() {
     private var lastTx = 0L
     private var lastRx = 0L
 
-    @Volatile private var stopping = true
+    @Volatile internal var stopping = true
     private var wakeLock: PowerManager.WakeLock? = null
     /** v0.9.6: Wi-Fi-lock — радио не засыпает в фоне (Android 4+, из коробки). */
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
@@ -145,63 +145,13 @@ class TunnelService : Service() {
 
     // ---------- v1.8.0: режим «Ротация» (альтернатива авто-режиму) ----------
     /** Пер-сессионные ротаторы (расписание у каждого своё). */
-    private val rotators = java.util.concurrent.ConcurrentHashMap<String, ProtoRotator>()
-    private val rotateExecutor: java.util.concurrent.ScheduledExecutorService =
+    internal val rotators = java.util.concurrent.ConcurrentHashMap<String, ProtoRotator>()
+    internal val rotateExecutor: java.util.concurrent.ScheduledExecutorService =
         java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "rrp-rotate").apply { isDaemon = true }
         }
-    private var rotateTask: java.util.concurrent.ScheduledFuture<*>? = null
+    internal var rotateTask: java.util.concurrent.ScheduledFuture<*>? = null
 
-    private fun rotationEnabled(): Boolean = prefs().getBoolean(KEY_PROTO_ROTATE, false)
-
-    /**
-     * Тик ротации: расписание ([ProtoRotator]) → бесшовная смена (0x2C)
-     * + запись причины в журнал. Кандидаты — executable ∩ реестру сервера;
-     * строго следующий после текущего. Провал смены НЕ карается памятью
-     * провалов (это не авто) — следующий тик попробует снова по расписанию.
-     */
-    private fun rotateTick() {
-        if (stopping || !rotationEnabled()) return
-        val now = System.currentTimeMillis()
-        for (s in sessById.values.toList()) {
-            val client = firstClientOf(s) ?: continue
-            if (client.state != RrpClient.State.READY) continue
-            val candidates = RrpProtocols.EXECUTABLE.filter {
-                it != RrpProtocols.DEFAULT && client.serverProtocols.contains(it)
-            }
-            val rot = rotators.computeIfAbsent(s.id) { ProtoRotator() }
-            val from = client.negotiatedProto
-            val target = rot.onTick(now, from, candidates) ?: continue
-            pushLog(
-                getString(
-                    R.string.log_proto_rotation,
-                    RrpProtocols.labelWithVer(from),
-                    RrpProtocols.labelWithVer(target),
-                    ROTATE_INTERVAL_MS / 60_000,
-                ),
-                LogKind.INFO,
-            )
-            switchProtoLiveOf(s, target)
-        }
-    }
-
-    private fun startRotateTick() {
-        if (rotateTask != null) return
-        rotateTask = try {
-            rotateExecutor.scheduleWithFixedDelay(
-                { try { rotateTick() } catch (_: Exception) {} },
-                ROTATE_TICK_MS, ROTATE_TICK_MS, java.util.concurrent.TimeUnit.MILLISECONDS,
-            )
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun stopRotateTick() {
-        rotateTask?.cancel(false)
-        rotateTask = null
-        rotators.clear()
-    }
 
     // ---------- v1.5.0: балансер пер-сессионный (в ConnectionManager);
     // решение балансера исполняет sessionOwner.onBalancerSwitch (ниже).
@@ -211,7 +161,7 @@ class TunnelService : Service() {
      * согласование без разрыва связи). Ссылка НЕ меняется (AUTO остаётся AUTO —
      * сервер переговорит при реконнекте сам). false — хоть один раннер отказал.
      */
-    private fun switchProtoLiveOf(sess: Sess, target: String): Boolean {
+    internal fun switchProtoLiveOf(sess: Sess, target: String): Boolean {
         var all = true
         val list = synchronized(runners) { runners.filter { it.sess === sess } }
         for (r in list) {
@@ -230,7 +180,7 @@ class TunnelService : Service() {
     }
 
     /** Первый живой клиент сессии (для healthSample/proto снапшотов). */
-    private fun firstClientOf(sess: Sess): RrpClient? =
+    internal fun firstClientOf(sess: Sess): RrpClient? =
         synchronized(runners) { runners.firstOrNull { it.sess === sess }?.client }
 
     private fun runnersOf(sess: Sess): List<Runner> =
@@ -1702,7 +1652,7 @@ class TunnelService : Service() {
         }
     }
 
-    private fun prefs(): SharedPreferences = getSharedPreferences(PREFS, MODE_PRIVATE)
+    internal fun prefs(): SharedPreferences = getSharedPreferences(PREFS, MODE_PRIVATE)
 
     private fun allowLan(): Boolean = prefs().getBoolean(KEY_ALLOW_LAN, false)
 
