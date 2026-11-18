@@ -72,6 +72,12 @@
     <string name="proto_unknown">Protocol: unknown</string>
         <!-- v0.9.5: AUTO protocol mode + client-side module controls -->
     <string name="proto_auto_label">AUTO (best common)</string>
+    <!-- v1.8.0: ROTATE protocol mode (alternative to AUTO, mutually exclusive) -->
+    <string name="proto_rotate_label">ROTATE (30 min)</string>
+    <string name="status_rotate_on">Protocol rotation enabled: switching every %1$d min</string>
+    <string name="log_proto_rotation_on">Protocol rotation ON (every %1$d min, strict order)</string>
+    <string name="log_proto_rotation">Rotation: %1$s → %2$s (every %3$d min)</string>
+    <string name="log_proto_rotation_off">Protocol rotation OFF</string>
     <string name="modules_camo_on">%1$s: enabled — background chatter resumes</string>
     <string name="modules_camo_off">%1$s: disabled BY YOUR choice (survives offline)</string>
     <string name="modules_camo_applied">Choice sent to server (0x2A) and saved</string>

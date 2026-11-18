@@ -72,6 +72,12 @@
     <string name="proto_unknown">Протокол: неизвестно</string>
         <!-- v0.9.5: режим AUTO протокола + управление модулями из GUI -->
     <string name="proto_auto_label">AUTO (лучший общий)</string>
+    <!-- v1.8.0: режим «Ротация» (альтернатива AUTO, взаимоисключающие) -->
+    <string name="proto_rotate_label">РОТАЦИЯ (30 мин)</string>
+    <string name="status_rotate_on">Ротация протоколов включена: смена каждые %1$d мин</string>
+    <string name="log_proto_rotation_on">Ротация протоколов ВКЛ (каждые %1$d мин, строго по порядку)</string>
+    <string name="log_proto_rotation">Ротация: %1$s → %2$s (каждые %3$d мин)</string>
+    <string name="log_proto_rotation_off">Ротация протоколов ВЫКЛ</string>
     <string name="modules_camo_on">%1$s: включён — фоновый обмен возобновлён</string>
     <string name="modules_camo_off">%1$s: выключен ВАШИМ выбором (переживает офлайн)</string>
     <string name="modules_camo_applied">Выбор отправлен серверу (0x2A) и сохранён</string>

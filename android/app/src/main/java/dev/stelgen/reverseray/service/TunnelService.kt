@@ -25,6 +25,7 @@ import dev.stelgen.reverseray.L10nUi
 import dev.stelgen.reverseray.R
 import dev.stelgen.reverseray.core.Apimask
 import dev.stelgen.reverseray.core.AutoBalancer
+import dev.stelgen.reverseray.core.ProtoRotator
 import dev.stelgen.reverseray.core.ConnectionManager
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.SessionStore
@@ -141,6 +142,66 @@ class TunnelService : Service() {
 
     /** Идёт ли сейчас валидационная смена протокола. */
     @Volatile private var switchingProto = false
+
+    // ---------- v1.8.0: режим «Ротация» (альтернатива авто-режиму) ----------
+    /** Пер-сессионные ротаторы (расписание у каждого своё). */
+    private val rotators = java.util.concurrent.ConcurrentHashMap<String, ProtoRotator>()
+    private val rotateExecutor: java.util.concurrent.ScheduledExecutorService =
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "rrp-rotate").apply { isDaemon = true }
+        }
+    private var rotateTask: java.util.concurrent.ScheduledFuture<*>? = null
+
+    private fun rotationEnabled(): Boolean = prefs().getBoolean(KEY_PROTO_ROTATE, false)
+
+    /**
+     * Тик ротации: расписание ([ProtoRotator]) → бесшовная смена (0x2C)
+     * + запись причины в журнал. Кандидаты — executable ∩ реестру сервера;
+     * строго следующий после текущего. Провал смены НЕ карается памятью
+     * провалов (это не авто) — следующий тик попробует снова по расписанию.
+     */
+    private fun rotateTick() {
+        if (stopping || !rotationEnabled()) return
+        val now = System.currentTimeMillis()
+        for (s in sessById.values.toList()) {
+            val client = firstClientOf(s) ?: continue
+            if (client.state != RrpClient.State.READY) continue
+            val candidates = RrpProtocols.EXECUTABLE.filter {
+                it != RrpProtocols.DEFAULT && client.serverProtocols.contains(it)
+            }
+            val rot = rotators.computeIfAbsent(s.id) { ProtoRotator() }
+            val from = client.negotiatedProto
+            val target = rot.onTick(now, from, candidates) ?: continue
+            pushLog(
+                getString(
+                    R.string.log_proto_rotation,
+                    RrpProtocols.labelWithVer(from),
+                    RrpProtocols.labelWithVer(target),
+                    ROTATE_INTERVAL_MS / 60_000,
+                ),
+                LogKind.INFO,
+            )
+            switchProtoLiveOf(s, target)
+        }
+    }
+
+    private fun startRotateTick() {
+        if (rotateTask != null) return
+        rotateTask = try {
+            rotateExecutor.scheduleWithFixedDelay(
+                { try { rotateTick() } catch (_: Exception) {} },
+                ROTATE_TICK_MS, ROTATE_TICK_MS, java.util.concurrent.TimeUnit.MILLISECONDS,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun stopRotateTick() {
+        rotateTask?.cancel(false)
+        rotateTask = null
+        rotators.clear()
+    }
 
     // ---------- v1.5.0: балансер пер-сессионный (в ConnectionManager);
     // решение балансера исполняет sessionOwner.onBalancerSwitch (ниже).
@@ -291,7 +352,9 @@ class TunnelService : Service() {
 
         override fun isRunning(): Boolean = runnersOf(sess).isNotEmpty()
 
-        override fun autoBalance(): Boolean = claimedOf(sess.profile.uri).isBlank()
+        // v1.8.0: ротация и авто — взаимоисключающие режимы выбора:
+        // при включённой ротации пер-сессионный балансер не стартует.
+        override fun autoBalance(): Boolean = claimedOf(sess.profile.uri).isBlank() && !rotationEnabled()
     }
     /** Спидтест не молотит при каждом READY. */
     @Volatile private var speedTestBusy = false
@@ -431,7 +494,10 @@ class TunnelService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_SWITCH_PROTO -> {
-                val p = RrpProtocols.normalize(intent.getStringExtra(EXTRA_PROTO))
+                // v1.8.0: "rotate" перехватываем ДО normalize (normalize свёл бы
+                // неизвестный id к rrp1) — это режим выбора, не протокол.
+                val rawProto = intent.getStringExtra(EXTRA_PROTO) ?: ""
+                val p = if (rawProto == PROTO_ROTATE) PROTO_ROTATE else RrpProtocols.normalize(rawProto)
                 startForegroundCompat(getString(R.string.notif_starting))
                 Thread({ switchProtocol(p) }, "rrp-switch").start()
                 return START_STICKY
@@ -553,6 +619,7 @@ class TunnelService : Service() {
 
     private fun startTunnel() {
         ensureStore()
+        startRotateTick() // v1.8.0: тик ротации живёт всё время работы туннеля
         if (!stopping && sessById.isNotEmpty()) {
             updateStatus(STATE_INFO, getString(R.string.status_already_running))
             return
@@ -888,6 +955,23 @@ class TunnelService : Service() {
      *    ссылка НЕ меняется; cooldown, чтобы не молотить по rate-limit.
      */
     private fun switchProtocol(newProtoRaw: String) {
+        // v1.8.0: «Ротация» — отдельный режим выбора (взаимоисключающ с авто):
+        // включаем флаг и выходим — смены делает rotateTick (каждые 30 мин,
+        // строго по порядку, причины в журнале). Ссылку НЕ меняем: ротация —
+        // режим ПОВЕДЕНИЯ поверх текущего подключения.
+        if (newProtoRaw == PROTO_ROTATE) {
+            prefs().edit().putBoolean(KEY_PROTO_ROTATE, true).apply()
+            rotators.clear() // якорь расписания заново (первый тик якорит)
+            pushLog(getString(R.string.log_proto_rotation_on, ROTATE_INTERVAL_MS / 60_000), LogKind.INFO)
+            updateStatus(STATE_INFO, getString(R.string.status_rotate_on, ROTATE_INTERVAL_MS / 60_000))
+            startRotateTick()
+            return
+        }
+        // обычный выбор (протокол/AUTO) выключает ротацию (взаимоисключение)
+        if (prefs().getBoolean(KEY_PROTO_ROTATE, false)) {
+            prefs().edit().putBoolean(KEY_PROTO_ROTATE, false).apply()
+            pushLog(getString(R.string.log_proto_rotation_off), LogKind.INFO)
+        }
         // v0.9.5: "auto" — явный режим «лучший общий протокол» (ссылка без proto=).
         val isAuto = newProtoRaw == PROTO_AUTO
         val newProto = if (isAuto) PROTO_AUTO else RrpProtocols.normalize(newProtoRaw)
@@ -1281,6 +1365,7 @@ class TunnelService : Service() {
 
     private fun stopTunnel() {
         stopping = true
+        stopRotateTick() // v1.8.0: ротация не переживает остановку туннеля
         // v1.5.0: все сессии через менеджер (каждая — изолированный stop)
         manager?.stopAll()
         manager = null
@@ -1643,6 +1728,15 @@ class TunnelService : Service() {
         // v0.8:
         /** v0.9.5: сентинел режима AUTO (ссылка без proto=). */
         const val PROTO_AUTO = "auto"
+
+        // v1.8.0: режим «Ротация» (пикер) — альтернатива AUTO, взаимоисключающая
+        const val PROTO_ROTATE = "rotate"
+        /** Канон ротации: смена каждые 30 минут (строгий round-robin). */
+        const val ROTATE_INTERVAL_MS = 30 * 60 * 1000L
+        /** Тик проверки расписания ротации. */
+        const val ROTATE_TICK_MS = 30_000L
+        /** Персистентный флаг режима ротации (prefs; ссылка — источник правды протокола). */
+        const val KEY_PROTO_ROTATE = "proto_rotate"
 
         const val KEY_AUTO_RECONNECT = "auto_reconnect"    // автоподключение при открытии + ожидание сброса лимита (выкл по умолчанию)
         // v0.9.5: выбор камуфляжа «API Mask» КЛИЕНТОМ (персистентно и локально,

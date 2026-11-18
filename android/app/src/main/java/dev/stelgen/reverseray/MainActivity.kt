@@ -1751,19 +1751,29 @@ class MainActivity : AppCompatActivity() {
         // v1.6.0: в переключателе — ТОЛЬКО технические id протоколов
         // (rrp1, mtproto2, wg1, torrent1, apimask) без версий/пояснений —
         // профессиональный вид; версии остаются в строке статуса.
+        // v1.8.0: второй пункт — «Ротация» (взаимоисключающ с AUTO):
+        // автосмена каждые 30 мин, строго по порядку.
+        val rotateOn = prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)
         val options = mutableListOf<String>()
         options.add(getString(R.string.proto_auto_label))
+        options.add(getString(R.string.proto_rotate_label))
         options.addAll(ids.map { it })
-        val checked = if (current.isBlank()) 0 else ids.indexOf(current).let { if (it < 0) 0 else it + 1 }
+        val checked = when {
+            rotateOn -> 1
+            current.isBlank() -> 0
+            else -> ids.indexOf(current).let { if (it < 0) 0 else it + 2 }
+        }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.proto_switch)
             .setSingleChoiceItems(options.toTypedArray(), checked) { dialog, which ->
                 dialog.dismiss()
                 if (which == 0) {
-                    if (current.isNotBlank()) requestProtoSwitch(TunnelService.PROTO_AUTO)
+                    if (current.isNotBlank() || rotateOn) requestProtoSwitch(TunnelService.PROTO_AUTO)
+                } else if (which == 1) {
+                    if (!rotateOn) requestProtoSwitch(TunnelService.PROTO_ROTATE)
                 } else {
-                    val picked = ids[which - 1]
-                    if (picked != current) requestProtoSwitch(picked)
+                    val picked = ids[which - 2]
+                    if (picked != current || rotateOn) requestProtoSwitch(picked)
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
