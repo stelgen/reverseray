@@ -235,7 +235,7 @@ class RrpClient(
     private val noiseRx = AtomicLong(0)
     @Volatile private var noiseBudgetLogged = false
 
-    @Volatile private var probeResp: RrpFrame.ProbeResp? = null
+    @Volatile internal var probeResp: RrpFrame.ProbeResp? = null
 
     /** v0.8: крипто-контекст mtproto2 (не null после успешного DH-апгрейда). */
     @Volatile private var mtCrypto: MtProto.SessionCrypto? = null
@@ -302,8 +302,8 @@ class RrpClient(
     @Volatile private var handshakeError: IOException? = null
 
     private val pendingOpens = ConcurrentHashMap<Long, OpenFuture>()
-    private val streams = ConcurrentHashMap<Long, Stream>()
-    private val nextStreamId = AtomicLong(1)
+    internal val streams = ConcurrentHashMap<Long, Stream>()
+    internal val nextStreamId = AtomicLong(1)
     private val lastPongMs = AtomicLong(0)
     // v0.9.2 (R6): адаптивный keepalive — время отправки последнего PING и RTT
     private val lastPingSentAt = AtomicLong(0)
@@ -313,7 +313,7 @@ class RrpClient(
     // Постоянное тестирование связи: PING каждые ~5с + PROBE каждые 30с;
     // окно потерь 60с — данные для AutoBalancer (смена только по гистерезису).
     private val pingResults = java.util.ArrayDeque<Pair<Long, Boolean>>() // (atMs, ok)
-    @Volatile private var rttEwmaMs: Long = 0
+    @Volatile internal var rttEwmaMs: Long = 0
     @Volatile private var lastProbeOk: Boolean? = null
     @Volatile private var lastPingCounted = false // потерю этого пинга уже учли
     @Volatile private var lastProberTickMs = 0L
@@ -1264,100 +1264,6 @@ class RrpClient(
         override fun close() = ws.closeFrame()
     }
 
-    // ------------------------------------------------------------------ PROBE
-
-    /** Результат PROBE-валидации egress. */
-    data class ProbeResult(val ok: Boolean, val err: String)
-
-    /**
-     * Отправляет PROBE и ждёт ответ (единичный, без ретраев — ретраи и
-     * откат делает владелец). null — таймаут/нет ответа.
-     */
-    fun probeOnce(target: String, timeoutMs: Long): ProbeResult? {
-        if (state != State.READY) return null
-        probeResp = null
-        return try {
-            sendFrame(RrpFrame.ProbeReq(target, timeoutMs))
-            val deadline = System.currentTimeMillis() + timeoutMs + 1_000
-            while (System.currentTimeMillis() < deadline) {
-                probeResp?.let { return ProbeResult(it.ok, it.err) }
-                try { Thread.sleep(50) } catch (_: InterruptedException) { return null }
-            }
-            null
-        } catch (e: IOException) {
-            log(Msgs.PROBE_SEND_FAILED.t(e.message))
-            null
-        }
-    }
-
-    // ------------------------------------------------- E2E probe (v1.8.0)
-
-    /**
-     * E2E-пробник полезной нагрузки: OPEN через туннель → маленький HTTP-запрос
-     * (DATA-кадры) → чтение ответа из сокетпейра. Отличается от PROBE (кадр
-     * запроса серверу): проверяет именно СКВОЗНОЙ payload-путь, который режет
-     * ТСПУ по сигнатурам при живых контрольных кадрах.
-     * null — пробник неприменим (не READY / сервер не смог диалить цель —
-     * это НЕ признак мёртвого пути, его ловит серверный PROBE).
-     */
-    private fun e2eProbeOnce(target: String, timeoutMs: Long): E2eProbe.Outcome? {
-        if (state != State.READY) return null
-        val host = target.substringBeforeLast(':')
-        val port = target.substringAfterLast(':').toIntOrNull() ?: return null
-        val err = sendOpen(host, port).get()
-        if (err != ERR_OK) return null
-        val pair = localSocketPair() ?: return null
-        val id = nextStreamId.getAndIncrement().toLong() and 0xFFFFFFFFL
-        val window = tunnelWindow.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
-        val st = Stream(id, pair.first, Semaphore(window))
-        streams[id] = st // incoming DATA → handleData → pair.first; читаем pair.second
-        return try {
-            val t0 = System.currentTimeMillis()
-            sendFrame(RrpFrame.Data(id, 0, E2E_REQUEST)) // IOException → Rst
-            val input = pair.second.getInputStream()
-            val buf = ByteArray(2048)
-            var read = 0
-            var eof = false
-            var timedOut = false
-            try {
-                pair.second.soTimeout = timeoutMs.toInt()
-                val deadline = t0 + timeoutMs
-                while (read < buf.size) {
-                    if (System.currentTimeMillis() > deadline) { timedOut = true; break }
-                    val n = input.read(buf, read, buf.size - read)
-                    if (n < 0) { eof = true; break }
-                    read += n
-                    if (String(buf, 0, read, Charsets.ISO_8859_1).contains(E2E_MARKER)) break
-                }
-            } catch (_: java.net.SocketTimeoutException) {
-                timedOut = true
-            }
-            val elapsed = System.currentTimeMillis() - t0
-            val matched = read > 0 && String(buf, 0, read, Charsets.ISO_8859_1).contains(E2E_MARKER)
-            E2eProbe.classify(E2eProbe.ReadResult(elapsed, read, eof, timedOut, matched), rttEwmaMs)
-        } catch (e: IOException) {
-            E2eProbe.Outcome.Rst
-        } finally {
-            streams.remove(id)
-            st.closed.set(true)
-            closeQuietly(pair.first)
-            closeQuietly(pair.second)
-            sendFrameQuiet(RrpFrame.Close(id, ERR_OK))
-        }
-    }
-
-    /** Локальный сокетпейр (loopback) — pure JVM, без Android API. */
-    private fun localSocketPair(): Pair<Socket, Socket>? = try {
-        val ss = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())
-        val a = Socket()
-        a.connect(ss.localSocketAddress, 1_000)
-        a.tcpNoDelay = true
-        val b = ss.accept()
-        ss.close()
-        a to b
-    } catch (_: Exception) {
-        null
-    }
 
     // ------------------------------------------------------------------ PING
 
@@ -1474,7 +1380,7 @@ class RrpClient(
 
     // ------------------------------------------------------------------ frame IO
 
-    private fun sendFrame(frame: RrpFrame) {
+    internal fun sendFrame(frame: RrpFrame) {
         val out = wireOut ?: throw RrpClientException(Msgs.NO_CONNECTION.t())
         // v0.10: во время бесшовной смены протокола payload-кадры копятся
         // и уходят новым конвертом после завершения перехендшейка.
@@ -1578,7 +1484,7 @@ class RrpClient(
         }
     }
 
-    private fun sendFrameQuiet(frame: RrpFrame) {
+    internal fun sendFrameQuiet(frame: RrpFrame) {
         try {
             sendFrame(frame)
         } catch (e: Exception) {
@@ -1645,7 +1551,7 @@ class RrpClient(
         listener?.onState(this, s)
     }
 
-    private fun log(message: String) {
+    internal fun log(message: String) {
         listener?.onLog(this, message)
     }
 
@@ -1656,7 +1562,7 @@ class RrpClient(
         return p.take(n).joinToString(" ") { String.format("%02x", it) } + if (p.size > n) "…" else ""
     }
 
-    private fun closeQuietly(c: Socket?) {
+    internal fun closeQuietly(c: Socket?) {
         try { c?.close() } catch (_: Exception) {}
     }
 
