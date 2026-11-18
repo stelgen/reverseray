@@ -21,6 +21,11 @@ package dev.stelgen.reverseray.core
  *
  * Чистая логика без Android — решение по снимкам проб (тестируется юнит-ами,
  * A/B в TunnelService): планировщик кормит [onSample], сервис исполняет свитч.
+ *
+ * v1.8.0: снимок может нести исход end-to-end пробника полезной нагрузки
+ * ([Sample.e2e], сквозной путь OPEN→DATA→ответ): ReadTimeout/Rst — мёртвый
+ * путь, кормится как deadLoss (смена вне гистерезиса, кулдаун уважается);
+ * Throttle — деградация через обычный гистерезис; Ok — не мешает.
  */
 class AutoBalancer(private val cfg: Cfg = Cfg()) {
 
@@ -55,6 +60,8 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         val lossRatio: Double,
         /** Последний PROBE (null — ещё не было). */
         val probeOk: Boolean?,
+        /** v1.8.0: исход E2E-пробника полезной нагрузки (null — нет данных/старый детект). */
+        val e2e: E2eProbe.Outcome? = null,
     )
 
     /** Решение балансера. */
@@ -92,7 +99,9 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         points.addLast(SamplePoint(s, bad))
         val horizon = s.atMs - cfg.degradeWindowMs
         while (points.isNotEmpty() && points.first().s.atMs < horizon) points.removeFirst()
-        val dead = s.lossRatio >= cfg.deadLoss
+        // v1.8.0: мёртвый E2E-пробник (payload режется) = полный обрыв —
+        // смена вне гистерезиса, кулдаун уважается (анти-молотьба).
+        val dead = s.lossRatio >= cfg.deadLoss || s.e2e?.isDead == true
         if (!bad && !dead) return Decision.Nothing
         val sinceSwitch = s.atMs - lastSwitchAtMs
         // Стабилизация после смены (гистерезис): полный обрыв НЕ ждёт
@@ -111,7 +120,7 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
             }
         }
         val target = nextCandidate(s.atMs) ?: return Decision.Wait("no other candidate")
-        return Decision.Switch(target, "loss=%.0f%% rtt=${s.rttMs ?: "?"}ms probe=${s.probeOk ?: "?"}")
+        return Decision.Switch(target, "loss=%.0f%% rtt=${s.rttMs ?: "?"}ms probe=${s.probeOk ?: "?"} e2e=${s.e2e ?: "-"}")
     }
 
     /** Результат смены: успех сбрасывает пенальти, провал — растит кулдаун. */
@@ -145,7 +154,9 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         val loss = s.lossRatio >= cfg.lossThreshold
         val rtt = (s.rttMs ?: 0) >= cfg.rttThresholdMs
         val probe = s.probeOk == false
-        return loss || rtt || probe
+        // v1.8.0: резкое падение сквозной скорости — деградация (гистерезис)
+        val throttle = s.e2e is E2eProbe.Outcome.Throttle
+        return loss || rtt || probe || throttle
     }
 
     /** Следующий кандидат round-robin: после current, без остывающих. */

@@ -113,6 +113,12 @@ class RrpClient(
      *  null — не проверять. Это «реальный трафик до реального хоста»:
      *  сервер диалит цель с егресса и отвечает фактом установки TCP. */
     private val validateProbeTarget: String? = null,
+    /** v1.8.0: цель end-to-end пробника полезной нагрузки ("host:port", HTTP).
+     *  Сквозной путь OPEN→DATA→ответ через DATA-кадры: ловит сигнатурную
+     *  блокировку (ТСПУ режет payload при живых контрольных кадрах), которую
+     *  не видят PING/EWMA/серверный PROBE. null — пробник выключен (старое
+     *  поведение). Таймаут калибруется от RTT-базлайна (E2eProbe). */
+    private val e2eProbeTarget: String? = E2E_DEFAULT_TARGET,
     /**
      * v0.9.5: начальный выбор камуфляжа устройством (кадр 0x2A после READY):
      * true/false — отправить один раз; null — не отправлять. Выбор персистентен
@@ -311,6 +317,11 @@ class RrpClient(
     @Volatile private var lastProbeOk: Boolean? = null
     @Volatile private var lastPingCounted = false // потерю этого пинга уже учли
     @Volatile private var lastProberTickMs = 0L
+
+    // ---- v1.8.0: end-to-end пробник полезной нагрузки (сквозной путь) ----
+    @Volatile private var lastE2e: Pair<Long, E2eProbe.Outcome>? = null
+    @Volatile private var lastE2eTickMs = 0L
+    private val e2eBusy = AtomicBoolean(false)
 
     private val pingExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-ping").apply { isDaemon = true } }
@@ -1279,6 +1290,75 @@ class RrpClient(
         }
     }
 
+    // ------------------------------------------------- E2E probe (v1.8.0)
+
+    /**
+     * E2E-пробник полезной нагрузки: OPEN через туннель → маленький HTTP-запрос
+     * (DATA-кадры) → чтение ответа из сокетпейра. Отличается от PROBE (кадр
+     * запроса серверу): проверяет именно СКВОЗНОЙ payload-путь, который режет
+     * ТСПУ по сигнатурам при живых контрольных кадрах.
+     * null — пробник неприменим (не READY / сервер не смог диалить цель —
+     * это НЕ признак мёртвого пути, его ловит серверный PROBE).
+     */
+    private fun e2eProbeOnce(target: String, timeoutMs: Long): E2eProbe.Outcome? {
+        if (state != State.READY) return null
+        val host = target.substringBeforeLast(':')
+        val port = target.substringAfterLast(':').toIntOrNull() ?: return null
+        val err = sendOpen(host, port).get()
+        if (err != ERR_OK) return null
+        val pair = localSocketPair() ?: return null
+        val id = nextStreamId.getAndIncrement().toLong() and 0xFFFFFFFFL
+        val window = tunnelWindow.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+        val st = Stream(id, pair.first, Semaphore(window))
+        streams[id] = st // incoming DATA → handleData → pair.first; читаем pair.second
+        return try {
+            val t0 = System.currentTimeMillis()
+            sendFrame(RrpFrame.Data(id, 0, E2E_REQUEST)) // IOException → Rst
+            val input = pair.second.getInputStream()
+            val buf = ByteArray(2048)
+            var read = 0
+            var eof = false
+            var timedOut = false
+            try {
+                pair.second.soTimeout = timeoutMs.toInt()
+                val deadline = t0 + timeoutMs
+                while (read < buf.size) {
+                    if (System.currentTimeMillis() > deadline) { timedOut = true; break }
+                    val n = input.read(buf, read, buf.size - read)
+                    if (n < 0) { eof = true; break }
+                    read += n
+                    if (String(buf, 0, read, Charsets.ISO_8859_1).contains(E2E_MARKER)) break
+                }
+            } catch (_: java.net.SocketTimeoutException) {
+                timedOut = true
+            }
+            val elapsed = System.currentTimeMillis() - t0
+            val matched = read > 0 && String(buf, 0, read, Charsets.ISO_8859_1).contains(E2E_MARKER)
+            E2eProbe.classify(E2eProbe.ReadResult(elapsed, read, eof, timedOut, matched), rttEwmaMs)
+        } catch (e: IOException) {
+            E2eProbe.Outcome.Rst
+        } finally {
+            streams.remove(id)
+            st.closed.set(true)
+            closeQuietly(pair.first)
+            closeQuietly(pair.second)
+            sendFrameQuiet(RrpFrame.Close(id, ERR_OK))
+        }
+    }
+
+    /** Локальный сокетпейр (loopback) — pure JVM, без Android API. */
+    private fun localSocketPair(): Pair<Socket, Socket>? = try {
+        val ss = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())
+        val a = Socket()
+        a.connect(ss.localSocketAddress, 1_000)
+        a.tcpNoDelay = true
+        val b = ss.accept()
+        ss.close()
+        a to b
+    } catch (_: Exception) {
+        null
+    }
+
     // ------------------------------------------------------------------ PING
 
     private fun scheduleNextPing() {
@@ -1335,6 +1415,27 @@ class RrpClient(
                     val (loss, rtt) = healthWindow()
                     log(Msgs.PROBE_LOSS.t(loss * 100.0, rtt, 60))
                 }
+                // 3) v1.8.0: E2E-пробник полезной нагрузки — сквозной путь
+                // (OPEN→DATA→ответ) в отдельном потоке relayExecutor: чтение
+                // до timeoutMs НЕ задерживает пинги (pingExecutor однопоточный).
+                val e2eTarget = e2eProbeTarget
+                if (now - lastE2eTickMs >= E2E_INTERVAL_MS && e2eTarget != null) {
+                    lastE2eTickMs = now
+                    if (e2eBusy.compareAndSet(false, true)) {
+                        relayExecutor.execute {
+                            try {
+                                val outcome = e2eProbeOnce(e2eTarget, E2eProbe.timeoutFor(rttEwmaMs))
+                                if (outcome != null) {
+                                    lastE2e = System.currentTimeMillis() to outcome
+                                    log("E2E probe: $outcome")
+                                }
+                            } catch (_: Exception) {
+                            } finally {
+                                e2eBusy.set(false)
+                            }
+                        }
+                    }
+                }
                 scheduleProber()
             }, MONITOR_TICK_MS, TimeUnit.MILLISECONDS)
         } catch (_: RejectedExecutionException) {
@@ -1357,11 +1458,17 @@ class RrpClient(
     /** Снимок для AutoBalancer.onSample. */
     fun healthSample(): AutoBalancer.Sample {
         val (loss, rtt) = healthWindow()
+        // v1.8.0: исход E2E-пробника учитываем, пока он свеж (иначе — null:
+        // старое поведение, решение только по PING/EWMA/PROBE).
+        val e2e = lastE2e?.let { (at, o) ->
+            if (System.currentTimeMillis() - at < E2E_STALE_MS) o else null
+        }
         return AutoBalancer.Sample(
             atMs = System.currentTimeMillis(),
             rttMs = if (rtt > 0) rtt else null,
             lossRatio = loss,
             probeOk = lastProbeOk,
+            e2e = e2e,
         )
     }
 
@@ -1718,6 +1825,19 @@ class RrpClient(
         const val PING_LOSS_AFTER_MS = 15_000L
         const val HEALTH_WINDOW_MS = 60_000L
         const val DEFAULT_PROBE_TARGET = "1.1.1.1:443"
+
+        // v1.8.0: end-to-end пробник полезной нагрузки (сквозь DATA-кадры)
+        const val E2E_INTERVAL_MS = 60_000L
+        const val E2E_STALE_MS = 3 * E2E_INTERVAL_MS
+        const val E2E_DEFAULT_TARGET = "connectivitycheck.gstatic.com:80"
+        /** Маленький запрос-ответ: generate_204 (ответ — только заголовок). */
+        val E2E_REQUEST = (
+            "GET /generate_204 HTTP/1.1\r\n" +
+                "Host: connectivitycheck.gstatic.com\r\n" +
+                "User-Agent: rrp-e2e\r\n" +
+                "Connection: close\r\n\r\n"
+            ).toByteArray()
+        const val E2E_MARKER = " 204"
 
         /** v0.9.2 (R6): границы адаптивного keepalive (см. pingIntervalMs). */
         private const val MIN_PING_INTERVAL_MS = 20_000L
