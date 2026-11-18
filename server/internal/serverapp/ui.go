@@ -51,10 +51,10 @@ type StatusReport struct {
 	Parked           int    `json:"parked_streams"`             // v1.3.0: стримов в буфере трафика
 	EventInfo        int    `json:"events_info"`
 	EventWarn        int    `json:"events_warn"`
-	// v0.8.2: модуль камуфляжа «API Mask» (честно наружу: id/имя/версия/статус)
-	Camouflage    *CamouflageInfo `json:"camouflage,omitempty"`
-	ApimaskFrames uint64          `json:"apimask_frames_total"`
-	ApimaskBytes  uint64          `json:"apimask_bytes_total"`
+	// v0.8.2: камуфляж протокола apimask (честно наружу: id/имя/версия/статус)
+	Camouflage   *CamouflageInfo `json:"camouflage,omitempty"`
+	ApimaskPairs uint64          `json:"apimask_pairs_total"`
+	ApimaskBytes uint64          `json:"apimask_bytes_total"`
 	// v0.9.5: выборы камуфляжа клиентов (кадр 0x2A): устройство → выключен.
 	CamoOverrides map[string]bool `json:"camouflage_off,omitempty"`
 	// v1.6.1: веб-управление телефонами — публичные материалы для «Копировать
@@ -180,7 +180,7 @@ func (a *App) statusJSON() []byte {
 	if camo := rrp.CamouflageConfig(); camo.ID != "" {
 		s.Camouflage = &CamouflageInfo{ID: camo.ID, Name: camo.Name, Ver: camo.Ver, Enabled: camo.Enabled}
 	}
-	s.ApimaskFrames = a.met.ApimaskFrames.Load()
+	s.ApimaskPairs = a.met.ApimaskPairs.Load()
 	s.ApimaskBytes = a.met.ApimaskBytes.Load()
 	s.GoVersion = runtime.Version()
 	s.GOOS = runtime.GOOS
@@ -368,7 +368,7 @@ async function tick(){
    stat('UDP-дейтаграмм',s.udp_datagrams_total||null,'mut'),
    stat('Зондов отброшено (tarpit)',s.hardening_dropped_total||null,'mut'),
    stat('Отказов по лимиту',s.hardening_limited_total||null,'mut'),
-   stat('API Mask: байтов',s.apimask_bytes_total!=null?fmtB(s.apimask_bytes_total):null,'mut'),
+   stat('Протокол apimask: байтов',s.apimask_bytes_total!=null?fmtB(s.apimask_bytes_total):null,'mut'),
    stat('WS-туннелей',s.ws_tunnels||null,'mut'),
    stat('Сканирований отклонено',s.hardening_scans_total||null,'mut'),
    stat('RAM (Go heap)',s.mem_alloc_mb?fmtB(s.mem_alloc_mb*1048576):null,'mut'),
@@ -400,7 +400,7 @@ async function tick(){
   document.getElementById('protos').innerHTML='<div style="margin-bottom:6px">Реестр протоколов: '+pl+'</div><div>Протокол по умолчанию: <b>'+esc(protoLabel(s.default_proto,s))+'</b></div><div style="margin-top:4px">Сессии на не-дефолтном протоколе: '+s.proto_sessions_non_default+'</div>';
   document.getElementById('facts').innerHTML=(s.facts||[]).map(function(f){return '· '+esc(f)}).join('<br>');
   var m='';
-  if(s.camouflage)m+='<div>API Mask: <b>'+esc(s.camouflage.name)+'</b> · v'+esc(s.camouflage.ver)+' · '+(s.camouflage.enabled?'<span class="ok">активен</span>':'<span class="warn">выключен</span>')+' · кадров '+s.apimask_frames_total+'</div>';
+  if(s.camouflage)m+='<div>Камуфляж-протокол apimask: <b>'+esc(s.camouflage.name)+'</b> · v'+esc(s.camouflage.ver)+' · '+(s.camouflage.enabled?'<span class="ok">активен</span>':'<span class="warn">выключен</span>')+' · обменов NOISE: '+s.apimask_pairs_total+'</div>';
   if(s.modules_version)m+='<div>Модули: манифест <b>v'+esc(s.modules_version)+'</b>'+(s.modules_source?' · '+esc(s.modules_source):'')+'</div>';
   if(s.go_version)m+='<div>Среда: Go '+esc(s.go_version)+' · '+esc(s.goos)+'/'+esc(s.goarch)+' · state '+fmtB((s.state_dir_mb||0)*1048576)+'</div>';
   document.getElementById('mods').innerHTML=m||'<span class="dim">—</span>';

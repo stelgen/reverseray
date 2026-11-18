@@ -57,9 +57,9 @@ type Metrics struct {
 	HardeningLimited atomic.Uint64 // отклонено лимитами параллельности
 	ProtoSessions    atomic.Int64  // сессий с протоколом != rrp1 (например mtproto2)
 
-	// v0.8.2: камуфляж «API Mask» — наблюдаемость шума (честно, без IP).
-	ApimaskFrames atomic.Uint64 // обработано пар запрос/ответ NOISE
-	ApimaskBytes  atomic.Uint64 // суммарный объём payload'ов NOISE (байты)
+	// v1.8.0: apimask — протокол (proto=apimask); счётчики под протокол.
+	ApimaskPairs atomic.Uint64 // обработано пар запрос/ответ NOISE протокола apimask
+	ApimaskBytes atomic.Uint64 // суммарный объём payload'ов NOISE (байты)
 }
 
 // addInbound регистрирует inbound для метрик UDP (вызывается в Run).
@@ -668,9 +668,9 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.CamCtl = func(enabled bool) {
 		a.setCamouflageOverride(device, enabled)
 	}
-	// v0.8.2: учёт камуфляжа «API Mask» — метрики без IP/содержимого
+	// v1.8.0: учёт протокола apimask — метрики без IP/содержимого
 	scfg.NoiseHook = func(req, resp int) {
-		a.met.ApimaskFrames.Add(1)
+		a.met.ApimaskPairs.Add(1)
 		a.met.ApimaskBytes.Add(uint64(req + resp)) // #nosec G115: req/resp ≤ MaxControlPayload
 	}
 
@@ -886,9 +886,9 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 		fmt.Fprintf(w, "# HELP reverseray_hardening_dropped_total non-TLS probes tarpitted/closed silently\n# TYPE reverseray_hardening_dropped_total counter\nreverseray_hardening_dropped_total %d\n", m.HardeningDropped.Load())
 		fmt.Fprintf(w, "# HELP reverseray_hardening_limited_total connections rejected by concurrency limits\n# TYPE reverseray_hardening_limited_total counter\nreverseray_hardening_limited_total %d\n", m.HardeningLimited.Load())
 		fmt.Fprintf(w, "# HELP reverseray_proto_sessions_non_default sessions on non-default protocol\n# TYPE reverseray_proto_sessions_non_default gauge\nreverseray_proto_sessions_non_default %d\n", m.ProtoSessions.Load())
-		// v0.8.2: камуфляж «API Mask» — наблюдаемость (пары/байты NOISE)
-		fmt.Fprintf(w, "# HELP reverseray_apimask_frames_total apimask noise request/response pairs\n# TYPE reverseray_apimask_frames_total counter\nreverseray_apimask_frames_total %d\n", m.ApimaskFrames.Load())
-		fmt.Fprintf(w, "# HELP reverseray_apimask_bytes_total apimask noise payload bytes\n# TYPE reverseray_apimask_bytes_total counter\nreverseray_apimask_bytes_total %d\n", m.ApimaskBytes.Load())
+		// v1.8.0: apimask — протокол: нейтральные имена метрик (пары/байты NOISE)
+		fmt.Fprintf(w, "# HELP reverseray_apimask_protocol_pairs_total apimask protocol request/response pairs\n# TYPE reverseray_apimask_protocol_pairs_total counter\nreverseray_apimask_protocol_pairs_total %d\n", m.ApimaskPairs.Load())
+		fmt.Fprintf(w, "# HELP reverseray_apimask_protocol_bytes_total apimask protocol payload bytes\n# TYPE reverseray_apimask_protocol_bytes_total counter\nreverseray_apimask_protocol_bytes_total %d\n", m.ApimaskBytes.Load())
 		// v1.2.0: observability скорости — autotune-прирост окон и отказы диала
 		// со стороны телефона (недоступные с его сети таргеты).
 		var openErrs, winGrow uint64
