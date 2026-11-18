@@ -55,17 +55,23 @@ type SessionConfig struct {
 	TokenHash     []byte
 	SwitchPlanner func(proto string) (KeyPlan, error)
 	Switchable    bool
+	// v1.8.1: C→S OPEN — телефон инициирует стрим (E2E-пробник полезной
+	// нагрузки ловит сигнатурную блокировку payload-кадров). Сервер диалит
+	// цель своим egress, релей — канонный flow-control (stream.Write/pushIn).
+	// false (zero-value) — Open от телефона отвечает OpenOk(err=1).
+	PhoneOpenAllowed bool
 }
 
 func DefaultSessionConfig() SessionConfig {
 	return SessionConfig{
-		MaxStreams:   256,
-		StreamWindow: 512 * 1024,
-		MaxStreamWin: 4 * 1024 * 1024,
-		Budget:       16 * 1024 * 1024,
-		TunnelWindow: 1024 * 1024,
-		IdleTimeout:  180 * time.Second,
-		PingInterval: 60 * time.Second,
+		PhoneOpenAllowed: true, // v1.8.1: E2E-пробник клиента легален
+		MaxStreams:       256,
+		StreamWindow:     512 * 1024,
+		MaxStreamWin:     4 * 1024 * 1024,
+		Budget:           16 * 1024 * 1024,
+		TunnelWindow:     1024 * 1024,
+		IdleTimeout:      180 * time.Second,
+		PingInterval:     60 * time.Second,
 	}
 }
 
@@ -396,7 +402,12 @@ func (s *Session) handle(f *Frame) error {
 		s.stats = listPush(s.stats, st)
 		s.mu.Unlock()
 		return nil
-	case TypeHello, TypeAuth, TypeHelloOK, TypeReady, TypeOpen, TypeUdpAssoc:
+	case TypeOpen:
+		// v1.8.1: C→S OPEN — телефон инициирует стрим (E2E-пробник полезной
+		// нагрузки). До этого — ErrProtocolOrder (регрессия v1.8.0: клиент с
+		// E2E-пробником рвал сессию каждые ~5 с).
+		return s.handlePhoneOpen(f)
+	case TypeHello, TypeAuth, TypeHelloOK, TypeReady, TypeUdpAssoc:
 		// UDP_ASSOC всегда инициирует сервер (S→C); от телефона — нарушение порядка.
 		return ErrProtocolOrder
 	case TypeError:

@@ -48,13 +48,24 @@ internal fun RrpClient.e2eProbeOnce(target: String, timeoutMs: Long): E2eProbe.O
     if (state != RrpClient.State.READY) return null
     val host = target.substringBeforeLast(':')
     val port = target.substringAfterLast(':').toIntOrNull() ?: return null
-    val err = sendOpen(host, port).get()
-    if (err != RrpClient.ERR_OK) return null
+    // v1.8.1: socketpair-стрим регистрируется в колбэке ДО отправки OPEN —
+    // единый источник id (sendOpen, ЧЁТНЫЙ: серверные нечётные), входящие DATA
+    // не промахнутся. v1.8.0-баг: id аллокировался дважды (sendOpen — свой,
+    // стрим — свой, к тому же нечётный) → сессия рвалась сервером каждые ~5 с.
     val pair = localSocketPair() ?: return null
-    val id = nextStreamId.getAndIncrement().toLong() and 0xFFFFFFFFL
-    val window = tunnelWindow.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
-    val st = RrpClient.Stream(id, pair.first, Semaphore(window))
-    streams[id] = st // incoming DATA → handleData → pair.first; читаем pair.second
+    var stRef: RrpClient.Stream? = null
+    val err = sendOpen(host, port) { id ->
+        val window = tunnelWindow.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+        stRef = RrpClient.Stream(id, pair.first, Semaphore(window))
+        streams[id] = stRef // incoming DATA → handleData → pair.first; читаем pair.second
+    }.get()
+    if (err != RrpClient.ERR_OK || stRef == null) {
+        closeQuietly(pair.first)
+        closeQuietly(pair.second)
+        return null
+    }
+    val st = stRef!!
+    val id = st.id
     return try {
         val t0 = System.currentTimeMillis()
         sendFrame(RrpFrame.Data(id, 0, RrpClient.E2E_REQUEST)) // IOException → Rst

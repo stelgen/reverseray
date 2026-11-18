@@ -920,7 +920,10 @@ class RrpClient(
      * Возвращает err_code (ERR_OK = 0); без отправки — ERR_NOT_READY /
      * ERR_SSRF_BLOCKED / ERR_BAD_ADDRESS. Отменяется таймаутом OPEN_TIMEOUT_MS → ERR_TIMEOUT.
      */
-    fun sendOpen(addr: String, port: Int): OpenFuture {
+    fun sendOpen(addr: String, port: Int, onStreamId: ((Long) -> Unit)? = null): OpenFuture {
+        // v1.8.1: onStreamId вызывается ДО отправки OPEN — подписчик успевает
+        // зарегистрировать стрим (E2E-пробник: socketpair), входящие DATA
+        // попадают по адресу. Id — ЧЁТНЫЙ (см. phoneStreamId).
         val future = OpenFuture()
         if (state != State.READY) {
             future.complete(ERR_NOT_READY)
@@ -937,7 +940,8 @@ class RrpClient(
             future.complete(ERR_BAD_ADDRESS)
             return future
         }
-        val streamId = nextStreamId.getAndIncrement().toLong() and 0xFFFFFFFFL
+        val streamId = phoneStreamId(nextStreamId.getAndIncrement())
+        onStreamId?.invoke(streamId)
         pendingOpens[streamId] = future
         try {
             sendFrame(RrpFrame.Open(streamId, encoded.atyp, encoded.bytes, port))
@@ -1792,6 +1796,14 @@ class RrpClient(
         const val WINDOW_ACQUIRE_TIMEOUT_MS = 30_000L
         const val NONCE_SIZE = 8
         const val MAX_STREAMS_REQUEST = 64
+
+        /**
+         * v1.8.1: id стримов, инициируемых телефоном, — ЧЁТНЫЕ; сервер занимает
+         * НЕЧЁТНЫЕ (session.openStream: nextID += 2 «odd ids are
+         * server-originated»). Умножение счётчика на 2 разводит пространства
+         * без коллизий (маска u32 — переполнение безопасно заворачивается).
+         */
+        internal fun phoneStreamId(seq: Long): Long = (seq * 2) and 0xFFFFFFFFL
 
         /** Окно flow-control по умолчанию: 512 КБ на стрим. */
         const val DEFAULT_TUNNEL_WINDOW = 512 * 1024L
