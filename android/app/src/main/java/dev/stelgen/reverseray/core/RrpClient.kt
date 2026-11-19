@@ -98,7 +98,7 @@ class OpenFuture {
 class RrpClient(
     val host: String,
     val port: Int,
-    private val token: String,
+    internal val token: String,
     internal val pin: String? = null,
     private val agentName: String = DEFAULT_AGENT,
     private val allowLan: Boolean = false,
@@ -238,13 +238,13 @@ class RrpClient(
     @Volatile internal var probeResp: RrpFrame.ProbeResp? = null
 
     /** v0.8: крипто-контекст mtproto2 (не null после успешного DH-апгрейда). */
-    @Volatile private var mtCrypto: MtProto.SessionCrypto? = null
+    @Volatile internal var mtCrypto: MtProto.SessionCrypto? = null
 
     /** Активен ли MTProto-конверт в этой сессии (для UI/статуса). */
     val mtProtoActive: Boolean get() = mtCrypto != null
 
     /** v0.9.5: крипто-контекст wireguard (не null после WG-хендшейка). */
-    @Volatile private var wgCrypto: Wg.Transport? = null
+    @Volatile internal var wgCrypto: Wg.Transport? = null
 
     /** Активен ли WireGuard-конверт в этой сессии. */
     val wgActive: Boolean get() = wgCrypto != null
@@ -262,12 +262,12 @@ class RrpClient(
     val tunnelCryptoActive: Boolean get() = mtCrypto != null || wgCrypto != null || btCrypto != null
 
     /** v0.9.6: незавершённый WG-хендшейк (msg1 отправлен, ждём WG_RESP). */
-    @Volatile private var wgHandshake: Wg.ClientHandshake? = null
-    @Volatile private var wgPsk: ByteArray? = null
+    @Volatile internal var wgHandshake: Wg.ClientHandshake? = null
+    @Volatile internal var wgPsk: ByteArray? = null
 
     /** v0.10: крипто-контекст bittorrent (не null после MSE-хендшейка). */
-    @Volatile private var btCrypto: Torrent.Transport? = null
-    @Volatile private var btHandshake: Torrent.ClientHandshake? = null
+    @Volatile internal var btCrypto: Torrent.Transport? = null
+    @Volatile internal var btHandshake: Torrent.ClientHandshake? = null
 
     /** Активен ли BitTorrent MSE-конверт в этой сессии. */
     val btActive: Boolean get() = btCrypto != null
@@ -628,62 +628,6 @@ class RrpClient(
 
     // ------------------------------------------------------------------ MTProto/2 (v0.8)
 
-    /**
-     * KEY_REQ от сервера (после READY при согласованном proto=mtproto2):
-     * валидируем p (anti-logjam — обязан равняться каноническому dh_prime
-     * Telegram) и g=3, проверяем g_a по канону guidelines, генерируем свою
-     * долю, шлём KEY_RESP и включаем MTProto-конверт на DATA/UDP_DATA.
-     */
-    private fun handleKeyReq(frame: RrpFrame.KeyReq) {
-        if (mtCrypto != null || wgCrypto != null || btCrypto != null) {
-            log(Msgs.KEY_REQ_IGNORED.t())
-            return
-        }
-        if (frame.kind == Torrent.PROTO_ID) {
-            handleBtKeyReq(frame)
-            return
-        }
-        if (frame.kind.isNotBlank() && frame.kind != MtProto.PROTO_ID) {
-            handleWgKeyReq(frame)
-            return
-        }
-        try {
-            val pBytes = MtProto.b64urlDecode(frame.p)
-            if (!pBytes.contentEquals(MtProto.P.toByteArray().let { bytes ->
-                    // BigInteger.toByteArray() может дать 257 байт с ведущим 0
-                    if (bytes.size == 257) bytes.copyOfRange(1, 257) else bytes
-                })
-            ) {
-                throw MtProto.MtProtoException(Msgs.DH_PRIME_MISMATCH.t())
-            }
-            if (frame.g != MtProto.G.toInt()) {
-                throw MtProto.MtProtoException(Msgs.DH_G_UNEXPECTED.t(frame.g))
-            }
-            val gA = MtProto.publicFromBytes(MtProto.b64urlDecode(frame.gA))
-            MtProto.validatePublic(gA)
-            val dh = MtProto.ClientDh()
-            dh.generatePrivate()
-            val gB = MtProto.publicBytes(dh.public)
-            val gABytes = MtProto.b64urlDecode(frame.gA)
-            val authKey = dh.shared(gA)
-            val sid = sessionId ?: throw MtProto.MtProtoException(Msgs.NO_SESSION_ID.t())
-            mtCrypto = MtProto.SessionCrypto(
-                authKey,
-                MtProto.saltFor(sid, gABytes, gB),
-                MtProto.sessionId8(sid),
-            )
-            log(Msgs.MTPROTO_KEYS_OK.t())
-            listener?.onState(this, State.READY) // уведомить UI о включении крипто
-            // v0.10: при бесшовной смене порядок строгий: КЛЮЧЕВОЙ ОТВЕТ уходит
-            // РАНЬШЕ снятия паркинга (сервер коммитит крипту при Complete(KEY_RESP)
-            // и должен успеть до первого нового-envelope DATA).
-            sendFrame(RrpFrame.KeyResp(MtProto.b64url(gB)))
-            unparkAndFlush()
-        } catch (e: Exception) {
-            log(Msgs.MTPROTO_EXCHANGE_FAILED.t(e.message))
-            close()
-        }
-    }
 
     /** Расшифровка DATA-конверта (в обычном режиме — без изменений). */
     /** Активный конверт: wireguard (v0.9.5) имеет приоритет, затем mtproto2. */
@@ -727,100 +671,6 @@ class RrpClient(
         } catch (e: Exception) {
             log(Msgs.MTPROTO_UDP_ENVELOPE_BAD.t(e.message))
             null
-        }
-    }
-
-    /**
-     * WG-хендшейк (v0.9.5): KEY_REQ несёт WG static public сервера
-     * ({"kind":"wireguard","spub":…}). Клиент — WG-инициатор: строит
-     * НАСТОЯЩИЙ msg1 (Noise_IKpsk2, PSK = SHA256(token)), шлёт WG_INIT.
-     *
-     * v0.9.6: БЕЗ ожидания WG_RESP на reader-потоке (self-deadlock —
-     * WG_RESP придёт через тот же поток; см. dispatch → finishWgHandshake).
-     */
-    private fun handleWgKeyReq(frame: RrpFrame.KeyReq) {
-        try {
-            val serverPub = MtProto.b64urlDecode(frame.sPub)
-            if (serverPub.size != Wg.KEY_SIZE) {
-                throw Wg.WgException(Msgs.WG_BAD_SPUB.t(frame.sPub.length))
-            }
-            val psk = Wg.tokenPsk(token)
-            val (msg1, hs) = Wg.newClientHandshake(serverPub, psk)
-            log(Msgs.WG_INIT_SENT.t(Wg.MSG_INIT_SIZE))
-            wgHandshake = hs
-            wgPsk = psk
-            sendFrame(RrpFrame.WgInit(msg1))
-        } catch (e: Exception) {
-            // ридер умирает честной причиной (серверный key-timer параллельно закроет сессию)
-            throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)
-        }
-    }
-
-    /**
-     * v0.9.6: WG_RESP (msg2) — финал WG-хендшейка. Вызывается из dispatch
-     * (reader-поток): consumeResponse чисто локальный (без чтения кадров),
-     * поэтому здесь deadlock невозможен по построению.
-     */
-    private fun finishWgHandshake(frame: RrpFrame.WgResp) {
-        val hs = wgHandshake ?: run {
-            log(Msgs.WG_INIT_UNEXPECTED.t())
-            return
-        }
-        val psk = wgPsk
-        try {
-            hs.consumeResponse(frame.raw, psk ?: throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t()))
-            wgCrypto = Wg.clientTransport(hs)
-            wgHandshake = null
-            wgPsk = null
-            log(Msgs.WG_KEYS_AGREED.t())
-            listener?.onState(this, State.READY) // UI: статус крипты
-            unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное
-        } catch (e: Exception) {
-            // битый msg2 — нарушение протокола: сессия закрыта честной причиной
-            throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)
-        }
-    }
-
-    // ------------------------------------------------------------------ BitTorrent MSE/PE (v0.10)
-
-    /**
-     * KEY_REQ(kind=bittorrent): MSE DH public сервера (Yb, 96 Б). Клиент —
-     * инициатор MSE: packet1 = Ya+pad; packet3 = req1+req2⊕req3+RC4(keyA)(...);
-     * шлём BT_INIT (packet1||packet3) БЕЗ ожидания — BT_RESP догревает dispatch
-     * (тот же дедлок-фикс, что WG в v0.9.6).
-     */
-    private fun handleBtKeyReq(frame: RrpFrame.KeyReq) {
-        try {
-            val yb = MtProto.b64urlDecode(frame.yb)
-            if (yb.size != Torrent.KEY_SIZE) {
-                throw Torrent.TorrentException("bt: yb len ${yb.size} != ${Torrent.KEY_SIZE}")
-            }
-            val skey = Torrent.skey(Torrent.tokenHash(token))
-            val (p1, hs) = Torrent.newClientInit(skey)
-            val p3 = hs.buildPacket3(yb)
-            log(Msgs.BT_INIT_SENT.t(p1.size, p3.size, Torrent.KEY_DROP))
-            btHandshake = hs
-            sendFrame(RrpFrame.BtInit(hs.init(p3)))
-        } catch (e: Exception) {
-            throw RrpClientException(Msgs.BT_FAILED.t(e.message ?: "?"), e)
-        }
-    }
-
-    /** BT_RESP (packet4) — финал MSE-хендшейка: активируем BT-конверт. */
-    private fun finishBtHandshake(frame: RrpFrame.BtResp) {
-        val hs = btHandshake ?: run {
-            log(Msgs.BT_RESP_IGNORED.t())
-            return
-        }
-        try {
-            hs.consumeResponse(frame.raw)
-            btCrypto = hs.transport()
-            btHandshake = null
-            log(Msgs.BT_KEYS_AGREED.t())
-            listener?.onState(this, State.READY) // UI: статус крипты
-            unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное
-        } catch (e: Exception) {
-            throw RrpClientException(Msgs.BT_FAILED.t(e.message ?: "?"), e)
         }
     }
 
@@ -878,7 +728,7 @@ class RrpClient(
     }
 
     /** Снятие паркинга + отправка накопленных payload-кадров (уже новым конвертом). */
-    private fun unparkAndFlush() {
+    internal fun unparkAndFlush() {
         val queued = switchParking.unpark()
         if (queued.isNotEmpty()) log(Msgs.PSW_FLUSHED.t(queued.size))
         for (f in queued) sendFrame(f)
