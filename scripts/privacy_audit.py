@@ -116,7 +116,9 @@ def main() -> int:
     problems = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "build", ".gradle", ".kotlin"}]
+        # v1.8.3: .serena — локальная папка LSP-тулчейна (не для репо),
+        # исключена из скана по канону «мусор не ломает стек».
+        dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "build", ".gradle", ".kotlin", ".serena"}]
         for fn in filenames:
             ext = os.path.splitext(fn)[1].lower()
             path = os.path.join(dirpath, fn)
