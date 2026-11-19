@@ -611,17 +611,6 @@ class MainActivity : AppCompatActivity() {
         minHeight = dp(48)
     }
 
-    internal fun describeLimit(bytes: Long, period: String, day: Int): String {
-        if (bytes <= 0) return getString(R.string.limit_none)
-        val pr = if (period == TunnelService.PERIOD_MONTH) getString(R.string.limit_period_month, day) else getString(R.string.limit_period_day)
-        return "${fmtBytes(bytes)}/$pr"
-    }
-
-    internal fun limitGb(): String {
-        val l = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
-        return if (l <= 0) "10" else String.format(Locale.US, "%.0f", l / 1024.0 / 1024.0 / 1024.0)
-    }
-
     // ================================================================= Действия
 
     /**
@@ -686,69 +675,8 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Лимит — король
 
-    /** Окно «траффик закончился» — на Старт/Реконнект и при падении туннеля. */
-    internal fun showLimitDialog(statusText: String?) {
-        val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
-        val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
-        val next = nextResetDateString()
-        val msg = getString(R.string.limit_dialog_msg, fmtBytes(used), fmtBytes(limit), next)
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.limit_dialog_title)
-            .setMessage(msg)
-            .setPositiveButton(R.string.limit_dialog_wait) { _, _ ->
-                // авто-реконнект включаем и отдаём ожидание сервису
-                prefs().edit().putBoolean(TunnelService.KEY_AUTO_RECONNECT, true).apply()
-                TunnelService.pushLog(getString(R.string.status_limit_wait, 0), LogKind.WARN)
-                renderServiceLogs()
-            }
-            .setNegativeButton(android.R.string.ok, null)
-            .show()
-        if (statusText != null) {
-            setUsageText(usageSummaryText(used, limit))
-        }
-    }
-
     /** v0.9.0: раз в эпизод — не спамим диалогом на каждый ретрай. */
     internal var pinMismatchDialogShown = false
-
-    /** v0.9.0: ротация CA — ЯВНОЕ подтверждение владельца (анти-MITM канон:
-     *  молча не доверяем никогда; отказ = туннель продолжает ретраить с отказом). */
-    private fun showPinMismatchDialog(realPin: String) {
-        if (pinMismatchDialogShown) return
-        pinMismatchDialogShown = true
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.pin_mismatch_title)
-            .setMessage(getString(R.string.pin_mismatch_msg, realPin))
-            .setPositiveButton(R.string.pin_accept) { _, _ ->
-                startService(
-                    Intent(this, TunnelService::class.java)
-                        .setAction(TunnelService.ACTION_ACCEPT_PIN)
-                        .putExtra(TunnelService.EXTRA_REAL_PIN, realPin),
-                )
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    /** Строка «следующий сброс счётчика» — настройки + главный. */
-    internal fun refreshLimitNext() {
-        val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
-        val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
-        limitNextView.text = if (limit > 0) {
-            getString(R.string.set_limit_next, nextResetDateString())
-        } else {
-            ""
-        }
-        setUsageText(usageSummaryText(used, limit))
-    }
-
-    internal fun nextResetDateString(): String {
-        val period = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
-            ?: TunnelService.PERIOD_DAY
-        val day = prefs().getInt(TunnelService.KEY_LIMIT_RESET_DAY, 1)
-        val at = LimitReset.nextResetAtMs(period, day)
-        return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(at))
-    }
 
     // ================================================================= Панели «О …»
 
