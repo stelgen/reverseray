@@ -2,7 +2,6 @@
 package serverapp
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -42,10 +41,4 @@ func writeJSONTyped(w interface{ Write([]byte) (int, error) }, t uint8, v any) e
 		return err
 	}
 	return rrp.WriteFrame(w, t, 0, 0, b)
-}
-
-// tokenHashHex is used by enroll.
-func tokenHashHex(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return fmt.Sprintf("%x", h)
 }

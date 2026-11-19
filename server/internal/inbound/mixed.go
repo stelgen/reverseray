@@ -365,10 +365,6 @@ func relayHalf(a, b net.Conn) error {
 	return nil
 }
 
-func relay(a, b net.Conn) {
-	_ = relayHalf(a, b)
-}
-
 // resumeInfoer — доступ к токену резюме rrp-стрима (v1.3.0).
 type resumeInfoer interface {
 	ResumeInfo() (token [16]byte, dst rrp.DialRequest, device string, ok bool)
