@@ -682,47 +682,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= QR
 
-    internal fun launchScan() {
-        if (!qrSupported) return
-        val opts = ScanOptions().apply {
-            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            setPrompt(getString(R.string.qr_prompt))
-            setBeepEnabled(false)
-            setOrientationLocked(true)
-        }
-        try {
-            scanLauncher.launch(opts)
-        } catch (e: ActivityNotFoundException) {
-            Toast.makeText(this, R.string.qr_error, Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    internal fun showQr() {
-        val raw = try {
-            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").serialize() // QR всегда канонический
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-            return
-        }
-        val bitmap: android.graphics.Bitmap = try {
-            BarcodeEncoder().encodeBitmap(raw, com.google.zxing.BarcodeFormat.QR_CODE, 640, 640)
-        } catch (e: Exception) {
-            Toast.makeText(this, R.string.qr_error, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val iv = android.widget.ImageView(this).apply {
-            setImageBitmap(bitmap)
-            setPadding(24, 24, 24, 24)
-        }
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.qr_show)
-            .setView(iv)
-            .setPositiveButton(android.R.string.ok, null)
-            .create()
-        dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        dialog.show()
-    }
-
     // ================================================================= Обновление + модули
 
     internal fun currentVersion(): String = try {
