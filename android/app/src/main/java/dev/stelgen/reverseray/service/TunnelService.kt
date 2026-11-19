@@ -134,9 +134,9 @@ class TunnelService : Service() {
     private var lastRx = 0L
 
     @Volatile internal var stopping = true
-    private var wakeLock: PowerManager.WakeLock? = null
+    internal var wakeLock: PowerManager.WakeLock? = null
     /** v0.9.6: Wi-Fi-lock — радио не засыпает в фоне (Android 4+, из коробки). */
-    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+    internal var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var legacyReceiver: BroadcastReceiver? = null
 
@@ -309,7 +309,7 @@ class TunnelService : Service() {
     /** Спидтест не молотит при каждом READY. */
     @Volatile private var speedTestBusy = false
     /** Ждун сброса лимита для авто-переподключения. */
-    @Volatile private var limitWaitThread: Thread? = null
+    @Volatile internal var limitWaitThread: Thread? = null
 
     private val clientListener = object : RrpClient.Listener {
         /** Сессия, владеющая клиентом (v1.5.0: тегирование логов per-сессия). */
@@ -567,7 +567,7 @@ class TunnelService : Service() {
         return cfg?.proto?.trim() ?: ""
     }
 
-    private fun startTunnel() {
+    internal fun startTunnel() {
         ensureStore()
         startRotateTick() // v1.8.0: тик ротации живёт всё время работы туннеля
         if (!stopping && sessById.isNotEmpty()) {
@@ -790,110 +790,6 @@ class TunnelService : Service() {
         sessionStore.update(active.copy(uri = canonical))
     }
 
-    // ---------- лимит трафика ----------
-
-    private data class Usage(val used: Long, val limit: Long)
-
-    /**
-     * Ожидание сброса лимита (авто-реконнект вкл): вычисляем дату следующего
-     * сброса и ждём её, не тратя батарейку/трафик (грубые проверки раз в
-     * минуту). По сбросу — реконнект. Выключаемо нитью stopTunnel().
-     */
-    private fun maybeWaitLimitReset() {
-        if (!prefs().getBoolean(KEY_AUTO_RECONNECT, false)) return
-        if (limitWaitThread?.isAlive == true) return
-        val period = prefs().getString(KEY_LIMIT_PERIOD, PERIOD_DAY) ?: PERIOD_DAY
-        val day = prefs().getInt(KEY_LIMIT_RESET_DAY, 1)
-        val at = nextResetAtMs(period, day)
-        val hours = ((at - System.currentTimeMillis()) / 3_600_000L).coerceAtLeast(0)
-        pushLog(getString(R.string.status_limit_wait, hours), LogKind.WARN)
-        updateStatus(STATE_LIMIT_REACHED, getString(R.string.status_limit_reached))
-        val t = Thread {
-            while (!stopping) {
-                val usage = accountTraffic(0)
-                if (usage.limit <= 0) {
-                    pushLog(getString(R.string.log_limit_removed), LogKind.OK)
-                    startTunnel()
-                    return@Thread
-                }
-                if (System.currentTimeMillis() >= at) {
-                    pushLog(getString(R.string.log_limit_period), LogKind.OK)
-                    startTunnel()
-                    return@Thread
-                }
-                try {
-                    Thread.sleep(LIMIT_POLL_MS)
-                } catch (_: InterruptedException) {
-                    return@Thread
-                }
-            }
-        }
-        t.isDaemon = true
-        limitWaitThread = t
-        t.start()
-    }
-
-    /** Следующая дата сброса: сутки — завтра в это же время; месяц — день сброса. */
-    internal fun nextResetAtMs(period: String, day: Int): Long {
-        val cal = Calendar.getInstance()
-        if (period == PERIOD_MONTH) {
-            cal.add(Calendar.MONTH, 1)
-            cal.set(Calendar.DAY_OF_MONTH, day.coerceIn(1, 28))
-        } else {
-            cal.add(Calendar.DAY_OF_YEAR, 1)
-        }
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        return cal.timeInMillis
-    }
-
-    /** Сбрасывает счётчик при смене периода, возвращает [used, limit]. */
-    private fun accountTraffic(delta: Long): Usage {
-        val p = prefs()
-        val limit = p.getLong(KEY_TRAFFIC_LIMIT, 0L)
-        val period = p.getString(KEY_LIMIT_PERIOD, PERIOD_DAY) ?: PERIOD_DAY
-        val key = usagePeriodKey(period)
-        var used = p.getLong(KEY_TRAFFIC_USED, 0L)
-        if (p.getString(KEY_USAGE_PERIOD, null) != key) {
-            used = 0
-            p.edit().putString(KEY_USAGE_PERIOD, key).apply()
-        }
-        if (delta > 0) used += delta
-        return Usage(used, limit)
-    }
-
-    private fun persistUsage() {
-        val usage = accountTraffic(0)
-        prefs().edit().putLong(KEY_TRAFFIC_USED, usage.used).apply()
-    }
-
-    /** Ключ периода: "2026-10-08" для суток, "2026-10" для месяца. */
-    private fun usagePeriodKey(period: String): String {
-        val fmt = if (period == PERIOD_MONTH) "yyyy-MM" else "yyyy-MM-dd"
-        return SimpleDateFormat(fmt, Locale.ROOT).format(Date())
-    }
-
-    private fun wifiOnly(): Boolean = prefs().getBoolean(KEY_WIFI_ONLY, false)
-
-    /** Подключение сейчас по Wi-Fi? (API 21+: capabilities; 14–20: legacy тип). */
-    @Suppress("DEPRECATION")
-    private fun isOnWifi(): Boolean {
-        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        return try {
-            if (Build.VERSION.SDK_INT >= 23) {
-                val net = cm.activeNetwork ?: return false
-                val caps = cm.getNetworkCapabilities(net) ?: return false
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-            } else {
-                val info = cm.activeNetworkInfo
-                info != null && info.type == ConnectivityManager.TYPE_WIFI && info.isConnected
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
 
     // ---------- смена протокола (валидация → коммит, иначе откат) ----------
 
@@ -1486,42 +1382,6 @@ class TunnelService : Service() {
         }
     }
 
-    // ---------- wake lock ----------
-
-    @SuppressLint("WakelockTimeout")
-    private fun acquireWakeLock() {
-        val pm = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "reverseray:tunnel").apply {
-            setReferenceCounted(false)
-            acquire()
-        }
-        // v0.9.6: Wi-Fi-lock HIGH_PERF — туннель живёт в фоне без сна радио.
-        // Держится только пока поднят туннель; доп. разрешений не требует.
-        try {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            @Suppress("DEPRECATION")
-            val mode = android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
-            wifiLock = wm.createWifiLock(mode, "reverseray:wifi").apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        } catch (e: Exception) {
-            pushLog(Msgs.WIFI_LOCK_FAILED.t(e.message ?: "?"), LogKind.WARN)
-        }
-    }
-
-    private fun releaseWakeLock() {
-        try {
-            wakeLock?.takeIf { it.isHeld }?.release()
-        } catch (_: Exception) {
-        }
-        wakeLock = null
-        try {
-            wifiLock?.takeIf { it.isHeld }?.release()
-        } catch (_: Exception) {
-        }
-        wifiLock = null
-    }
 
     // ---------- статус ----------
 
@@ -1536,7 +1396,7 @@ class TunnelService : Service() {
         else -> fallback
     }
 
-    private fun updateStatus(state: String, text: String) {
+    internal fun updateStatus(state: String, text: String) {
         lastStatus = text
         // v0.9.2 (R3): источник истины для UI — сервис (переживает recreate).
         // v1.5.0 (Multi-Server Core): агрегат ДВУХ уровней — внутри сессии
@@ -1748,7 +1608,7 @@ class TunnelService : Service() {
         private const val BAL_TICK_MS = 5_000L
         private const val ERROR_HOLD_MS = 1_500L
         private const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
-        private const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту
+        internal const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту
 
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIF_ID = 1
