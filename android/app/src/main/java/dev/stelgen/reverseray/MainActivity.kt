@@ -678,20 +678,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Формат
 
-    private fun fmtRate(bytesPerSec: Long): String {
-        val b = bytesPerSec.coerceAtLeast(0)
-        return when {
-            b >= 1 shl 20 -> getString(R.string.rate_mb, b / (1024f * 1024f))
-            b >= 1 shl 10 -> getString(R.string.rate_kb, b / 1024f)
-            else -> getString(R.string.rate_b, b)
-        }
-    }
-
-    // v0.8.3: единицы из ресурсов (динамический язык) — общий Formats (дубль удалён)
-    internal fun fmtBytes(b: Long): String = Formats.bytes(this, b)
-
-    // ================================================================= Файлы
-
     private fun writeConfigToFile(uri: Uri) {
         try {
             val raw = prefs().getString(TunnelService.KEY_CONFIG, "")?.trim() ?: ""
