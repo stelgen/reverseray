@@ -1,7 +1,9 @@
 package dev.stelgen.reverseray.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -89,5 +91,65 @@ class ProtoRotatorTest {
         assertNull(r.onTick(T0, "wireguard", cands))
         assertNull(r.onTick(T0 + 900, "wireguard", cands))
         assertEquals("bittorrent", r.onTick(T0 + 1_000, "wireguard", cands))
+    }
+
+    // ---- v1.8.3: кандидаты ротации (ROTATABLE) — apimask исключён ----
+
+    @Test
+    fun `ROTATABLE excludes apimask and default`() {
+        assertFalse(RrpProtocols.ROTATABLE.contains(RrpProtocols.DEFAULT))
+        assertFalse(RrpProtocols.ROTATABLE.contains(Apimask.FEATURE))
+    }
+
+    @Test
+    fun `ROTATABLE is a subset of EXECUTABLE in registry order`() {
+        assertEquals(
+            RrpProtocols.EXECUTABLE.filter { RrpProtocols.ROTATABLE.contains(it) },
+            RrpProtocols.ROTATABLE,
+        )
+    }
+
+    @Test
+    fun `full round-robin over ROTATABLE never picks apimask`() {
+        val r = rot(intervalMs = 1_000)
+        val seen = mutableListOf<String>()
+        var cur = "mtproto2"
+        var at = T0
+        // якорь + 4 смены (полный круг + 1)
+        assertNull(r.onTick(at, cur, RrpProtocols.ROTATABLE))
+        for (i in 1..4) {
+            at += 1_000
+            val next = r.onTick(at, cur, RrpProtocols.ROTATABLE)
+            if (next != null) {
+                seen.add(next)
+                cur = next
+            }
+        }
+        assertTrue(seen.isNotEmpty())
+        assertFalse(seen.contains(Apimask.FEATURE))
+        assertFalse(seen.contains(RrpProtocols.DEFAULT))
+    }
+
+    @Test
+    fun `with unfiltered EXECUTABLE the rotator would reach apimask — hence ROTATABLE`() {
+        // BUG-документация: до v1.8.3 кандидаты брались из EXECUTABLE — ротатор
+        // рано или поздно выбирал apimask, а серверный planner не свитчит его
+        // (switchKeyPlan: unsupported switch target) → цикл провалов каждые 30 мин.
+        val all = RrpProtocols.EXECUTABLE.filter { it != RrpProtocols.DEFAULT }
+        val r = rot(intervalMs = 1_000)
+        assertNull(r.onTick(T0, "mtproto2", all))
+        var cur = "mtproto2"
+        var at = T0
+        val seen = mutableListOf<String>()
+        for (i in 1..4) {
+            at += 1_000
+            val next = r.onTick(at, cur, all)
+            if (next != null) {
+                seen.add(next)
+                cur = next
+            }
+        }
+        // репродуктор: в EXECUTABLE apimask был — ротатор ДОШЁЛ бы до него
+        assertTrue(seen.contains(Apimask.FEATURE))
     }
 }

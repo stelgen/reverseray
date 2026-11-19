@@ -13,7 +13,8 @@ internal fun TunnelService.rotationEnabled(): Boolean = prefs().getBoolean(Tunne
 
 /**
  * Тик ротации: расписание ([ProtoRotator]) → бесшовная смена (0x2C)
- * + запись причины в журнал. Кандидаты — executable ∩ реестру сервера;
+ * + запись причины в журнал. Кандидаты — ROTATABLE ∩ реестру сервера
+ * (v1.8.3: apimask исключён — серверный planner не свитчит его mid-session);
  * строго следующий после текущего. Провал смены НЕ карается памятью
  * провалов (это не авто) — следующий тик попробует снова по расписанию.
  */
@@ -23,8 +24,10 @@ internal fun TunnelService.rotateTick() {
     for (s in sessById.values.toList()) {
         val client = firstClientOf(s) ?: continue
         if (client.state != RrpClient.State.READY) continue
-        val candidates = RrpProtocols.EXECUTABLE.filter {
-            it != RrpProtocols.DEFAULT && client.serverProtocols.contains(it)
+        // v1.8.3: кандидаты — ROTATABLE (executable без apimask: серверный
+        // planner не свитчит apimask mid-session — цикл провалов недопустим).
+        val candidates = RrpProtocols.ROTATABLE.filter {
+            client.serverProtocols.contains(it)
         }
         val rot = rotators.computeIfAbsent(s.id) { ProtoRotator() }
         val from = client.negotiatedProto
