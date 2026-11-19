@@ -117,10 +117,9 @@ class GuiScrollTest {
                 h.scrollTo(0, 300)
                 assertTrue("контент Home должен превышать вьюпорт", h.scrollY > 0)
                 capturedY = h.scrollY
-                // перерисовка консоли (путь «после нажатия»: логи сервисного потока)
-                MainActivity::class.java.getDeclaredMethod("renderServiceLogs").apply {
-                    isAccessible = true
-                }.invoke(it)
+                // перерисовка консоли (путь «после нажатия»: логи сервисного потока);
+                // v1.8.2: renderServiceLogs — internal-extension (ui/TabsUpdateLog.kt)
+                it.renderServiceLogs()
             }
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             scenario.onActivity {

@@ -156,24 +156,24 @@ class MainActivity : AppCompatActivity() {
     private var configEditDebounce = 0L
 
     // ---------- обновление ----------
-    private lateinit var versionView: TextView
-    private lateinit var modulesInfoView: TextView
-    private lateinit var updateConsole: StatusConsole
+    internal lateinit var versionView: TextView
+    internal lateinit var modulesInfoView: TextView
+    internal lateinit var updateConsole: StatusConsole
 
     // ---------- лог ----------
-    private lateinit var logConsole: StatusConsole
-    private lateinit var logFilterRow: HorizontalScrollView
+    internal lateinit var logConsole: StatusConsole
+    internal lateinit var logFilterRow: HorizontalScrollView
 
     /** v1.5.0: фильтр лога «по сессии» (null = все строки). */
     @Volatile private var logSessionFilter: String? = null
 
     // ---------- настройки ----------
-    private lateinit var deviceInfoBox: LinearLayout
-    private lateinit var appInfoBox: LinearLayout
-    private lateinit var netInfoBox: LinearLayout
-    private lateinit var sessionsBox: LinearLayout
-    private lateinit var usageSummaryView: TextView
-    private lateinit var limitNextView: TextView
+    internal lateinit var deviceInfoBox: LinearLayout
+    internal lateinit var appInfoBox: LinearLayout
+    internal lateinit var netInfoBox: LinearLayout
+    internal lateinit var sessionsBox: LinearLayout
+    internal lateinit var usageSummaryView: TextView
+    internal lateinit var limitNextView: TextView
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val netInfoRunnable = object : Runnable {
@@ -186,28 +186,28 @@ class MainActivity : AppCompatActivity() {
     private var lastExternalIp: String? = null
 
     /** zxing-embedded требует API 19+ (overrideLibrary в манифесте). */
-    private val qrSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
+    internal val qrSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
 
     /** SAF (файлы конфига) доступен с API 19. */
-    private val fileIoSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
+    internal val fileIoSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
 
-    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+    internal val scanLauncher = registerForActivityResult(ScanContract()) { result ->
         val content = result.contents ?: return@registerForActivityResult
         applyPastedConfig(content, announce = true)
     }
 
-    private val exportFileLauncher =
+    internal val exportFileLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
             if (uri != null) writeConfigToFile(uri)
         }
 
-    private val importFileLauncher =
+    internal val importFileLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) readConfigFromFile(uri)
         }
 
     /** SAF-приёмник для «Поделиться APK» (пишем копию в выбранное место). */
-    private val shareApkLauncher =
+    internal val shareApkLauncher =
         registerForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")) { uri ->
             if (uri != null) copyApkTo(uri)
         }
@@ -571,7 +571,7 @@ class MainActivity : AppCompatActivity() {
         return box
     }
 
-    private fun row(vararg buttons: MaterialButton): LinearLayout {
+    internal fun row(vararg buttons: MaterialButton): LinearLayout {
         val l = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -590,581 +590,13 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Вкладка 2: Связь ----------
 
-    private fun buildLinkPage(): View {
-        val p = page()
-
-        // ── 1. ДОБАВИТЬ СЕРВЕР — первой кнопкой вкладки (канон v1.7.0) ──
-        p.addView(row(filled(R.string.sess_add).apply { setOnClickListener { showAddSessionDialog() } }))
-
-        // ── 2. СЕРВЕРЫ: статус-точка (пульс) + имя + хост + действия ──
-        // v1.7.0 FIX наложений: содержимое добавляется В inner-LinearLayout
-        // карточки, а не в MaterialCardView (FrameLayout — дети СКЛАДЫВАЛИСЬ
-        // друг на друга — тот самый «мусор» вверху вкладки).
-        val sessionsInner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        p.addView(card(sessionsInner))
-        sessionsBox = sessionsInner
-        refreshSessionsCard()
-
-        // ── 3. ИМПОРТ ПАЧКОЙ (по одной rrp://-ссылке на строку) ──
-        val bulkInner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        bulkInner.addView(sectionTitle(R.string.sess_bulk_title, null))
-        val bulkInput = TextInputEditText(this).apply {
-            hint = getString(R.string.sess_bulk_hint)
-            minLines = 2
-            gravity = Gravity.TOP
-            setTextSize(12f)
-            setTypeface(Typeface.MONOSPACE)
-        }
-        bulkInner.addView(bulkInput)
-        bulkInner.addView(
-            row(
-                outlined(R.string.sess_bulk_add).apply {
-                    setOnClickListener {
-                        val text = bulkInput.text?.toString().orEmpty()
-                        val (okN, badN) = addBulkSessions(text)
-                        bulkInput.setText("")
-                        Toast.makeText(
-                            this@MainActivity,
-                            getString(R.string.sess_bulk_result, okN, badN),
-                            Toast.LENGTH_LONG,
-                        ).show()
-                        refreshSessionsCard()
-                    }
-                },
-            ),
-        )
-        p.addView(card(bulkInner))
-
-        // ── Модули (v0.9.5): чекбокс-каркас для вкл/выкл модулей ──
-        // Правила UX: один чекбокс = один модуль, мгновенный отклик,
-        // уведомление + честный лог; выбор персистентен (переживает офлайн).
-        val modsCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        modsCard.addView(sectionTitle(R.string.modules_section_modules, null))
-        modsCard.addView(TextView(this).apply {
-            setText(R.string.modules_hint)
-            textSize = 12f
-            setTextColor(0xFF6B7280.toInt())
-            setPadding(0, dp(2), 0, dp(6))
-        })
-        // v1.0.0: модуль UDP-релей — галочка рядом с API Mask; гейт на клиенте
-        // (телефон — точка egress UDP): выкл → UDP_ASSOC отклоняется, ноль дейтаграмм
-        val udpCfg = Modules.lastUdp
-        if (udpCfg != null) {
-            val udpRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            udpRow.addView(CheckBox(this).apply {
-                text = getString(R.string.udp_toggle)
-                isChecked = prefs().getBoolean(TunnelService.KEY_UDP_ENABLED, true)
-                textSize = 13f
-                setOnCheckedChangeListener { _, checked ->
-                    val i = Intent(this@MainActivity, TunnelService::class.java)
-                        .setAction(TunnelService.ACTION_UDP)
-                        .putExtra(TunnelService.EXTRA_ENABLED, checked)
-                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-                }
-            })
-            modsCard.addView(udpRow)
-        }
-        p.addView(card(modsCard))
-
-        // Протоколы
-        val protoCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        // v0.9.7 (GUI-этап 2): единый заголовок карточки — как у всех остальных
-        protoCard.addView(sectionTitle(R.string.proto_section, null))
-        connLineViews.add(TextView(this).apply {
-            textSize = 13f
-            setPadding(0, dp(4), 0, dp(4))
-            setText(R.string.proto_unknown)
-        })
-        protoCard.addView(connLineViews.last())
-        protoCard.addView(outlined(R.string.proto_switch).apply {
-            setOnClickListener { showProtocolPicker() }
-        })
-        protoCard.addView(outlined(R.string.transport_switch).apply {
-            setOnClickListener { showTransportPicker() }
-        })
-        p.addView(card(protoCard))
-        return scrollWrap(p)
-    }
-
     // ---------- Вкладка 3: Обновление ----------
-
-    private fun buildUpdatePage(): View {
-        val p = page()
-        versionView = TextView(this).apply {
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        p.addView(versionView)
-
-        // Модули: обновляются без переустановки APK (как POS-машины)
-        val modulesCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        modulesCard.addView(sectionTitle(R.string.modules_section, null))
-        modulesInfoView = TextView(this).apply {
-            textSize = 12f
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        modulesCard.addView(modulesInfoView)
-        modulesCard.addView(filled(R.string.modules_check_now).apply {
-            setOnClickListener { syncModulesAsync(force = true) }
-        })
-        p.addView(card(modulesCard))
-
-        // Авто-проверка — в карточке (UX-канон: единый вид всех переключателей)
-        p.addView(card(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(SwitchMaterial(this@MainActivity).apply {
-                setText(R.string.update_auto)
-                isChecked = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
-                setOnCheckedChangeListener { _, checked ->
-                    val old = prefs().getBoolean(TunnelService.KEY_AUTO_UPDATE, true)
-                    if (old != checked) {
-                        prefs().edit().putBoolean(TunnelService.KEY_AUTO_UPDATE, checked).apply()
-                        TunnelService.logSettingChange(getString(R.string.set_auto_update), old.toString(), checked.toString())
-                        renderServiceLogs()
-                    }
-                }
-            })
-        }))
-
-        p.addView(
-            row(
-                filled(R.string.update_check).apply {
-                    setOnClickListener { checkForUpdateAsync(showIfUpToDate = true) }
-                },
-            )
-        )
-
-        // Журнал обновления/модулей — ТО ЖЕ консольное окно и формат, что на главной
-        updateConsole = StatusConsole(this).apply {
-            setTitle(getString(R.string.console_title_update))
-            setBodyHeight(240)
-        }
-        p.addView(updateConsole)
-        return scrollWrap(p)
-    }
 
     // ---------- Вкладка 4: Лог ----------
 
-    private fun buildLogPage(): View {
-        val p = page()
-        p.addView(TextView(this).apply {
-            setText(R.string.logs_title)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(4), 0, dp(4))
-        })
-        // v1.5.0: фильтр «по сессии» — чипы (Все / имена сессий из кольца)
-        logFilterRow = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(
-                LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                },
-            )
-        }
-        p.addView(logFilterRow)
-        logConsole = StatusConsole(this).apply {
-            setTitle(getString(R.string.console_title_service))
-            setBodyHeight(280)
-        }
-        p.addView(logConsole)
-        p.addView(
-            row(
-                outlined(R.string.log_copy_all).apply { setOnClickListener { copyServiceLog() } },
-                outlined(R.string.log_share).apply { setOnClickListener { shareServiceLog() } },
-            )
-        )
-        return scrollWrap(p)
-    }
-
     // ---------- Вкладка 5: Настройки ----------
 
-    private fun buildSettingsPage(): View {
-        val p = page()
-
-        // v1.6.0: карточка сессий перенесена на «Подключение» (дубль убран);
-        // здесь остаются тема/модули/лимиты/приложение.
-
-        // Тема (v0.8.1): авто (настройка телефона; на старых Android — чёрная) / тёмная / светлая
-        p.addView(buildThemeCard())
-
-        // Язык (v0.8.3): system / русский / english — динамически, всё приложение и логи
-        p.addView(buildLangCard())
-
-        // О приложении: версии/модули/Рам/диск/трафик за всё время/протокол + константы защиты
-        p.addView(sectionTitle(R.string.about_app_title, null))
-        appInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        p.addView(card(appInfoBox))
-
-        // О устройстве (как «О телефоне» + CPU/RAM/SDK/Java)
-        p.addView(sectionTitle(R.string.settings_device, null))
-        deviceInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        p.addView(card(deviceInfoBox))
-
-        // О сети: ВСЁ, что приложение узнало — честно, по группам
-        p.addView(sectionTitle(R.string.about_net_title, getString(R.string.about_net_hint)))
-        netInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        p.addView(card(netInfoBox))
-
-        // Только Wi-Fi
-        p.addView(card(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(SwitchMaterial(this@MainActivity).apply {
-                setText(R.string.set_wifi_only)
-                isChecked = prefs().getBoolean(TunnelService.KEY_WIFI_ONLY, false)
-                setOnCheckedChangeListener { _, checked ->
-                    val old = prefs().getBoolean(TunnelService.KEY_WIFI_ONLY, false)
-                    if (old != checked) {
-                        prefs().edit().putBoolean(TunnelService.KEY_WIFI_ONLY, checked).apply()
-                        TunnelService.logSettingChange(getString(R.string.set_wifi_only), old.toString(), checked.toString())
-                        renderServiceLogs()
-                    }
-                }
-            })
-        }))
-
-        // Разрешить LAN
-        p.addView(card(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(SwitchMaterial(this@MainActivity).apply {
-                setText(R.string.set_allow_lan)
-                isChecked = prefs().getBoolean(TunnelService.KEY_ALLOW_LAN, false)
-                setOnCheckedChangeListener { _, checked ->
-                    val old = prefs().getBoolean(TunnelService.KEY_ALLOW_LAN, false)
-                    if (old != checked) {
-                        prefs().edit().putBoolean(TunnelService.KEY_ALLOW_LAN, checked).apply()
-                        TunnelService.logSettingChange(getString(R.string.set_allow_lan), old.toString(), checked.toString())
-                        renderServiceLogs()
-                    }
-                }
-            })
-        }))
-
-        // Автоподключение при открытии (выкл по умолчанию)
-        p.addView(card(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(SwitchMaterial(this@MainActivity).apply {
-                setText(R.string.set_autoreconnect)
-                isChecked = prefs().getBoolean(TunnelService.KEY_AUTO_RECONNECT, false)
-                setOnCheckedChangeListener { _, checked ->
-                    val old = prefs().getBoolean(TunnelService.KEY_AUTO_RECONNECT, false)
-                    if (old != checked) {
-                        prefs().edit().putBoolean(TunnelService.KEY_AUTO_RECONNECT, checked).apply()
-                        TunnelService.logSettingChange(getString(R.string.set_autoreconnect), old.toString(), checked.toString())
-                        renderServiceLogs()
-                    }
-                }
-            })
-        }))
-
-        // Лимит трафика: «лимит — король»
-        val lim = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        lim.addView(TextView(this).apply {
-            setText(R.string.set_limit_title)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        usageViews.add(TextView(this).apply {
-            textSize = 12f
-            setPadding(0, dp(4), 0, dp(4))
-            setTextColor(0xFF6B7280.toInt())
-        })
-        lim.addView(usageViews.last())
-        limitNextView = TextView(this).apply {
-            textSize = 12f
-            setTextColor(0xFF6B7280.toInt())
-            setPadding(0, dp(2), 0, dp(4))
-        }
-        lim.addView(limitNextView)
-        val limitSwitch = SwitchMaterial(this).apply {
-            setText(R.string.set_limit_switch)
-            isChecked = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L) > 0
-        }
-        lim.addView(limitSwitch)
-        val limitEdit = EditText(this).apply {
-            hint = getString(R.string.set_limit_gb_hint)
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(limitGb())
-            textSize = 14f
-        }
-        lim.addView(limitEdit)
-        // Период: сутки / месяц (UX-канон: явный выбор вместо «угадай день»)
-        lim.addView(TextView(this).apply {
-            setText(R.string.set_limit_period)
-            textSize = 12f
-            setTextColor(0xFF6B7280.toInt())
-        })
-        val periodBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val periodDay = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(R.string.set_limit_period_day)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val periodMonth = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(R.string.set_limit_period_month)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                .apply { setMargins(dp(6), 0, 0, 0) }
-        }
-        periodBox.addView(periodDay)
-        periodBox.addView(periodMonth)
-        lim.addView(periodBox)
-        var selectedPeriod = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
-            ?: TunnelService.PERIOD_DAY
-        fun paintPeriod() {
-            periodDay.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                if (selectedPeriod == TunnelService.PERIOD_DAY) 0xFF2E7D32.toInt() else 0x00FFFFFF,
-            )
-            periodMonth.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                if (selectedPeriod == TunnelService.PERIOD_MONTH) 0xFF2E7D32.toInt() else 0x00FFFFFF,
-            )
-        }
-        periodDay.setOnClickListener {
-            selectedPeriod = TunnelService.PERIOD_DAY; paintPeriod()
-        }
-        periodMonth.setOnClickListener {
-            selectedPeriod = TunnelService.PERIOD_MONTH; paintPeriod()
-        }
-        paintPeriod()
-        val periodEdit = EditText(this).apply {
-            hint = getString(R.string.set_limit_period_hint)
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(prefs().getInt(TunnelService.KEY_LIMIT_RESET_DAY, 1).toString())
-            textSize = 14f
-        }
-        lim.addView(periodEdit)
-        lim.addView(
-            row(
-                filled(R.string.set_limit_apply).apply {
-                    setOnClickListener {
-                        val oldLimit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
-                        val oldPeriod = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
-                        val oldDay = prefs().getInt(TunnelService.KEY_LIMIT_RESET_DAY, 1)
-                        val on = limitSwitch.isChecked
-                        val gb = limitEdit.text.toString().replace(',', '.').toDoubleOrNull()
-                        if (on && (gb == null || gb <= 0)) {
-                            Toast.makeText(this@MainActivity, R.string.set_limit_bad_value, Toast.LENGTH_SHORT).show()
-                            return@setOnClickListener
-                        }
-                        val bytes = if (on) (gb!! * 1024 * 1024 * 1024).toLong() else 0L
-                        val period = if (bytes > 0) selectedPeriod else TunnelService.PERIOD_DAY
-                        val day = (periodEdit.text.toString().toIntOrNull() ?: 1).coerceIn(1, 28)
-                        prefs().edit()
-                            .putLong(TunnelService.KEY_TRAFFIC_LIMIT, bytes)
-                            .putString(TunnelService.KEY_LIMIT_PERIOD, period)
-                            .putInt(TunnelService.KEY_LIMIT_RESET_DAY, day)
-                            .apply()
-                        TunnelService.logSettingChange(
-                            getString(R.string.set_limit_title),
-                            describeLimit(oldLimit, oldPeriod ?: TunnelService.PERIOD_DAY, oldDay),
-                            describeLimit(bytes, period, day),
-                        )
-                        renderServiceLogs(); refreshUsageSummary(); refreshLimitNext()
-                        Toast.makeText(this@MainActivity, R.string.set_limit_applied, Toast.LENGTH_SHORT).show()
-                    }
-                },
-                outlined(R.string.set_limit_reset).apply {
-                    setOnClickListener {
-                        prefs().edit().putLong(TunnelService.KEY_TRAFFIC_USED, 0L).apply()
-                        TunnelService.logSettingChange(
-                            getString(R.string.set_limit_counter),
-                            usageViews.firstOrNull()?.text.toString(), "0",
-                        )
-                        renderServiceLogs(); refreshUsageSummary()
-                        Toast.makeText(this@MainActivity, R.string.set_limit_reset_done, Toast.LENGTH_SHORT).show()
-                    }
-                },
-            )
-        )
-        p.addView(card(lim))
-
-        // PROBE-цель
-        val probe = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        probe.addView(TextView(this).apply {
-            setText(R.string.set_probe_title)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        val probeEdit = EditText(this).apply {
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-            setText(prefs().getString(TunnelService.KEY_PROBE_TARGET, TunnelService.DEFAULT_PROBE_TARGET))
-            textSize = 14f
-            setSingleLine(true)
-        }
-        probe.addView(probeEdit)
-        probe.addView(filled(R.string.set_probe_apply).apply {
-            setOnClickListener {
-                val raw = probeEdit.text.toString().trim()
-                val host = raw.substringBeforeLast(':')
-                val port = raw.substringAfterLast(':', "").toIntOrNull()
-                if (host.isEmpty() || port == null || port !in 1..65535) {
-                    Toast.makeText(this@MainActivity, R.string.set_probe_bad, Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
-                val old = prefs().getString(TunnelService.KEY_PROBE_TARGET, TunnelService.DEFAULT_PROBE_TARGET) ?: ""
-                val norm = "$host:$port"
-                prefs().edit().putString(TunnelService.KEY_PROBE_TARGET, norm).apply()
-                TunnelService.logSettingChange(getString(R.string.set_probe_title), old, norm)
-                renderServiceLogs()
-            }
-        })
-        p.addView(card(probe))
-
-        // v1.6.2: «Поделиться приложением» переехал со вкладки «Подключение»
-        // в «Настройки» (канон: распространение — настройка, не подключение).
-        val shareCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        shareCard.addView(sectionTitle(R.string.btn_share_app, null))
-        shareCard.addView(
-            row(
-                filled(R.string.share_link).apply { setOnClickListener { shareAppLink() } },
-                outlined(R.string.share_apk).apply { setOnClickListener { shareAppApk() } },
-            )
-        )
-        p.addView(card(shareCard))
-
-        // v1.7.0: инструменты конфига — сюда же переехали импорт/экспорт
-        // и QR (канон: ввод/обмен конфигом — настройки, не подключение).
-        val toolsCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        toolsCard.addView(sectionTitle(R.string.config_tools_title, null))
-        // legacy-представление ссылки (статус/значение): создаётся скрытым —
-        // импортеры/сканер/транспорт пишут в него, видимость не нужна
-        // (канон ссылки показывает список серверов на «Подключении»).
-        val legacyBox = LinearLayout(this).apply { visibility = View.GONE }
-        linkStatusView = TextView(this).apply { visibility = View.GONE }
-        linkValueView = TextView(this).apply { visibility = View.GONE }
-        legacyBox.addView(linkStatusView)
-        legacyBox.addView(linkValueView)
-        toolsCard.addView(legacyBox)
-        toolsCard.addView(
-            row(
-                outlined(R.string.import_config).also {
-                    it.setOnClickListener {
-                        try {
-                            importFileLauncher.launch(arrayOf("text/*", "application/octet-stream"))
-                        } catch (e: ActivityNotFoundException) {
-                            Toast.makeText(this, R.string.file_error_no_picker, Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                },
-                outlined(R.string.export_config).also {
-                    it.setOnClickListener { exportFileLauncher.launch("reverseray-config.txt") }
-                },
-            ),
-        )
-        if (qrSupported) {
-            toolsCard.addView(
-                row(
-                    outlined(R.string.qr_scan).apply { setOnClickListener { launchScan() } },
-                    outlined(R.string.qr_show).apply { setOnClickListener { showQr() } },
-                ),
-            )
-        }
-        p.addView(card(toolsCard))
-        return scrollWrap(p)
-    }
-
-    /**
-     * v0.8.1: карта «Тема» — авто / тёмная / светлая (применяется сразу).
-     */
-    private fun buildThemeCard(): LinearLayout {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        box.addView(TextView(this).apply {
-            setText(R.string.set_theme_title)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val bAuto = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(R.string.set_theme_auto)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val bDark = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(R.string.set_theme_dark)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                .apply { setMargins(dp(6), 0, 0, 0) }
-        }
-        val bLight = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            setText(R.string.set_theme_light)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                .apply { setMargins(dp(6), 0, 0, 0) }
-        }
-        rowBox.addView(bAuto); rowBox.addView(bDark); rowBox.addView(bLight)
-        box.addView(rowBox)
-        fun paint() {
-            val sel = ThemeMode.normalize(prefs().getString(TunnelService.KEY_THEME, ThemeMode.AUTO))
-            val on = 0xFF2E7D32.toInt()
-            val off = 0x00FFFFFF
-            bAuto.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == ThemeMode.AUTO) on else off)
-            bDark.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == ThemeMode.DARK) on else off)
-            bLight.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == ThemeMode.LIGHT) on else off)
-        }
-        fun pick(mode: String) {
-            val old = ThemeMode.normalize(prefs().getString(TunnelService.KEY_THEME, ThemeMode.AUTO))
-            prefs().edit().putString(TunnelService.KEY_THEME, mode).apply()
-            TunnelService.logSettingChange(getString(R.string.set_theme_title), old, mode)
-            renderServiceLogs()
-            paint()
-            // применяем сразу, без перезапуска приложения
-            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
-                ThemeMode.resolveNightMode(mode, Build.VERSION.SDK_INT),
-            )
-        }
-        bAuto.setOnClickListener { pick(ThemeMode.AUTO) }
-        bDark.setOnClickListener { pick(ThemeMode.DARK) }
-        bLight.setOnClickListener { pick(ThemeMode.LIGHT) }
-        paint()
-        return box
-    }
-
-    /**
-     * v0.8.3: карта «Язык» — Как в системе / Русский / English.
-     * Применяется сразу (recreate): ресурсы — через attachBaseContext,
-     * логи ядра — через L10n.lang (без перезапуска процесса).
-     */
-    private fun buildLangCard(): LinearLayout {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        box.addView(TextView(this).apply {
-            setText(R.string.settings_language)
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(12), 0, dp(4))
-        })
-        val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val bSystem = outlined(R.string.lang_system)
-        val bRu = outlined(R.string.lang_ru)
-        val bEn = outlined(R.string.lang_en)
-        bSystem.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        bRu.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            .apply { setMargins(dp(6), 0, 0, 0) }
-        bEn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            .apply { setMargins(dp(6), 0, 0, 0) }
-        rowBox.addView(bSystem); rowBox.addView(bRu); rowBox.addView(bEn)
-        box.addView(rowBox)
-        fun paint() {
-            val sel = L10nUi.saved(this@MainActivity)
-            val on = 0xFF2E7D32.toInt()
-            val off = 0x00FFFFFF
-            bSystem.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == L10nUi.LANG_SYSTEM) on else off)
-            bRu.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == L10nUi.LANG_RU) on else off)
-            bEn.backgroundTintList = android.content.res.ColorStateList.valueOf(if (sel == L10nUi.LANG_EN) on else off)
-        }
-        fun pick(mode: String) {
-            val old = L10nUi.saved(this@MainActivity)
-            val norm = L10nUi.save(this@MainActivity, mode)
-            if (norm == old) return
-            TunnelService.logSettingChange(getString(R.string.settings_language), old, norm)
-            renderServiceLogs()
-            // Язык применяем перезаданием базового контекста: recreate пересоздаёт
-            // Activity → attachBaseContext возьмёт новую локаль из prefs.
-            recreate()
-        }
-        bSystem.setOnClickListener { pick(L10nUi.LANG_SYSTEM) }
-        bRu.setOnClickListener { pick(L10nUi.LANG_RU) }
-        bEn.setOnClickListener { pick(L10nUi.LANG_EN) }
-        paint()
-        return box
-    }
-
-    private fun outlined(textRes: Int) =
+    internal fun outlined(textRes: Int) =
         MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             setText(textRes)
             // v0.9.7 (GUI-этап 2): эргономика — тач-таргет ≥ 48dp на всех кнопках
@@ -1172,19 +604,19 @@ class MainActivity : AppCompatActivity() {
             minWidth = dp(88)
         }
 
-    private fun filled(textRes: Int) = MaterialButton(this).apply {
+    internal fun filled(textRes: Int) = MaterialButton(this).apply {
         setText(textRes)
         // v0.9.7 (GUI-этап 2): эргономика — тач-таргет ≥ 48dp на всех кнопках
         minHeight = dp(48)
     }
 
-    private fun describeLimit(bytes: Long, period: String, day: Int): String {
+    internal fun describeLimit(bytes: Long, period: String, day: Int): String {
         if (bytes <= 0) return getString(R.string.limit_none)
         val pr = if (period == TunnelService.PERIOD_MONTH) getString(R.string.limit_period_month, day) else getString(R.string.limit_period_day)
         return "${fmtBytes(bytes)}/$pr"
     }
 
-    private fun limitGb(): String {
+    internal fun limitGb(): String {
         val l = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
         return if (l <= 0) "10" else String.format(Locale.US, "%.0f", l / 1024.0 / 1024.0 / 1024.0)
     }
@@ -1471,7 +903,7 @@ class MainActivity : AppCompatActivity() {
      * зелёный, ошибка/отключено — красный, реконнект — тёмно-жёлтый),
      * обновление: канал UPDATE, полный лог: всё без исключений.
      */
-    private fun renderServiceLogs() {
+    internal fun renderServiceLogs() {
         homeConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.HOME)))
         updateConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.UPDATE)))
         logConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.LOG, logSessionFilter)))
@@ -1481,7 +913,7 @@ class MainActivity : AppCompatActivity() {
      * v1.5.0: чипы фильтра лога «по сессии» — «Все» + имена сессий из кольца.
      * Пересобирается при открытии вкладки LOG (сессии появляются/уходят).
      */
-    private fun refreshLogFilterChips() {
+    internal fun refreshLogFilterChips() {
         if (!this::logFilterRow.isInitialized) return
         val box = logFilterRow.getChildAt(0) as LinearLayout
         box.removeAllViews()
@@ -1529,7 +961,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshUsageSummary() {
+    internal fun refreshUsageSummary() {
         val p = prefs()
         val used = p.getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
         val limit = p.getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
@@ -1657,7 +1089,7 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Поделиться приложением
 
-    private fun shareAppLink() {
+    internal fun shareAppLink() {
         val url = "https://github.com/stelgen/reverseray"
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -1672,7 +1104,7 @@ class MainActivity : AppCompatActivity() {
      * логи, счётчики и любая приватная информация — у нового пользователя
      * всё будет в дефолтах.
      */
-    private fun shareAppApk() {
+    internal fun shareAppApk() {
         if (Build.VERSION.SDK_INT >= 19 && fileIoSupported) {
             try {
                 shareApkLauncher.launch("reverseray-${currentVersion()}.apk")
@@ -1711,7 +1143,7 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= QR
 
-    private fun launchScan() {
+    internal fun launchScan() {
         if (!qrSupported) return
         val opts = ScanOptions().apply {
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
@@ -1726,7 +1158,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showQr() {
+    internal fun showQr() {
         val raw = try {
             RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").serialize() // QR всегда канонический
         } catch (e: Exception) {
@@ -1760,7 +1192,7 @@ class MainActivity : AppCompatActivity() {
         ""
     }
 
-    private fun refreshVersionRow() {
+    internal fun refreshVersionRow() {
         val code = try {
             @Suppress("DEPRECATION")
             packageManager.getPackageInfo(packageName, 0).versionCode
@@ -1770,7 +1202,7 @@ class MainActivity : AppCompatActivity() {
         versionView.text = getString(R.string.version_row, currentVersion(), code)
     }
 
-    private fun refreshModulesInfo() {
+    internal fun refreshModulesInfo() {
         val v = RrpProtocols.registryVersion()
         val protocols = RrpProtocols.displayList()
         modulesInfoView.text = getString(
@@ -1780,13 +1212,13 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun refreshUpdateConsole() {
+    internal fun refreshUpdateConsole() {
         // v0.9.7: единый маппинг цветов (StatusConsole.roleOf), источник — LogStore (канал UPDATE)
         updateConsole.render(toConsoleLines(UpdateLogger.snapshot()))
     }
 
     /** v0.8: применить сохранённый манифест модулей при старте. */
-    private fun loadCachedModules() {
+    internal fun loadCachedModules() {
         try {
             val f = File(filesDir, "modules.json")
             if (!f.exists()) return
@@ -1802,7 +1234,7 @@ class MainActivity : AppCompatActivity() {
      * качается ТОЛЬКО если версия/хеш изменились; применяется без
      * переустановки APK. Прогресс и скорость — в консоль обновления.
      */
-    private fun syncModulesAsync(force: Boolean) {
+    internal fun syncModulesAsync(force: Boolean) {
         val url = Modules.DEFAULT_URL
         UpdateLogger.add(getString(R.string.upd_modules_check, url.substringAfterLast('/')))
         Thread {
@@ -1917,7 +1349,7 @@ class MainActivity : AppCompatActivity() {
         startTunnel()
     }
 
-    private fun checkForUpdateAsync(showIfUpToDate: Boolean) {
+    internal fun checkForUpdateAsync(showIfUpToDate: Boolean) {
         val current = currentVersion()
         UpdateLogger.add(getString(R.string.upd_check_start, current))
         refreshUpdateConsoleSafe()
@@ -2076,7 +1508,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Строка «следующий сброс счётчика» — настройки + главный. */
-    private fun refreshLimitNext() {
+    internal fun refreshLimitNext() {
         val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
         val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
         limitNextView.text = if (limit > 0) {
@@ -2087,7 +1519,7 @@ class MainActivity : AppCompatActivity() {
         setUsageText(usageSummaryText(used, limit))
     }
 
-    private fun nextResetDateString(): String {
+    internal fun nextResetDateString(): String {
         val period = prefs().getString(TunnelService.KEY_LIMIT_PERIOD, TunnelService.PERIOD_DAY)
             ?: TunnelService.PERIOD_DAY
         val day = prefs().getInt(TunnelService.KEY_LIMIT_RESET_DAY, 1)
@@ -2312,14 +1744,14 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Лог: копировать/поделиться
 
-    private fun copyServiceLog() {
+    internal fun copyServiceLog() {
         val text = logConsole.snapshotText().ifEmpty { getString(R.string.logs_empty) }
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("ReverseRay log", text))
         Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
     }
 
-    private fun shareServiceLog() {
+    internal fun shareServiceLog() {
         val text = logConsole.snapshotText().ifEmpty { getString(R.string.logs_empty) }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -2421,7 +1853,7 @@ class MainActivity : AppCompatActivity() {
      * статус-точка + имя + хост из ссылки + кнопки равной ширины
      * [Изменить · Вкл/Выкл · PRIMARY · Удалить].
      */
-    private fun refreshSessionsCard() {
+    internal fun refreshSessionsCard() {
         if (!this::sessionsBox.isInitialized) return
         preserveScroll {
             sessionsBox.removeAllViews()
@@ -2557,7 +1989,7 @@ class MainActivity : AppCompatActivity() {
      *    (v1.5.0 молча отказывал — сервер не появлялся в списке вовсе);
      *  - чекбокс «Подключить сразу» — новый профиль не остаётся выключенным.
      */
-    private fun showAddSessionDialog() {
+    internal fun showAddSessionDialog() {
         val input = TextInputEditText(this).apply {
             hint = getString(R.string.sess_add_hint)
             minLines = 1
@@ -2647,7 +2079,7 @@ class MainActivity : AppCompatActivity() {
      * кнопке Старт (PRIMARY коннектится всегда, остальные — по enabled).
      * @return (добавлено, нераспознано).
      */
-    private fun addBulkSessions(text: String): Pair<Int, Int> {
+    internal fun addBulkSessions(text: String): Pair<Int, Int> {
         if (text.isBlank()) return 0 to 0
         val store = sessionStore()
         var ok = 0
