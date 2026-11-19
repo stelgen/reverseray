@@ -2,6 +2,26 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.8.2] — 2026-11-19
+
+### Изменено
+- Дробление `MainActivity.kt` (pure refactor — поведение не менялось):
+  3020 → 1073 строк, 13 зон по комментариям-зонам, каждая — отдельный файл
+  в `ui/`: вкладка 1 «Главная» (`TabsHome.kt`), вкладки 2–5
+  (`TabsLink.kt`, `TabsUpdateLog.kt`, `TabsSettings.kt`), «Действия»
+  (`Actions.kt`), «Сеть/статус» (`NetStatus.kt`), «Формат» (`Format.kt`),
+  «Файлы» (`Files.kt`), «Поделиться» (`ShareApp.kt`), «QR» (`Qr.kt`),
+  «Обновление+модули» (`UpdateModules.kt`), «Лимит — король» (`Limit.kt`),
+  «Панели О…» (`PanelsAbout.kt`), «Лог: копировать/поделиться»
+  (`LogShare.kt`), «Разное» (`Misc.kt`). Задетые члены — private→internal
+  (тот же пакет); `GuiScrollTest` переведён с reflection на прямой вызов
+  internal-метода. Msgs.kt / RrpFrame.kt не дробятся (object/sealed —
+  канон одного файла).
+
+### Тесты
+- Клиент: Robolectric-прогон после каждого выноса — зелёный (270 тестов,
+  forkEvery=1).
+
 ## [1.8.1] — 2026-11-18
 
 ### Исправлено
