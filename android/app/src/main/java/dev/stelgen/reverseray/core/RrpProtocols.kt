@@ -41,6 +41,15 @@ object RrpProtocols {
      */
     val EXECUTABLE: List<String> = listOf(DEFAULT, MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID, Apimask.FEATURE)
 
+    /**
+     * v1.8.3: кандидаты ротации (режим «Ротация») — executable БЕЗ apimask:
+     * серверный planner свитча (switchKeyPlan) не поддерживает mid-session
+     * свитч в apimask (apimask — фича-контекст манифеста, не цель свитча;
+     * planner вернул бы «unsupported switch target» каждые 30 минут — цикл
+     * провалов вместо ротации). Порядок — реестр (mtproto2 → wg → bt).
+     */
+    val ROTATABLE: List<String> = listOf(MtProto.PROTO_ID, Wg.PROTO_ID, Torrent.PROTO_ID)
+
     /** Умеет ли клиент исполнять протокол (не только показывать в GUI). */
     fun isExecutable(id: String?): Boolean {
         val clean = Modules.normalizeId(id ?: "")
