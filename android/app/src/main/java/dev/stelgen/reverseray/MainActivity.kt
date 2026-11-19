@@ -684,30 +684,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Разное
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
-    }
-
-    /**
-     * v1.5.0: зеркало канона ссылки в URI PRIMARY-профиля (SessionStore) —
-     * legacy-писатели конфига (вставка/правка ссылки, транспорт) остаются
-     * источником правды для PRIMARY, профиль не рассинхронизируется.
-     */
-    internal fun syncPrimaryProfileUri(canonical: String) {
-        try {
-            val p = prefs()
-            val store = SessionStore(PrefsBackend(p))
-            store.migrateLegacy(p.getString(TunnelService.KEY_CONFIG, null))
-            store.active()?.let { store.update(it.copy(uri = canonical)) }
-        } catch (_: Exception) {
-        }
-    }
-
     // ================================================================= Сессии (v1.5.0)
 
     /** SessionStore поверх prefs (миграция идемпотентна). */
