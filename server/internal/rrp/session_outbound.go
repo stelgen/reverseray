@@ -27,7 +27,12 @@ func (s *Session) writeAsync(f *Frame) {
 	}
 }
 
-// parkWait блокирует payload-отправителя до снятия паркинга.
+// parkWait блокирует payload-отправителя до снятия паркинга или смерти
+// сессии. v1.8.3: собственного таймера НЕТ — дедлайн свитча принадлежит
+// startSwitchDeadline (SwitchTimeout): при просрочке shutdown закрывает done,
+// и все parkWait корректно выходят. Легитимный pending-свитч живёт ровно
+// столько, сколько жив pending-свитч — «ноль потерь» не ограничен таймером
+// паркинга (канон v1.3.0: буфер в RAM без дропов).
 func (s *Session) parkWait() bool {
 	s.mu.Lock()
 	if !s.parked {
@@ -43,9 +48,6 @@ func (s *Session) parkWait() bool {
 	case <-gate:
 		return true
 	case <-s.done:
-		return false
-	case <-time.After(15 * time.Second):
-		go s.shutdown(errors.New("proto switch park timeout"))
 		return false
 	}
 }
@@ -78,9 +80,13 @@ func (s *Session) parkPayloadLocked() {
 func (s *Session) commitCrypto(pc PayloadCrypto) {
 	s.mu.Lock()
 	s.crypto = pc
+	hadSwitch := false
+	switchDur := time.Duration(0)
 	if s.pendingProto != "" {
 		s.Proto = s.pendingProto
 		s.pendingProto = ""
+		hadSwitch = true
+		switchDur = time.Since(s.switchStartedAt) // v1.8.3: наблюдаемость
 	}
 	if s.keyTimer != nil {
 		s.keyTimer.Stop()
@@ -88,6 +94,9 @@ func (s *Session) commitCrypto(pc PayloadCrypto) {
 	}
 	s.mu.Unlock()
 	s.unparkPayload()
+	if hadSwitch {
+		s.logf("rrp: protocol switch committed (%s, %v)", s.Proto, switchDur)
+	}
 }
 
 func (s *Session) writeLoop() {
