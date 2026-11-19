@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stelgen/reverseray/server/internal/config"
 	"io"
 	"log/slog"
+
+	"github.com/stelgen/reverseray/server/internal/config"
 )
 
 func newDiscardLogger() *slog.Logger {
