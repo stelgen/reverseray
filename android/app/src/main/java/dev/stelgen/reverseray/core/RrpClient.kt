@@ -274,10 +274,12 @@ class RrpClient(
 
     // ---- v0.10: бесшовная смена протокола (0x2C) ----
 
-    /** Паркинг payload-кадров на время смены: контрольные кадры идут свободно. */
-    private val parkLock = Any()
-    private val parkedFrames = java.util.ArrayDeque<RrpFrame>()
-    @Volatile private var parked = false
+    /**
+     * v1.8.3: очередь паркинга смены протокола (SwitchParking) — окно +
+     * backpressure (канон v1.3.0 «буфер в RAM без дропов»). Контрольные кадры
+     * идут свободно. var — для тестов (подменяется на узкое окно).
+     */
+    @Volatile internal var switchParking = SwitchParking(resolveParkedFramesMax())
 
     /** Ожидаемый ответ 0x2C (протокол-цель, nonce); null — запроса нет. */
     @Volatile private var protoSwitchAck: RrpFrame.ProtoSwitch? = null
@@ -872,21 +874,12 @@ class RrpClient(
 
     /** Паркинг payload-кадров на время перехендшейка (контрольные — свободно). */
     private fun parkForSwitch() {
-        synchronized(parkLock) { parked = true }
+        switchParking.park()
     }
 
     /** Снятие паркинга + отправка накопленных payload-кадров (уже новым конвертом). */
     private fun unparkAndFlush() {
-        // NB: присвоение local val ВНУТРИ lambda (synchronized — inline-fun)
-        // в Kotlin не проходит definite-assignment — забираем значение значением
-        // самого блока (return внутри — не локальный выход из блока, а из метода).
-        val queued: List<RrpFrame> = synchronized(parkLock) {
-            if (!parked) return
-            parked = false
-            val q = ArrayList(parkedFrames)
-            parkedFrames.clear()
-            q
-        }
+        val queued = switchParking.unpark()
         if (queued.isNotEmpty()) log(Msgs.PSW_FLUSHED.t(queued.size))
         for (f in queued) sendFrame(f)
     }
@@ -1390,12 +1383,10 @@ class RrpClient(
         // и уходят новым конвертом после завершения перехендшейка.
         when (frame) {
             is RrpFrame.Data, is RrpFrame.UdpData -> {
-                synchronized(parkLock) {
-                    if (parked) {
-                        parkedFrames.add(frame)
-                        return
-                    }
-                }
+                // v1.8.3: backpressure — окно очереди паркинга; переполнение
+                // ставит отправителя на паузу до снятия паркинга или смерти
+                // сессии (канон «ноль потерь», дропа нет).
+                if (switchParking.offer(frame) { running.get() && wireOut != null }) return
             }
             else -> {}
         }
@@ -1513,6 +1504,9 @@ class RrpClient(
         readyLatch.countDown()
         try { pingExecutor.shutdownNow() } catch (_: Exception) {}
         try { relayExecutor.shutdownNow() } catch (_: Exception) {}
+        // v1.8.3: очередь паркинга очищена, заблокированные отправители
+        // (backpressure) выходят с ошибкой — сессия мертва.
+        switchParking.close()
         if (parkLive) {
             streams.values.toList().forEach { st ->
                 if (st.resumeToken != null && !st.parked.get()) {
@@ -1807,6 +1801,15 @@ class RrpClient(
 
         /** Окно flow-control по умолчанию: 512 КБ на стрим. */
         const val DEFAULT_TUNNEL_WINDOW = 512 * 1024L
+
+        // v1.8.3: окно очереди паркинга смены протокола (backpressure,
+        // канон v1.3.0 «буфер в RAM без дропов»). Env-override по образцу
+        // окон flow-control: RR_PARKED_FRAMES_MAX (16..4096).
+        const val DEFAULT_PARKED_FRAMES_MAX = 256
+
+        internal fun resolveParkedFramesMax(): Int =
+            System.getenv("RR_PARKED_FRAMES_MAX")?.toIntOrNull()
+                ?.coerceIn(16, 4096) ?: DEFAULT_PARKED_FRAMES_MAX
 
         // err_code для OPEN/OPEN_OK и sendOpen()
         const val ERR_OK = 0
