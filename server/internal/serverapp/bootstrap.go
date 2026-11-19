@@ -14,8 +14,9 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/stelgen/reverseray/server/internal/config"
 	"time"
+
+	"github.com/stelgen/reverseray/server/internal/config"
 )
 
 // DetectExternalIP определяет публичный IPv4 через публичные echo-сервисы.
