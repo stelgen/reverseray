@@ -114,7 +114,7 @@ class TunnelService : Service() {
     private lateinit var sessionStore: SessionStore
 
     /** Менеджер N сессий (живёт пока туннель поднят). */
-    @Volatile private var manager: ConnectionManager? = null
+    @Volatile internal var manager: ConnectionManager? = null
 
     /** Сессия сервиса: профиль + точка агрегации состояния. */
     internal inner class Sess(val id: String, val profile: SessionStore.Profile)
@@ -1309,78 +1309,6 @@ class TunnelService : Service() {
         legacyReceiver = null
     }
 
-    // ---------- foreground / уведомления ----------
-
-    private fun startForegroundCompat(text: String) {
-        val notification = buildNotification(text)
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIF_ID, notification)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun buildNotification(text: String): Notification {
-        val contentIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            Notification.Builder(this)
-        }
-        builder
-            .setSmallIcon(R.drawable.ic_stat_reverseray)
-            .setContentTitle(getString(R.string.notif_title))
-            .setContentText(text)
-            .setContentIntent(contentIntent)
-            .setOngoing(true)
-        // v1.5.0: групповая нотификация — построчное состояние сессий (канал один)
-        val lines = manager?.all().orEmpty()
-        if (lines.size > 1 && Build.VERSION.SDK_INT >= 16) {
-            val style = Notification.InboxStyle()
-            for (s in lines) {
-                val mark = when (s.state) {
-                    STATE_CONNECTED, STATE_PROTO -> "●"
-                    STATE_CONNECTING, STATE_RETRY -> "◌"
-                    STATE_STOPPED -> "–"
-                    else -> "✕"
-                }
-                style.addLine("$mark ${s.profile.name}: ${sessionStateShort(s.state)}")
-            }
-            builder.setStyle(style)
-        }
-        return if (Build.VERSION.SDK_INT >= 16) {
-            builder.build()
-        } else {
-            @Suppress("DEPRECATION")
-            builder.getNotification() // API 14-15: build() ещё нет
-        }
-    }
-
-    /** Короткая метка состояния сессии для строки уведомления. */
-    private fun sessionStateShort(state: String): String = when (state) {
-        STATE_CONNECTED, STATE_PROTO -> getString(R.string.notif_session_up)
-        STATE_CONNECTING, STATE_RETRY -> getString(R.string.notif_session_connecting)
-        STATE_STOPPED -> getString(R.string.notif_session_off)
-        else -> getString(R.string.notif_session_error)
-    }
-
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    getString(R.string.notif_channel_name),
-                    NotificationManager.IMPORTANCE_LOW,
-                )
-            )
-        }
-    }
 
 
     // ---------- статус ----------
@@ -1610,8 +1538,8 @@ class TunnelService : Service() {
         private const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
         internal const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту
 
-        private const val CHANNEL_ID = "tunnel"
-        private const val NOTIF_ID = 1
+        internal const val CHANNEL_ID = "tunnel"
+        internal const val NOTIF_ID = 1
         private const val NET_RETRY_COOLDOWN_MS = 3_000L
 
         // смена протокола: ретраи/паузы/cooldown — защита от rate-limit циклов
