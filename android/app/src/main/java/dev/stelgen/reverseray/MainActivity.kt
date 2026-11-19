@@ -682,22 +682,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Лог: копировать/поделиться
 
-    internal fun copyServiceLog() {
-        val text = logConsole.snapshotText().ifEmpty { getString(R.string.logs_empty) }
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("ReverseRay log", text))
-        Toast.makeText(this, R.string.logs_copied, Toast.LENGTH_SHORT).show()
-    }
-
-    internal fun shareServiceLog() {
-        val text = logConsole.snapshotText().ifEmpty { getString(R.string.logs_empty) }
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, text)
-        }
-        startActivity(Intent.createChooser(send, getString(R.string.log_share)))
-    }
-
     // ================================================================= Разное
 
     private fun requestNotificationPermissionIfNeeded() {
