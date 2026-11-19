@@ -10,6 +10,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.stelgen.reverseray.ui.StatusConsole
+import dev.stelgen.reverseray.ui.renderServiceLogs
 
 /**
  * UX-канон скроллинга (v0.8.2): ЛЮБАЯ вкладка листается (ScrollView),

@@ -120,6 +120,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Для extension-зон (backing field доступен только в классе). */
     internal fun pageInitialized(): Boolean = this::pageHome.isInitialized
+    internal fun logFilterInitialized(): Boolean = this::logFilterRow.isInitialized
     internal lateinit var pageLink: View
     internal lateinit var pageUpdate: View
     internal lateinit var pageLog: View
@@ -165,7 +166,7 @@ class MainActivity : AppCompatActivity() {
     internal lateinit var logFilterRow: HorizontalScrollView
 
     /** v1.5.0: фильтр лога «по сессии» (null = все строки). */
-    @Volatile private var logSessionFilter: String? = null
+    @Volatile internal var logSessionFilter: String? = null
 
     // ---------- настройки ----------
     internal lateinit var deviceInfoBox: LinearLayout
@@ -183,7 +184,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private var lastExternalIp: String? = null
+    internal var lastExternalIp: String? = null
 
     /** zxing-embedded требует API 19+ (overrideLibrary в манифесте). */
     internal val qrSupported: Boolean get() = Build.VERSION.SDK_INT >= 19
@@ -675,157 +676,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Сеть/статус
 
-    private fun toConsoleLines(entries: List<LogStore.Entry>): List<StatusConsole.Line> =
-        entries.map { l -> StatusConsole.Line(l.text, StatusConsole.roleOf(l.kind)) }
-
-    /**
-     * v0.9.7 (фильтрация по экранам LogStore.Screen): каждое окно берёт из LogStore сообщения
-     * СВОЕГО типа — главная: статусы подключения (цвета: подключено —
-     * зелёный, ошибка/отключено — красный, реконнект — тёмно-жёлтый),
-     * обновление: канал UPDATE, полный лог: всё без исключений.
-     */
-    internal fun renderServiceLogs() {
-        homeConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.HOME)))
-        updateConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.UPDATE)))
-        logConsole.render(toConsoleLines(LogStore.snapshotFor(LogStore.Screen.LOG, logSessionFilter)))
-    }
-
-    /**
-     * v1.5.0: чипы фильтра лога «по сессии» — «Все» + имена сессий из кольца.
-     * Пересобирается при открытии вкладки LOG (сессии появляются/уходят).
-     */
-    internal fun refreshLogFilterChips() {
-        if (!this::logFilterRow.isInitialized) return
-        val box = logFilterRow.getChildAt(0) as LinearLayout
-        box.removeAllViews()
-        val all = logChip(getString(R.string.log_filter_all), logSessionFilter == null)
-        all.setOnClickListener {
-            logSessionFilter = null
-            refreshLogFilterChips()
-            renderServiceLogs()
-        }
-        box.addView(all)
-        for (name in LogStore.knownSessions()) {
-            val c = logChip(name, logSessionFilter == name)
-            c.setOnClickListener {
-                logSessionFilter = name
-                refreshLogFilterChips()
-                renderServiceLogs()
-            }
-            box.addView(c)
-        }
-    }
-
-    private fun logChip(text: String, selected: Boolean): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 12f
-        setPadding(dp(10), dp(4), dp(10), dp(4))
-        setTextColor(if (selected) 0xFF39D98A.toInt() else 0xFF8FA3D9.toInt())
-        if (selected) setTypeface(typeface, Typeface.BOLD)
-        setBackgroundResource(android.R.drawable.list_selector_background)
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { setMargins(0, 0, dp(6), 0) }
-    }
-
-    /** Открыта ли сейчас вкладка полного лога (для реалтайм-дорисовки). */
-    private fun isLogTabOpen(): Boolean =
-        this::pageLog.isInitialized && pageLog.visibility == View.VISIBLE
-
-    private fun usageSummaryText(used: Long, limit: Long): String {
-        val usedStr = fmtBytes(used)
-        return if (limit > 0) {
-            val pct = (used * 100 / limit).coerceAtMost(999)
-            getString(R.string.usage_with_limit, usedStr, fmtBytes(limit), pct)
-        } else {
-            getString(R.string.usage_no_limit, usedStr)
-        }
-    }
-
-    internal fun refreshUsageSummary() {
-        val p = prefs()
-        val used = p.getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
-        val limit = p.getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)
-        setUsageText(usageSummaryText(used, limit))
-    }
-
-    private fun setUsageText(text: String) {
-        usageViews.forEach { it.text = text }
-    }
-
-    /**
-     * v0.9.9 (UX): ОДНА строка «Соединение: <протокол> · <транспорт>».
-     * Протокол — АКТУАЛЬНЫЙ согласованный (TunnelService.lastNegotiatedProto),
-     * пока сессии нет — из ссылки. Список «сервер поддерживает» убран (шум).
-     */
-    internal fun setConnText(text: String) {
-        connLineViews.forEach { it.text = text }
-    }
-
-    internal fun refreshConnLine() {
-        val negotiated = TunnelService.lastNegotiatedProto
-        val proto = if (negotiated.isNotBlank() && TunnelService.isSessionState(TunnelService.lastState)) {
-            negotiated
-        } else {
-            try {
-                RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
-            } catch (_: Exception) {
-                ""
-            }.ifBlank { RrpProtocols.DEFAULT }
-        }
-        val t = currentTransport()
-        val transportShort = if (t == RrpUri.TRANSPORT_WS) "WS" else "TCP"
-        connLineViews.forEach {
-            it.text = getString(
-                R.string.conn_line,
-                RrpProtocols.labelWithVer(RrpProtocols.normalize(proto)),
-                transportShort,
-            )
-        }
-    }
-
-    /** Внешний IP/страна/оператор + локальный IP + DNS-факты (честно). */
-    private fun refreshNetInfoAsync() {
-        Thread {
-            val info: NetInfo? = try {
-                NetInfoFetcher.fetch()
-            } catch (_: Exception) {
-                null
-            }
-            val local = TunnelService.localIp()
-            val dnsServers = try { DnsProbe.systemServers() } catch (_: Throwable) { emptyList() }
-            runOnUiThread {
-                if (info == null) {
-                    netFlag.visibility = View.GONE
-                    netInfoView.setText(R.string.netinfo_failed)
-                } else {
-                    lastExternalIp = info.ip
-                    val cc = info.countryCode
-                    val drawableId = if (cc != null && cc.length == 2)
-                        resources.getIdentifier("flag_" + cc.lowercase(), "drawable", packageName) else 0
-                    if (drawableId != 0) {
-                        netFlag.setImageResource(drawableId)
-                        netFlag.visibility = View.VISIBLE
-                    } else {
-                        netFlag.visibility = View.GONE
-                    }
-                    netInfoView.text = buildString {
-                        append(getString(R.string.netinfo_ip, info.ip))
-                        info.country?.let { c ->
-                            append(" · ").append(c)
-                            info.countryCode?.let { cc2 -> append(" (").append(cc2).append(")") }
-                        }
-                        info.isp?.let { append(" · ").append(it) }
-                        // v0.8.1: честный источник (куда ходили за IP)
-                        if (info.source.isNotEmpty()) append(" · ").append(getString(R.string.netinfo_source, info.source))
-                    }
-                }
-                localIpView.text = getString(R.string.local_ip, local ?: "—")
-                dnsLineView.text = getString(R.string.dns_servers_line, dnsServers.joinToString(", ").ifEmpty { "—" })
-            }
-        }.apply { isDaemon = true }.start()
-    }
-
     // ================================================================= Формат
 
     private fun fmtRate(bytesPerSec: Long): String {
@@ -838,7 +688,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // v0.8.3: единицы из ресурсов (динамический язык) — общий Formats (дубль удалён)
-    private fun fmtBytes(b: Long): String = Formats.bytes(this, b)
+    internal fun fmtBytes(b: Long): String = Formats.bytes(this, b)
 
     // ================================================================= Файлы
 
