@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stelgen/reverseray/server/internal/rrp"
 	"time"
+
+	"github.com/stelgen/reverseray/server/internal/rrp"
 )
 
 // stubDialer records dial targets and can fail on demand.
