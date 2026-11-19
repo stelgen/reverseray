@@ -2,6 +2,57 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.8.3] — 2026-11-19
+
+### Добавлено
+- **Rotate-буферизация**: очередя паркинга смены протокола теперь с окном и
+  backpressure (канон v1.3.0 «буфер в RAM без дропов»): `SwitchParking` —
+  чистый класс очереди (окно RR_PARKED_FRAMES_MAX по умолчанию, env-override,
+  такт блокировки отправителя 1 с); переполнение — пауза TUN-читателя, а не
+  дроп. Учёт txBytes/packetsTx при flush сохранён.
+- **Дедлайны свитча согласованы**: серверный `parkWait` больше не имеет
+  собственного таймера — единственный дедлайн свитча = `SwitchTimeout`
+  (KeyExchangeTimeout). parkWait просто ждёт gate/done; при просрочке
+  shutdown закрывает done → все parkWait корректно выходят. Разрывы
+  соединений «на ровном месте» при смене протоколов — причина устранена.
+
+### Исправлено
+- **apimask в кандидатах ротации**: ротатор мог выбрать apimask, а серверный
+  planner его не свитчит → цикл провалов каждые 30 мин. Теперь кандидаты
+  ротации — `RrpProtocols.ROTATABLE` (executable минус apimask); apimask —
+  только фича-контекст, не цель свитча.
+- **deadcode**: удалены недостижимые функции `relay` (inbound), `kdf1`,
+  `macKeyCookie` (wg), `tokenHashHex` (serverapp), `msFetch` (тест-хелпер);
+  `UpgradeServer`/`EncodeDomainAddr`/`PingNonce` оставлены (легаси-пути /
+  протокольные кодеры — канон «старые клиенты работают»).
+
+### Изменено
+- Дробление сервера (pure move — поведение не менялось):
+  `serverapp/server.go` 1091 → 441 строк (+`server_tunnel.go` 367,
+  `server_inbound.go` 38, `server_admin.go` 39, `server_util.go` 39);
+  `inbound/mixed.go` 714 → 525 (+`mixed_udp.go` 201); `wg/wg.go` 615 → 213
+  (+`wg_handshake.go` 237, `wg_transport.go` 161); `mtproto/wire.go` 551 →
+  187 (+`wire_exchange.go` 200, `wire_wrapper.go` 161);
+  `modules/modules.go` 510 → 279 (+`modules_sync.go` 278).
+- Дробление клиента (pure move — поведение не менялось):
+  `RrpClient.kt` 1859 → 1570 (зоны TLS/MTProto/WireGuard/BitTorrent вынесены
+  как extension-функции: `RrpTls.kt`, `RrpMproto.kt`, `RrpWg.kt`, `RrpBt.kt`);
+  `TunnelService.kt` 1824 → 1612 (зоны Wake lock и Лимит трафика вынесены:
+  `TunnelWake.kt`, `TunnelLimit.kt`). Задетые члены — private→internal
+  (тот же пакет).
+- Гейты: `.serena/` в `.gitignore` (служебная папка тулзы); `.gitleaksignore`
+  с fingerprint ложного срабатывания generic-api-key (описание схемы
+  WG-хендшейка, не секрет); privacy_audit — исключение `.serena` из скана.
+
+### Тесты
+- Сервер: `go test ./...` + `-race` зелёные (gofmt/vet чистые);
+  govulncheck на go1.27.4 — 0 уязвимостей.
+- Клиент: Robolectric-прогон после каждого выноса — зелёный (270 тестов,
+  forkEvery=1).
+- Новый тест `SwitchParkingTest` (7 тестов: очередь, окно, backpressure,
+  возобновление, close) и `session_switch_test.go` (5 тестов: no-loss,
+  parkWait-выживание, denied-свитч, C→S OPEN в полёте, кандидаты).
+
 ## [1.8.2] — 2026-11-19
 
 ### Изменено
