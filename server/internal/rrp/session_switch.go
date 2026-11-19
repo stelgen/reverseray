@@ -138,6 +138,11 @@ func (s *Session) handleProtoSwitch(f *Frame) {
 	s.logf("rrp: protocol switch started (session %s, %s → %s)", s.ID, s.Proto, target)
 }
 
+// switchDeadlineFor — единая точка дедлайна смены протокола (v1.8.3).
+// Прод всегда SwitchTimeout; unit-тесты пакета сокращают через хук —
+// канон «тайминговые тесты видят ровно тот тулчейн».
+var switchDeadlineFor = func() time.Duration { return SwitchTimeout }
+
 // startSwitchDeadline — дедлайн перехендшейка свитча (старая крипта жива,
 // поэтому критерий — pendingProto, а не crypto==nil). Единая точка тайминга
 // смены (v1.8.3): parkWait паркинга таймера не имеет и ждёт именно этого
@@ -145,7 +150,7 @@ func (s *Session) handleProtoSwitch(f *Frame) {
 func (s *Session) startSwitchDeadline() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.keyTimer = time.AfterFunc(SwitchTimeout, func() {
+	s.keyTimer = time.AfterFunc(switchDeadlineFor(), func() {
 		s.mu.Lock()
 		pp := s.pendingProto
 		s.mu.Unlock()
