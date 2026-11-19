@@ -170,6 +170,9 @@ type Session struct {
 	parked       bool
 	parkGate     chan struct{}
 	pendingProto string
+	// v1.8.3: момент старта смены (наблюдаемость: длительность смены в
+	// commitCrypto). Ставится в handleProtoSwitch, читается там же.
+	switchStartedAt time.Time
 
 	done chan struct{}
 }

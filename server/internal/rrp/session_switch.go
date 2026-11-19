@@ -118,6 +118,7 @@ func (s *Session) handleProtoSwitch(f *Frame) {
 	}
 	s.parkPayloadLocked()
 	s.pendingProto = target
+	s.switchStartedAt = time.Now() // v1.8.3: наблюдаемость длительности смены
 	s.keyPlan = plan
 	s.mu.Unlock()
 	s.writeAsync(&Frame{Type: TypeProtoSwitch, Payload: encodeProtoSwitch(target, req.Nonce, true, "")})
@@ -138,11 +139,13 @@ func (s *Session) handleProtoSwitch(f *Frame) {
 }
 
 // startSwitchDeadline — дедлайн перехендшейка свитча (старая крипта жива,
-// поэтому критерий — pendingProto, а не crypto==nil).
+// поэтому критерий — pendingProto, а не crypto==nil). Единая точка тайминга
+// смены (v1.8.3): parkWait паркинга таймера не имеет и ждёт именно этого
+// дедлайна через done.
 func (s *Session) startSwitchDeadline() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.keyTimer = time.AfterFunc(KeyExchangeTimeout, func() {
+	s.keyTimer = time.AfterFunc(SwitchTimeout, func() {
 		s.mu.Lock()
 		pp := s.pendingProto
 		s.mu.Unlock()
