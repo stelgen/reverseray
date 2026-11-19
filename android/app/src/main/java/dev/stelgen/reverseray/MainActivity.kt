@@ -678,32 +678,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Формат
 
-    private fun writeConfigToFile(uri: Uri) {
-        try {
-            val raw = prefs().getString(TunnelService.KEY_CONFIG, "")?.trim() ?: ""
-            val cfg = RrpUri.parse(raw) // не экспортируем мусор
-            contentResolver.openOutputStream(uri)?.use { out ->
-                out.write(cfg.serialize().toByteArray(Charsets.UTF_8))
-                out.flush()
-            }
-            Toast.makeText(this, R.string.config_saved, Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.file_error, e.message ?: ""), Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun readConfigFromFile(uri: Uri) {
-        try {
-            val text = contentResolver.openInputStream(uri)?.use { input ->
-                input.readBytes().toString(Charsets.UTF_8)
-            } ?: ""
-            applyPastedConfig(text, announce = true)
-            Toast.makeText(this, R.string.config_imported, Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-        }
-    }
-
     // ================================================================= Поделиться приложением
 
     internal fun shareAppLink() {
