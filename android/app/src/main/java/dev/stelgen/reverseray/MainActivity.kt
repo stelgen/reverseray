@@ -680,58 +680,6 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Поделиться приложением
 
-    internal fun shareAppLink() {
-        val url = "https://github.com/stelgen/reverseray"
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, url)
-        }
-        startActivity(Intent.createChooser(send, getString(R.string.btn_share_app)))
-    }
-
-    /**
-     * Поделиться APK «в сборе»: текущий APK приложения + вшитые модули
-     * (реестр протоколов в коде). НЕ передаются: настройки, ссылка/токен,
-     * логи, счётчики и любая приватная информация — у нового пользователя
-     * всё будет в дефолтах.
-     */
-    internal fun shareAppApk() {
-        if (Build.VERSION.SDK_INT >= 19 && fileIoSupported) {
-            try {
-                shareApkLauncher.launch("reverseray-${currentVersion()}.apk")
-                return
-            } catch (_: ActivityNotFoundException) {
-                // нет SAF-пикера — фоллбек на прямую шару ниже
-            }
-        }
-        try {
-            val apk = File(applicationInfo.sourceDir)
-            val copy = File(cacheDir, "reverseray-${currentVersion()}.apk")
-            apk.copyTo(copy, overwrite = true)
-            val uri = FileProvider.getUriForFile(this, "$packageName.files", copy)
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "application/vnd.android.package-archive"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(send, getString(R.string.btn_share_app)))
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.share_apk_error), Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun copyApkTo(uri: Uri) {
-        try {
-            contentResolver.openOutputStream(uri)?.use { out ->
-                File(applicationInfo.sourceDir).inputStream().use { it.copyTo(out, 64 * 1024) }
-                out.flush()
-            }
-            Toast.makeText(this, R.string.config_saved, Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.share_apk_error), Toast.LENGTH_SHORT).show()
-        }
-    }
-
     // ================================================================= QR
 
     internal fun launchScan() {
@@ -777,7 +725,7 @@ class MainActivity : AppCompatActivity() {
 
     // ================================================================= Обновление + модули
 
-    private fun currentVersion(): String = try {
+    internal fun currentVersion(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: ""
     } catch (_: Exception) {
         ""
