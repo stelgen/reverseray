@@ -96,13 +96,6 @@ func hmacBlake2s(key, msg []byte) [HashSize]byte {
 	return out
 }
 
-// KDF1: t0 = HMAC(ck, ikm); ck' = HMAC(t0, 0x1).
-func kdf1(ck *[HashSize]byte, ikm []byte) (t0 [HashSize]byte) {
-	t0 = hmacBlake2s(ck[:], ikm)
-	*ck = hmacBlake2s(t0[:], []byte{1})
-	return
-}
-
 // KDF2 — ТОЧНЫЙ канон whitepaper (§5.4): t0 = HMAC(ck, ikm);
 // t1 = HMAC(t0, 0x1); ck' = HMAC(t0, 0x2). (До v0.9.6 t1/ck' ошибочно
 // считались от ck — имитация, что запрещено политикой канона WG.)
@@ -126,11 +119,6 @@ func kdf3(ck *[HashSize]byte, ikm []byte) (t0, t1, t2 [HashSize]byte) {
 // macKeyMac1 = HASH(LABEL_MAC1 || static_public).
 func macKeyMac1(staticPub []byte) [HashSize]byte {
 	return blake2s.Sum256(append([]byte(LabelMac1), staticPub...))
-}
-
-// macKeyCookie = HASH(LABEL_COOKIE || static_public) (режим «не под нагрузкой»).
-func macKeyCookie(staticPub []byte) [HashSize]byte {
-	return blake2s.Sum256(append([]byte(LabelCookie), staticPub...))
 }
 
 // mac1 — keyed-BLAKE2s по префиксу кадра до поля mac1 (канон WG).

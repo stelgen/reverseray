@@ -90,9 +90,9 @@ func expectedOrdered(n int) []byte {
 // fakePhone — фейковый телефон: единственный читатель conn, кадры раскладывает
 // в каналы (DATA/OPEN_OK/ProtoSwitch-ack), отвечает на KEY_REQ с задержкой.
 type fakePhone struct {
-	data    chan []byte
-	ack     chan protoSwitchMsg
-	openOK  chan Frame
+	data       chan []byte
+	ack        chan protoSwitchMsg
+	openOK     chan Frame
 	hangKeyReq bool // не отвечать на KEY_REQ (тест дедлайна)
 }
 

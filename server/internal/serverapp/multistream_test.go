@@ -69,49 +69,6 @@ func msStartBulk(t *testing.T, bulk []byte) string {
 	return ln.Addr().String()
 }
 
-// msFetch: SOCKS5 CONNECT → скачать всё до EOF → вернуть длительность.
-// SHA сверяет вызывающая сторона (потокобезопасно, каждый — свой массив).
-func msFetch(t *testing.T, mixedAddr, host string, port uint16, deadline time.Duration) time.Duration {
-	t.Helper()
-	c, err := net.DialTimeout("tcp", mixedAddr, 5*time.Second)
-	if err != nil {
-		t.Fatalf("socks dial: %v", err)
-	}
-	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(deadline))
-	br := bufio.NewReader(c)
-	if _, err := c.Write([]byte{5, 1, 0}); err != nil {
-		t.Fatal(err)
-	}
-	resp := make([]byte, 2)
-	if _, err := io.ReadFull(br, resp); err != nil || resp[1] != 0 {
-		t.Fatalf("socks greeting failed: %v %v", resp, err)
-	}
-	req := []byte{5, 1, 0, 3, byte(len(host))}
-	req = append(req, host...)
-	req = append(req, byte(port>>8), byte(port))
-	if _, err := c.Write(req); err != nil {
-		t.Fatal(err)
-	}
-	rep := make([]byte, 10)
-	if _, err := io.ReadFull(br, rep); err != nil {
-		t.Fatal(err)
-	}
-	if rep[1] != 0 {
-		t.Fatalf("socks connect failed: code=%d", rep[1])
-	}
-	start := time.Now()
-	n, err := io.Copy(io.Discard, br)
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("copy: %v (got %d/%d)", err, n, msBulkSize)
-	}
-	if n != msBulkSize {
-		t.Fatalf("short download: %d/%d", n, msBulkSize)
-	}
-	return elapsed
-}
-
 // msFetchSHA: как msFetch, но возвращает скачанное (для SHA-сверки).
 func msFetchSHA(t *testing.T, mixedAddr, host string, port uint16, deadline time.Duration) ([]byte, time.Duration) {
 	t.Helper()
