@@ -329,9 +329,14 @@ class ConnectionManager(private val owner: Owner) {
         }
     }
 
-    /** Тик балансера одной сессии: сэмпл → решение (исполняет владелец). */
+    /** Тик балансера одной сессии: сэмпл → решение (исполняет владелец).
+     * v1.8.10: взаимоисключение авто/ротации проверяется НА КАЖДЫЙ тик —
+     * если ротацию включили на живой auto-сессии, уже запущенный тик обязан
+     * замолчать (раньше балансер и ротатор переключали один туннель
+     * параллельно — «ротейт не работает»). */
     private fun balTick(s: Session) {
         try {
+            if (!s.worker.autoBalance()) return
             val sample = s.worker.healthSample() ?: return
             s.lastRttMs = sample.rttMs ?: s.lastRttMs
             val candidates = RrpProtocols.EXECUTABLE.filter {

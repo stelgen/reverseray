@@ -37,6 +37,8 @@ import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.RrpAuthException
 import dev.stelgen.reverseray.core.RrpClient
+import dev.stelgen.reverseray.core.switchProto // v1.8.10: зона свитча вынесена в core/RrpClientSwitch.kt (extension)
+import dev.stelgen.reverseray.core.healthSample // v1.8.10: зона health вынесена в core/RrpClientHealth.kt (extension)
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig

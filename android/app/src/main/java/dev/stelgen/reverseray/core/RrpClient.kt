@@ -113,13 +113,13 @@ class RrpClient(
     /** v0.7.4: цель валидационного PROBE после READY ("host:port").
      *  null — не проверять. Это «реальный трафик до реального хоста»:
      *  сервер диалит цель с егресса и отвечает фактом установки TCP. */
-    private val validateProbeTarget: String? = null,
+    internal val validateProbeTarget: String? = null,
     /** v1.8.0: цель end-to-end пробника полезной нагрузки ("host:port", HTTP).
      *  Сквозной путь OPEN→DATA→ответ через DATA-кадры: ловит сигнатурную
      *  блокировку (ТСПУ режет payload при живых контрольных кадрах), которую
      *  не видят PING/EWMA/серверный PROBE. null — пробник выключен (старое
      *  поведение). Таймаут калибруется от RTT-базлайна (E2eProbe). */
-    private val e2eProbeTarget: String? = E2E_DEFAULT_TARGET,
+    internal val e2eProbeTarget: String? = E2E_DEFAULT_TARGET,
     /**
      * v0.9.5: начальный выбор камуфляжа устройством (кадр 0x2A после READY):
      * true/false — отправить один раз; null — не отправлять. Выбор персистентен
@@ -167,8 +167,8 @@ class RrpClient(
         val parked = AtomicBoolean(false)
     }
 
-    private val rnd = SecureRandom()
-    private val running = AtomicBoolean(false)
+    internal val rnd = SecureRandom() // internal — зоны-extensions
+    internal val running = AtomicBoolean(false) // internal — зоны-extensions
     private val sendLock = Any()
 
     @Volatile private var socket: Socket? = null
@@ -287,8 +287,9 @@ class RrpClient(
     @Volatile internal var switchParking = SwitchParking(resolveParkedFramesMax())
 
     /** Ожидаемый ответ 0x2C (протокол-цель, nonce); null — запроса нет. */
-    @Volatile private var protoSwitchAck: RrpFrame.ProtoSwitch? = null
-    @Volatile private var protoSwitchNonce: String = ""
+    @Volatile internal var protoSwitchAck: RrpFrame.ProtoSwitch? = null // internal — зона в RrpClientSwitch.kt
+    @Volatile internal var protoSwitchNonce: String = "" // internal — зона в RrpClientSwitch.kt
+    @Volatile internal var pendingSwitchTarget: String? = null // v1.8.4: internal — финалы крипты в RrpWg/RrpBt/RrpMproto
 
     /**
      * v0.9.5: начальный выбор камуфляжа для этого устройства (кадр 0x2A после
@@ -313,26 +314,26 @@ class RrpClient(
     internal val nextStreamId = AtomicLong(1)
     private val lastPongMs = AtomicLong(0)
     // v0.9.2 (R6): адаптивный keepalive — время отправки последнего PING и RTT
-    private val lastPingSentAt = AtomicLong(0)
-    private val lastRttMs = AtomicLong(0)
+    internal val lastPingSentAt = AtomicLong(0) // internal — зона health
+    internal val lastRttMs = AtomicLong(0) // internal — зона health
 
     // ---- v0.10: пробник качества (тестирование скважности) ----
     // Постоянное тестирование связи: PING каждые ~5с + PROBE каждые 30с;
     // окно потерь 60с — данные для AutoBalancer (смена только по гистерезису).
-    private val pingResults = java.util.ArrayDeque<Pair<Long, Boolean>>() // (atMs, ok)
+    internal val pingResults = java.util.ArrayDeque<Pair<Long, Boolean>>() // internal — зона health
     @Volatile internal var rttEwmaMs: Long = 0
-    @Volatile private var lastProbeOk: Boolean? = null
-    @Volatile private var lastPingCounted = false // потерю этого пинга уже учли
-    @Volatile private var lastProberTickMs = 0L
+    @Volatile internal var lastProbeOk: Boolean? = null // internal — зона в RrpClientHealth.kt
+    @Volatile internal var lastPingCounted = false // потерю этого пинга уже учли; internal — зона health
+    @Volatile internal var lastProberTickMs = 0L // internal — зона health
 
     // ---- v1.8.0: end-to-end пробник полезной нагрузки (сквозной путь) ----
-    @Volatile private var lastE2e: Pair<Long, E2eProbe.Outcome>? = null
-    @Volatile private var lastE2eTickMs = 0L
-    private val e2eBusy = AtomicBoolean(false)
+    @Volatile internal var lastE2e: Pair<Long, E2eProbe.Outcome>? = null // internal — зона в RrpClientHealth.kt
+    @Volatile internal var lastE2eTickMs = 0L // internal — зона в RrpClientHealth.kt
+    internal val e2eBusy = AtomicBoolean(false) // internal — зона health
 
-    private val pingExecutor: ScheduledExecutorService =
+    internal val pingExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-ping").apply { isDaemon = true } }
-    private val relayExecutor: ExecutorService =
+    internal val relayExecutor: ExecutorService =
         Executors.newCachedThreadPool { r -> Thread(r, "rrp-relay").apply { isDaemon = true } }
     // v1.3.0 «буфер трафика»: паркинг сокетов таргетов при потере транспорта.
     // Отдельный daemon-пул: переживает close() клиента (TTL-рипер).
@@ -685,67 +686,6 @@ class RrpClient(
             log(Msgs.MTPROTO_UDP_ENVELOPE_BAD.t(e.message), LogKind.ERROR)
             null
         }
-    }
-
-    // ------------------------------------------------------------------ бесшовная смена протокола (v0.10)
-
-    @Volatile internal var pendingSwitchTarget: String? = null // v1.8.4: internal — финалы крипты в RrpWg/RrpBt/RrpMproto
-
-    /**
-     * Бесшовная смена протокола в живой сессии (кадр 0x2C): просим сервер,
-     * ждём ok, паркуем payload-кадры до завершения перехендшейка.
-     * @return true — сервер согласился (крипта сменится после обмена ключами);
-     *         false — отказ/таймаут (паркинг снят, старая крипта жива).
-     */
-    fun switchProto(target: String): Boolean {
-        if (state != State.READY) return false
-        if (pendingSwitchTarget != null) return false // v1.8.4: свитч уже в полёте
-        val nonce = ByteArray(8).also { rnd.nextBytes(it) }
-            .joinToString("") { String.format(Locale.ROOT, "%02x", it) }
-        protoSwitchNonce = nonce
-        protoSwitchAck = null
-        pendingSwitchTarget = target
-        log(Msgs.PSW_REQUEST.t(RrpProtocols.labelWithVer(target), nonce))
-        sendFrame(RrpFrame.ProtoSwitch(target, nonce))
-        val deadline = System.currentTimeMillis() + 15_000
-        while (System.currentTimeMillis() < deadline) {
-            protoSwitchAck?.let { ack ->
-                if (ack.nonce != nonce) return@let // чужой/старый ответ
-                if (!ack.ok) {
-                    log(Msgs.PSW_DENIED.t(ack.reason.ifEmpty { "?" }), LogKind.WARN)
-                    pendingSwitchTarget = null
-                    return false
-                }
-                log(Msgs.PSW_GRANTED.t(RrpProtocols.labelWithVer(ack.proto)))
-                parkForSwitch()
-                return true
-            }
-            try { Thread.sleep(50) } catch (_: InterruptedException) { break }
-        }
-        log(Msgs.PSW_TIMEOUT.t(), LogKind.WARN)
-        pendingSwitchTarget = null
-        return false
-    }
-
-    /** Ответ сервера на наш 0x2C (или серверный запрос — не поддерживаем: клиент инициатор). */
-    private fun handleProtoSwitchAck(frame: RrpFrame.ProtoSwitch) {
-        protoSwitchAck = frame
-        if (!frame.ok) {
-            // отказ сервера — ничего не паркуем (парковки ещё нет)
-            pendingSwitchTarget = null
-        }
-    }
-
-    /** Паркинг payload-кадров на время перехендшейка (контрольные — свободно). */
-    private fun parkForSwitch() {
-        switchParking.park()
-    }
-
-    /** Снятие паркинга + отправка накопленных payload-кадров (уже новым конвертом). */
-    internal fun unparkAndFlush() {
-        val queued = switchParking.unpark()
-        if (queued.isNotEmpty()) log(Msgs.PSW_FLUSHED.t(queued.size))
-        for (f in queued) sendFrame(f)
     }
 
     /** v0.9.5: выбор камуфляжа устройством — кадр 0x2A немедленно (если READY). */
@@ -1125,119 +1065,6 @@ class RrpClient(
         override fun close() = ws.closeFrame()
     }
 
-
-    // ------------------------------------------------------------------ PING
-
-    private fun scheduleNextPing() {
-        if (!running.get()) return
-        try {
-            pingExecutor.schedule({
-                if (!running.get()) return@schedule
-                try {
-                    lastPingSentAt.set(System.currentTimeMillis())
-                    sendFrame(RrpFrame.Ping(ByteArray(NONCE_SIZE).also { rnd.nextBytes(it) }))
-                } catch (e: IOException) {
-                    log(Msgs.PING_SEND_FAILED.t(e.message), LogKind.WARN)
-                }
-                scheduleNextPing()
-            }, pingIntervalMs(rnd, lastRttMs.get()), TimeUnit.MILLISECONDS)
-        } catch (_: RejectedExecutionException) {
-        }
-    }
-
-    // ------------------------------------------------------------------ prober (v0.10)
-
-    private fun recordPingResult(ok: Boolean) {
-        synchronized(pingResults) {
-            pingResults.addLast(System.currentTimeMillis() to ok)
-            val horizon = System.currentTimeMillis() - HEALTH_WINDOW_MS
-            while (pingResults.isNotEmpty() && pingResults.first().first < horizon) pingResults.removeFirst()
-        }
-    }
-
-    /**
-     * Пробник качества — «тестирование скважности, соединения постоянно»:
-     * тик каждые 5с (потери по unanswered PING), PROBE каждые 30с (реальный
-     * egress до реального хоста). Данные НЕ рвут сессию и НЕ меняют протокол
-     * сами — решение (с гистерезисом/кулдауном) принимает AutoBalancer.
-     */
-    private fun scheduleProber() {
-        if (!running.get()) return
-        try {
-            pingExecutor.schedule({
-                if (!running.get()) return@schedule
-                val now = System.currentTimeMillis()
-                // 1) потери: пинг висит дольше PING_LOSS_AFTER_MS без Pong
-                val sentAt = lastPingSentAt.get()
-                if (sentAt > 0 && !lastPingCounted && now - sentAt >= PING_LOSS_AFTER_MS) {
-                    lastPingCounted = true
-                    recordPingResult(false)
-                }
-                // 2) PROBE — раз в PROBER_INTERVAL_MS (скважность ~90/10)
-                if (now - lastProberTickMs >= PROBER_INTERVAL_MS) {
-                    lastProberTickMs = now
-                    val target = validateProbeTarget ?: DEFAULT_PROBE_TARGET
-                    val pr = try { probeOnce(target, PROBE_TIMEOUT_MS) } catch (_: Exception) { null }
-                    lastProbeOk = pr?.ok
-                    val (loss, rtt) = healthWindow()
-                    log(Msgs.PROBE_LOSS.t(loss * 100.0, rtt, 60), LogKind.WARN)
-                }
-                // 3) v1.8.0: E2E-пробник полезной нагрузки — сквозной путь
-                // (OPEN→DATA→ответ) в отдельном потоке relayExecutor: чтение
-                // до timeoutMs НЕ задерживает пинги (pingExecutor однопоточный).
-                val e2eTarget = e2eProbeTarget
-                if (now - lastE2eTickMs >= E2E_INTERVAL_MS && e2eTarget != null) {
-                    lastE2eTickMs = now
-                    if (e2eBusy.compareAndSet(false, true)) {
-                        relayExecutor.execute {
-                            try {
-                                val outcome = e2eProbeOnce(e2eTarget, E2eProbe.timeoutFor(rttEwmaMs))
-                                if (outcome != null) {
-                                    lastE2e = System.currentTimeMillis() to outcome
-                                    debug("E2E probe: $outcome")
-                                }
-                            } catch (_: Exception) {
-                            } finally {
-                                e2eBusy.set(false)
-                            }
-                        }
-                    }
-                }
-                scheduleProber()
-            }, MONITOR_TICK_MS, TimeUnit.MILLISECONDS)
-        } catch (_: RejectedExecutionException) {
-        }
-    }
-
-    /** Снимок окна качества: (доля потерь 0..1 за 60с, EWMA RTT). */
-    fun healthWindow(): Pair<Double, Long> {
-        val now = System.currentTimeMillis()
-        synchronized(pingResults) {
-            val horizon = now - HEALTH_WINDOW_MS
-            while (pingResults.isNotEmpty() && pingResults.first().first < horizon) pingResults.removeFirst()
-            val total = pingResults.size
-            val fails = pingResults.count { !it.second }
-            val loss = if (total == 0) 0.0 else fails.toDouble() / total
-            return loss to rttEwmaMs
-        }
-    }
-
-    /** Снимок для AutoBalancer.onSample. */
-    fun healthSample(): AutoBalancer.Sample {
-        val (loss, rtt) = healthWindow()
-        // v1.8.0: исход E2E-пробника учитываем, пока он свеж (иначе — null:
-        // старое поведение, решение только по PING/EWMA/PROBE).
-        val e2e = lastE2e?.let { (at, o) ->
-            if (System.currentTimeMillis() - at < E2E_STALE_MS) o else null
-        }
-        return AutoBalancer.Sample(
-            atMs = System.currentTimeMillis(),
-            rttMs = if (rtt > 0) rtt else null,
-            lossRatio = loss,
-            probeOk = lastProbeOk,
-            e2e = e2e,
-        )
-    }
 
     // ------------------------------------------------------------------ frame IO
 

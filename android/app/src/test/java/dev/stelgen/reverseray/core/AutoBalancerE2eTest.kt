@@ -111,4 +111,61 @@ class AutoBalancerE2eTest {
         val d = b.onSample(controlAlive(0).copy(e2e = E2eProbe.Outcome.Rst))
         assertTrue(d is AutoBalancer.Decision.Switch)
     }
+
+    // ---- v1.8.10: срок годности dead/throttle-вердикта (анти-молотьба свитчей)
+
+    /** Fixture с таймстампом пробы: вердикт получен в момент verdictAt. */
+    private fun e2eDeadAt(at: Long, verdictAt: Long) = controlAlive(at).copy(
+        e2e = E2eProbe.Outcome.ReadTimeout,
+        e2eAtMs = verdictAt,
+    )
+
+    @Test
+    fun `freshness - fresh dead verdict switches immediately`() {
+        val b = bal()
+        val d = b.onSample(e2eDeadAt(at = 60_000, verdictAt = 59_000)) // проба 1с назад
+        assertTrue("свежий dead-вердикт обязан переключать вне гистерезиса: $d", d is AutoBalancer.Decision.Switch)
+    }
+
+    @Test
+    fun `freshness - stale dead verdict is not evidence`() {
+        val b = bal()
+        // вердикт 2 минуты назад (deadFreshMs=90с): он про СТАРЫЙ конверт —
+        // контрольные кадры живы, мёртвого пути нет → молчание
+        assertEquals(
+            AutoBalancer.Decision.Nothing,
+            b.onSample(e2eDeadAt(at = 120_000, verdictAt = 0)),
+        )
+    }
+
+    @Test
+    fun `freshness - boundary at deadFreshMs is still usable`() {
+        val b = bal()
+        val d = b.onSample(e2eDeadAt(at = 90_000, verdictAt = 0)) // ровно 90с
+        assertTrue(d is AutoBalancer.Decision.Switch)
+    }
+
+    @Test
+    fun `freshness - stale throttle is not degradation`() {
+        val b = bal()
+        val slow = controlAlive(at = 300_000).copy(
+            e2e = E2eProbe.Outcome.Throttle(9_000, 6_000),
+            e2eAtMs = 0, // вердикт 5 минут назад
+        )
+        assertEquals(AutoBalancer.Decision.Nothing, b.onSample(slow))
+    }
+
+    @Test
+    fun `freshness - storm scenario - stale dead after switch does not re-switch`() {
+        // Канон бага v1.8.9: dead-вердикт жив 3 минуты ПОСЛЕ свитча и гнал
+        // свитчи каждые ~30с без свежих доказательств. Теперь: после свитча
+        // клиент обнуляет пробу; а просроченный verdict (e2eAtMs давно) —
+        // не свидетельство. Проверяем балансерную половину.
+        val b = bal()
+        val d1 = b.onSample(e2eDeadAt(0, 0)) as AutoBalancer.Decision.Switch
+        b.onSwitchResult(1_000, d1.target, ok = true)
+        // через 100с тот же СТАРЫЙ вердикт в сэмплах (клиент не прислал новый):
+        // 100с > deadFreshMs → свитча нет
+        assertEquals(AutoBalancer.Decision.Nothing, b.onSample(e2eDeadAt(at = 100_000, verdictAt = 0)))
+    }
 }

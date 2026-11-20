@@ -26,6 +26,13 @@ package dev.stelgen.reverseray.core
  * ([Sample.e2e], сквозной путь OPEN→DATA→ответ): ReadTimeout/Rst — мёртвый
  * путь, кормится как deadLoss (смена вне гистерезиса, кулдаун уважается);
  * Throttle — деградация через обычный гистерезис; Ok — не мешает.
+ *
+ * v1.8.10 (анти-молотьба): мёртвый/троттлинг-вердикт пробника — СВИДЕТЕЛЬСТВО
+ * со сроком годности. После смены конверта клиент обнуляет последний исход
+ * (RrpClient.unparkAndFlush), а вердикт старше [Cfg.deadFreshMs] секунд не
+ * считается мёртвым путём: он уже не про текущий конверт. Иначе один
+ * просроченный dead-сэмпл (E2E_STALE_MS = 3 мин) гнал свитчи каждые ~30 с
+ * без свежих доказательств — «деградация подключения» на реальных сетях.
  */
 class AutoBalancer(private val cfg: Cfg = Cfg()) {
 
@@ -49,6 +56,9 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         val failCooldownMs: Long = 300_000,
         /** Доля потерь, считающаяся полным обрывом (смена вне гистерезиса). */
         val deadLoss: Double = 0.9,
+        /** v1.8.10: срок годности dead/throttle-вердикта E2E-пробника, мс.
+         * Вердикт старше — не свидетельство о текущем конверте (анти-молотьба). */
+        val deadFreshMs: Long = 90_000,
     )
 
     /** Снимок качества из пробника. */
@@ -62,6 +72,10 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         val probeOk: Boolean?,
         /** v1.8.0: исход E2E-пробника полезной нагрузки (null — нет данных/старый детект). */
         val e2e: E2eProbe.Outcome? = null,
+        /** v1.8.10: момент пробы e2e (epoch мс); null — без таймстампа
+         * (старые фикстуры/старый клиент: свежесть не проверяем — прежнее
+         * поведение, A/B-совместимость). */
+        val e2eAtMs: Long? = null,
     )
 
     /** Решение балансера. */
@@ -101,7 +115,9 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         while (points.isNotEmpty() && points.first().s.atMs < horizon) points.removeFirst()
         // v1.8.0: мёртвый E2E-пробник (payload режется) = полный обрыв —
         // смена вне гистерезиса, кулдаун уважается (анти-молотьба).
-        val dead = s.lossRatio >= cfg.deadLoss || s.e2e?.isDead == true
+        // v1.8.10: verdict живёт не дольше deadFreshMs с момента пробы —
+        // просроченный dead не гонит свитчи без свежих доказательств.
+        val dead = s.lossRatio >= cfg.deadLoss || (s.e2e?.isDead == true && e2eUsable(s))
         if (!bad && !dead) return Decision.Nothing
         val sinceSwitch = s.atMs - lastSwitchAtMs
         // Стабилизация после смены (гистерезис): полный обрыв НЕ ждёт
@@ -155,9 +171,15 @@ class AutoBalancer(private val cfg: Cfg = Cfg()) {
         val rtt = (s.rttMs ?: 0) >= cfg.rttThresholdMs
         val probe = s.probeOk == false
         // v1.8.0: резкое падение сквозной скорости — деградация (гистерезис)
-        val throttle = s.e2e is E2eProbe.Outcome.Throttle
+        // v1.8.10: throttle-вердикт тоже со сроком годности (см. deadFreshMs)
+        val throttle = s.e2e is E2eProbe.Outcome.Throttle && e2eUsable(s)
         return loss || rtt || probe || throttle
     }
+
+    /** v1.8.10: вердикт e2e применим как свидетельство о ТЕКУЩЕМ конверте?
+     * Без таймстампа (старый формат Sample) — применим всегда (совместимость). */
+    private fun e2eUsable(s: Sample): Boolean =
+        s.e2eAtMs == null || s.atMs - s.e2eAtMs <= cfg.deadFreshMs
 
     /** Следующий кандидат round-robin: после current, без остывающих. */
     private fun nextCandidate(atMs: Long): String? {

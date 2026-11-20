@@ -772,7 +772,14 @@ class MainActivity : AppCompatActivity() {
             val store = sessionStore()
             val active = store.activeId()
             val states = sessionStatesSnapshot()
-            for (pr in store.profiles()) {
+            val profiles = store.profiles()
+            // v1.8.10: нет ни одного добавленного подключения — карточка списка
+            // скрыта ЦЕЛИКОМ (вместе с обёрткой-карточкой): раньше висело
+            // пустое окно без содержимого.
+            val noSessions = profiles.isEmpty()
+            sessionsBox.visibility = if (noSessions) View.GONE else View.VISIBLE
+            (sessionsBox.parent as? View)?.visibility = sessionsBox.visibility
+            for (pr in profiles) {
                 val (color, pulse) = stateStyle(states[pr.id] ?: "")
                 val line = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
                 val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
