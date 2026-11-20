@@ -205,7 +205,7 @@ class ConnectionManager(private val owner: Owner) {
             owner.onSessionLog(
                 Session("failed", profile, NoopWorker),
                 "start failed: ${e.message}",
-                LogKind.ERR,
+                LogKind.ERROR,
             )
             null
         }
@@ -283,6 +283,10 @@ class ConnectionManager(private val owner: Owner) {
         s.state = "RETRY"
         s.stateText = reason
         owner.onSessionState(s, s.state)
+        // v1.8.4: DEBUG — серия ретраев (номер, задержка) в общем журнале.
+        owner.onSessionLog(
+            s, "retry #$attempt in ${delay}ms", LogKind.DEBUG,
+        )
         return delay
     }
 

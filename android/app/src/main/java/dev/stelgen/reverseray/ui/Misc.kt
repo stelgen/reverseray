@@ -52,7 +52,8 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.R
-import dev.stelgen.reverseray.core.LogStore
+import dev.stelgen.reverseray.core.ConfigResult
+import dev.stelgen.reverseray.core.ConfigSource
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.ProtoFallback
@@ -88,6 +89,18 @@ internal fun MainActivity.requestNotificationPermissionIfNeeded() {
     }
 }
 
+
+/**
+ * v1.8.4: ЕДИНЫЙ резолв конфига для UI (главная кнопка, пикеры протокола/
+ * транспорта). Порядок кандидатов — канон: активный PRIMARY-профиль
+ * реестра сессий → legacy-зеркало KEY_CONFIG. Все зоны звали RrpUri.parse
+ * сами по 7+ местам — теперь одна точка (ConfigSource).
+ */
+internal fun MainActivity.resolvedConfig(): ConfigResult =
+    ConfigSource.firstValid(
+        try { sessionStore().active()?.uri } catch (_: Exception) { null },
+        prefs().getString(TunnelService.KEY_CONFIG, null),
+    )
 
 /**
  * v1.5.0: зеркало канона ссылки в URI PRIMARY-профиля (SessionStore) —

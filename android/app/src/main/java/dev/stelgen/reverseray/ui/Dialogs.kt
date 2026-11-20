@@ -14,6 +14,8 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.R
+import dev.stelgen.reverseray.core.ConfigResult
+import dev.stelgen.reverseray.core.ConfigSource
 import dev.stelgen.reverseray.core.LogKind
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.RrpFrame
@@ -30,10 +32,9 @@ internal fun MainActivity.showProtocolPicker() {
         Toast.makeText(this, R.string.proto_unknown, Toast.LENGTH_SHORT).show()
         return
     }
-    val current = try {
-        RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
-    } catch (_: Exception) {
-        RrpProtocols.DEFAULT
+    val current = when (val res = resolvedConfig()) {
+        is ConfigResult.Valid -> res.cfg.proto
+        else -> RrpProtocols.DEFAULT
     }
     // v0.9.5: первый пункт — AUTO (ссылка без proto=): сервер сам согласует
     // лучший общий протокол (wireguard → mtproto2 → rrp1).
@@ -77,11 +78,10 @@ internal fun MainActivity.requestProtoSwitch(proto: String) {
     if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
 }
 
-/** v0.9.7: текущий транспорт из ссылки (tcp по умолчанию, ws = WebSocket). */
-internal fun MainActivity.currentTransport(): String = try {
-    RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").transport
-} catch (_: Exception) {
-    RrpUri.TRANSPORT_TCP
+/** v0.9.7: текущий транспорт из единого резолва (tcp по умолчанию, ws = WebSocket). */
+internal fun MainActivity.currentTransport(): String = when (val res = resolvedConfig()) {
+    is ConfigResult.Valid -> res.cfg.transport
+    else -> RrpUri.TRANSPORT_TCP
 }
 
 /**
@@ -90,10 +90,9 @@ internal fun MainActivity.currentTransport(): String = try {
  * Применение — при следующем Старте (сервис читает транспорт при старте).
  */
 internal fun MainActivity.showTransportPicker() {
-    val cfg = try {
-        RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "")
-    } catch (_: Exception) {
-        null
+    val cfg = when (val res = resolvedConfig()) {
+        is ConfigResult.Valid -> res.cfg
+        else -> null
     }
     if (cfg == null) {
         Toast.makeText(this, R.string.link_status_bad, Toast.LENGTH_SHORT).show()
@@ -137,22 +136,32 @@ internal fun MainActivity.applyTransport(cfg: RrpUriConfig, transport: String) {
 
 /** Вставили/ввели ссылку → приложение САМО чинит, сохраняет и подтверждает. */
 internal fun MainActivity.applyPastedConfig(content: String, announce: Boolean, silentFail: Boolean = false) {
-    try {
-        val cfg = RrpUri.parse(content) // бронепарсер чинит мусор сам
-        val canonical = cfg.serialize()
-        prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
-        syncPrimaryProfileUri(canonical)
-        updateLinkValueView(canonical)
-        setLinkStatus(getString(R.string.link_status_ok))
-        refreshConnLine()
-        if (announce) {
-            Toast.makeText(this, R.string.link_saved, Toast.LENGTH_SHORT).show()
-            probeConfig(canonical) // v1.3.0: тестовый прогон после принятия ссылки
+    // v1.8.4: единая валидация — ConfigSource.validate (раньше try/catch parse
+    // в каждой зоне отдельно; теперь все зовут одну точку).
+    when (val res = ConfigSource.validate(content)) {
+        is ConfigResult.Valid -> {
+            val canonical = res.canonical
+            prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+            syncPrimaryProfileUri(canonical)
+            updateLinkValueView(canonical)
+            setLinkStatus(getString(R.string.link_status_ok))
+            refreshConnLine()
+            if (announce) {
+                Toast.makeText(this, R.string.link_saved, Toast.LENGTH_SHORT).show()
+                probeConfig(canonical) // v1.3.0: тестовый прогон после принятия ссылки
+            }
         }
-    } catch (e: Exception) {
-        setLinkStatus(getString(R.string.link_status_bad))
-        if (announce || !silentFail) {
-            Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+        is ConfigResult.Invalid -> {
+            setLinkStatus(getString(R.string.link_status_bad))
+            if (announce || !silentFail) {
+                Toast.makeText(this, getString(R.string.invalid_config, res.reason), Toast.LENGTH_LONG).show()
+            }
+        }
+        ConfigResult.Empty -> {
+            setLinkStatus(getString(R.string.link_status_bad))
+            if (announce || !silentFail) {
+                Toast.makeText(this, getString(R.string.invalid_config, getString(R.string.status_no_config)), Toast.LENGTH_LONG).show()
+            }
         }
     }
 }
@@ -215,17 +224,20 @@ internal fun MainActivity.showEditLinkDialog() {
                 Toast.makeText(this, R.string.link_clear, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            try {
-                val cfg = RrpUri.parse(text)
-                val canonical = cfg.serialize()
-                prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
-                syncPrimaryProfileUri(canonical)
-                updateLinkValueView(canonical)
-                setLinkStatus(getString(R.string.link_status_ok))
-                refreshConnLine()
-                probeConfig(canonical) // тестовый прогон + уведомление внизу экрана
-            } catch (e: Exception) {
-                Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
+            when (val res = ConfigSource.validate(text)) {
+                is ConfigResult.Valid -> {
+                    val canonical = res.canonical
+                    prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+                    syncPrimaryProfileUri(canonical)
+                    updateLinkValueView(canonical)
+                    setLinkStatus(getString(R.string.link_status_ok))
+                    refreshConnLine()
+                    probeConfig(canonical) // тестовый прогон + уведомление внизу экрана
+                }
+                is ConfigResult.Invalid ->
+                    Toast.makeText(this, getString(R.string.invalid_config, res.reason), Toast.LENGTH_LONG).show()
+                ConfigResult.Empty ->
+                    Toast.makeText(this, getString(R.string.invalid_config, getString(R.string.status_no_config)), Toast.LENGTH_LONG).show()
             }
         }
     }

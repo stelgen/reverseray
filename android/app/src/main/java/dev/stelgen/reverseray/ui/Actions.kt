@@ -53,6 +53,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 import dev.stelgen.reverseray.MainActivity
 import dev.stelgen.reverseray.MainActivity.Mode
 import dev.stelgen.reverseray.R
+import dev.stelgen.reverseray.core.ConfigResult
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
@@ -107,18 +108,26 @@ internal fun MainActivity.handleMainButtonPress() {
 }
 
 internal fun MainActivity.startTunnel() {
-    val raw = prefs().getString(TunnelService.KEY_CONFIG, "") ?: ""
-    val cfg = try {
-        RrpUri.parse(raw) // бронепарсер чинит мусор; по итогу — канонический вид
-    } catch (e: Exception) {
-        Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-        return
+    // v1.8.4: единый резолв конфига (активный PRIMARY-профиль → зеркало
+    // KEY_CONFIG) через ConfigSource — ранее только зеркало, и на чистой
+    // установке/после добавления сервера кнопка говорила «Некорректный
+    // конфиг», хотя ссылка была валидна и лежала в профиле сессии.
+    when (val res = resolvedConfig()) {
+        is ConfigResult.Invalid -> {
+            Toast.makeText(this, getString(R.string.invalid_config, res.reason), Toast.LENGTH_LONG).show()
+            return
+        }
+        ConfigResult.Empty -> {
+            Toast.makeText(this, R.string.status_no_config, Toast.LENGTH_LONG).show()
+            return
+        }
+        is ConfigResult.Valid -> {
+            // канон в зеркало + PRIMARY-профиль (self-heal рассинхрона)
+            prefs().edit().putString(TunnelService.KEY_CONFIG, res.canonical).apply()
+            syncPrimaryProfileUri(res.canonical)
+            updateLinkValueView(res.canonical)
+        }
     }
-    // сохраняем нормализованную ссылку (v0.9.5: proto= пишется только когда
-    // выбран явно; отсутствует = режим AUTO — лучший общий протокол сервера)
-    prefs().edit().putString(TunnelService.KEY_CONFIG, cfg.serialize()).apply()
-    syncPrimaryProfileUri(cfg.serialize())
-    updateLinkValueView(cfg.serialize())
     // v0.8: лимит — король. Достигнут → НОЛЬ байт: окно предупреждения вместо старта.
     val used = prefs().getLong(TunnelService.KEY_TRAFFIC_USED, 0L)
     val limit = prefs().getLong(TunnelService.KEY_TRAFFIC_LIMIT, 0L)

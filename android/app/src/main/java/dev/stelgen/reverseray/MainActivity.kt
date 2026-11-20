@@ -46,6 +46,8 @@ import com.google.android.material.textfield.TextInputLayout
 import com.journeyapps.barcodescanner.BarcodeEncoder
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import dev.stelgen.reverseray.core.ConfigResult
+import dev.stelgen.reverseray.core.ConfigSource
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.ProtoFallback
@@ -605,6 +607,22 @@ class MainActivity : AppCompatActivity() {
             minWidth = dp(88)
         }
 
+    /**
+     * v1.8.4: ИКОНОЧНАЯ кнопка (вкладка «Подключение», карточка сессии):
+     * текст надписи уходит в contentDescription (доступность), на кнопке —
+     * только стандартная системная иконка. Тач-таргет ≥ 48dp.
+     */
+    internal fun iconBtn(iconRes: Int, descRes: Int) =
+        MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = ""
+            icon = androidx.appcompat.content.res.AppCompatResources.getDrawable(this@MainActivity, iconRes)
+            iconGravity = com.google.android.material.button.MaterialButton.ICON_GRAVITY_TEXT_START
+            iconPadding = 0
+            contentDescription = getString(descRes)
+            minHeight = dp(48)
+            minWidth = dp(56)
+        }
+
     internal fun filled(textRes: Int) = MaterialButton(this).apply {
         setText(textRes)
         // v0.9.7 (GUI-этап 2): эргономика — тач-таргет ≥ 48dp на всех кнопках
@@ -687,7 +705,8 @@ class MainActivity : AppCompatActivity() {
     // ================================================================= Сессии (v1.5.0)
 
     /** SessionStore поверх prefs (миграция идемпотентна). */
-    private fun sessionStore(): SessionStore {
+    // v1.8.4: private → internal (resolvedConfig в ui/Misc.kt зовёт из расширения)
+    internal fun sessionStore(): SessionStore {
         val store = SessionStore(PrefsBackend(prefs()))
         store.migrateLegacy(prefs().getString(TunnelService.KEY_CONFIG, null))
         return store
@@ -798,26 +817,31 @@ class MainActivity : AppCompatActivity() {
                     setPadding(0, dp(2), 0, 0)
                 })
                 val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                fun addBtn(labelRes: Int, onClick: () -> Unit) {
-                    btnRow.addView(outlined(labelRes).apply {
+                // v1.8.4: 4 действия карточки — иконки вместо текста
+                // (изменить/вкл-выкл/сделать основным/удалить).
+                fun addIcon(iconRes: Int, descRes: Int, onClick: () -> Unit) {
+                    btnRow.addView(iconBtn(iconRes, descRes).apply {
                         setOnClickListener { onClick() }
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                             .apply { setMargins(0, dp(6), dp(6), 0) }
                     })
                 }
-                addBtn(R.string.sess_edit) { showEditSessionDialog(pr.id) }
-                addBtn(if (pr.enabled) R.string.sess_off else R.string.sess_on) {
+                addIcon(android.R.drawable.ic_menu_edit, R.string.sess_edit) { showEditSessionDialog(pr.id) }
+                addIcon(
+                    if (pr.enabled) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                    if (pr.enabled) R.string.sess_off else R.string.sess_on,
+                ) {
                     store.setEnabled(pr.id, !pr.enabled)
                     sendSessionCmd(pr.id, if (pr.enabled) "disconnect" else "connect")
                     refreshSessionsCard()
                 }
-                if (pr.id != active) addBtn(R.string.dash_session_primary) {
+                if (pr.id != active) addIcon(R.drawable.ic_star, R.string.dash_session_primary) {
                     store.setActive(pr.id)
                     sendSessionCmd(pr.id, "primary")
                     refreshSessionsCard()
                     preserveScroll { dashboard.update(offlineStats()) }
                 }
-                addBtn(R.string.sess_delete) { confirmDeleteSession(pr.id) }
+                addIcon(android.R.drawable.ic_menu_delete, R.string.sess_delete) { confirmDeleteSession(pr.id) }
                 line.addView(btnRow)
                 sessionsBox.addView(line)
             }
@@ -861,18 +885,22 @@ class MainActivity : AppCompatActivity() {
         dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener { d ->
                 val raw = input.text?.toString()?.trim().orEmpty()
                 val name = nameInput.text?.toString()?.trim().orEmpty()
-                val canonical = try {
-                    RrpUri.parse(raw).serialize()
-                } catch (e: Exception) {
-                    Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
+                // v1.8.4: единая валидация ConfigSource; зеркало KEY_CONFIG
+                // синхронизирует SessionStore.update() для PRIMARY (единственная
+                // точка — без ручного дублирования).
+                val canonical = when (val res = ConfigSource.validate(raw)) {
+                    is ConfigResult.Valid -> res.canonical
+                    is ConfigResult.Invalid -> {
+                        Toast.makeText(this, getString(R.string.invalid_config, res.reason), Toast.LENGTH_LONG).show()
+                        return@setOnClickListener
+                    }
+                    ConfigResult.Empty -> {
+                        Toast.makeText(this, getString(R.string.invalid_config, getString(R.string.status_no_config)), Toast.LENGTH_LONG).show()
+                        return@setOnClickListener
+                    }
                 }
                 dialog.dismiss()
-                val wasActive = pr.id == store.activeId()
                 store.update(pr.copy(uri = canonical, name = name.ifBlank { pr.name }))
-                if (wasActive) {
-                    prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
-                }
                 Toast.makeText(this, R.string.sess_updated, Toast.LENGTH_SHORT).show()
                 refreshSessionsCard()
                 sendSessionCmd(pr.id, "reconnect")
@@ -929,11 +957,17 @@ class MainActivity : AppCompatActivity() {
         dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val raw = input.text?.toString()?.trim().orEmpty()
                 val name = nameInput.text?.toString()?.trim().orEmpty()
-                val cfg = try {
-                    RrpUri.parse(raw)
-                } catch (e: Exception) {
-                    Toast.makeText(this, getString(R.string.invalid_config, e.message ?: ""), Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
+                // v1.8.4: единая валидация ConfigSource (была своя try/catch parse)
+                val cfg = when (val res = ConfigSource.validate(raw)) {
+                    is ConfigResult.Valid -> res.cfg
+                    is ConfigResult.Invalid -> {
+                        Toast.makeText(this, getString(R.string.invalid_config, res.reason), Toast.LENGTH_LONG).show()
+                        return@setOnClickListener
+                    }
+                    ConfigResult.Empty -> {
+                        Toast.makeText(this, getString(R.string.invalid_config, getString(R.string.status_no_config)), Toast.LENGTH_LONG).show()
+                        return@setOnClickListener
+                    }
                 }
                 val canonical = cfg.serialize()
                 val connectNow = nowBox.isChecked
@@ -985,11 +1019,9 @@ class MainActivity : AppCompatActivity() {
         for (raw in text.lines()) {
             val line = raw.trim()
             if (line.isEmpty()) continue
-            val created = try {
-                val canonical = RrpUri.parse(line).serialize()
-                store.add(canonical, null, enabled = true)
-            } catch (_: Exception) {
-                null
+            val created = when (val res = ConfigSource.validate(line)) {
+                is ConfigResult.Valid -> store.add(res.canonical, null, enabled = true)
+                else -> null
             }
             if (created != null) ok++ else bad++
         }

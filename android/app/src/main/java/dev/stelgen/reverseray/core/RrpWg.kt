@@ -41,9 +41,15 @@ internal fun RrpClient.finishWgHandshake(frame: RrpFrame.WgResp) {
     val psk = wgPsk
     try {
         hs.consumeResponse(frame.raw, psk ?: throw Wg.WgException(Msgs.WG_RESP_TIMEOUT.t()))
+        // v1.8.4: атомарная подмена конверта — старые крипты гасим до снятия
+        // паркинга (см. RrpMproto.handleKeyReq), свитч завершён.
+        mtCrypto = null
+        btCrypto = null
         wgCrypto = Wg.clientTransport(hs)
         wgHandshake = null
         wgPsk = null
+        negotiatedProto = Wg.PROTO_ID // v1.8.4: финал свитча — актуальный протокол
+        pendingSwitchTarget = null
         log(Msgs.WG_KEYS_AGREED.t())
         listener?.onState(this, RrpClient.State.READY) // UI: статус крипты
         unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное

@@ -139,7 +139,9 @@ class RrpClient(
 
     interface Listener {
         fun onState(client: RrpClient, state: State) {}
-        fun onLog(client: RrpClient, message: String) {}
+
+        /** v1.8.4: клиентские сообщения несут уровень журнала (trace..panic). */
+        fun onLog(client: RrpClient, message: String, kind: LogKind) {}
         /** TOFU: пин из конфига не совпал, принят самоподписанный сервер. */
         fun onPinAccepted(client: RrpClient, newPin: String) {}
 
@@ -216,7 +218,9 @@ class RrpClient(
 
     /** Протокол, выбранный сервером в этой сессии (канон после READY). */
     @Volatile var negotiatedProto: String = RrpProtocols.DEFAULT
-        private set
+        // v1.8.4: internal set — финалы бесшовной смены (RrpWg/RrpBt/RrpMproto)
+        // актуализируют протокол сразу после подмены конверта.
+        internal set
 
     /** Реестр протоколов, присланный сервером (для UI-переключателя). */
     @Volatile var serverProtocols: List<String> = emptyList()
@@ -404,19 +408,24 @@ class RrpClient(
         setState(State.HANDSHAKE)
         Thread({ readerLoop() }, "rrp-reader-$port").apply { isDaemon = true }.start()
 
+        // v1.8.4 ФИКС AUTO: пустой protoId — режим «лучший общий протокол»,
+        // в HELLO уходит PREFERRED_AUTO (normalizeExecutable), а не normalize()
+        // (который пустоту мапил в rrp1 — сервер честно даунгрейдил AUTO до
+        // rrp1, и «авто не пробивался» там, где rrp1 режется ТСПУ).
+        val helloProto = RrpProtocols.normalizeExecutable(protoId)
         val hello = RrpFrame.Hello(
             agent = agentName,
             protocolVersion = RrpFrame.VERSION,
             device = deviceName,
             caps = listOf("chacha20", "alpn", "stream-resume"),
             maxStreams = MAX_STREAMS_REQUEST,
-            proto = RrpProtocols.normalize(protoId),
+            proto = helloProto,
             protocols = RrpProtocols.displayList(),
         )
         log(
             Msgs.SENT_HELLO.t(
-                agentName, deviceName, RrpFrame.VERSION, RrpProtocols.normalize(protoId),
-                RrpProtocols.labelWithVer(protoId), MAX_STREAMS_REQUEST, hello.encode().size,
+                agentName, deviceName, RrpFrame.VERSION, helloProto,
+                RrpProtocols.labelWithVer(helloProto), MAX_STREAMS_REQUEST, hello.encode().size,
             ),
         )
         sendFrame(hello)
@@ -450,7 +459,7 @@ class RrpClient(
                 .encodeToString(hmacSha256(hmacKey, macInput))
             // v0.9.4: token6 — первые 6 символов токена ИЗ КОНФИГА; владелец
             // сверяет их со ссылкой из rr.sh/enroll. Не совпали — ссылка устарела.
-            log("SENT AUTH mode=$MODE_TOKEN_HMAC token6=${token.take(6)} nonce=${ok.nonce} hmac=${hmac.take(12)}… sessionId=$sessionId")
+            debug("SENT AUTH mode=$MODE_TOKEN_HMAC token6=${token.take(6)} nonce=${ok.nonce} hmac=${hmac.take(12)}… sessionId=$sessionId")
             sendFrame(
                 RrpFrame.Auth(MODE_TOKEN_HMAC, hmac, ok.nonce)
             )
@@ -476,14 +485,14 @@ class RrpClient(
             // возможность (features) и модуль включён манифестом
             flushPendingCamCtl() // v0.9.5: начальный выбор камуфляжа устройства
             if (apimaskSupported && noisePolicy != null) {
-                log(Msgs.APIMASK_ENABLED.t())
+                debug(Msgs.APIMASK_ENABLED.t())
                 scheduleNoise()
             }
 
             // v0.7.4: валидация «реального трафика» — PROBE до реального хоста.
             // Используется при смене протокола: коммит только после успеха.
             validateProbeTarget?.let { target ->
-                log(Msgs.PROBE_SENT.t(target, rd.proto))
+                debug(Msgs.PROBE_SENT.t(target, rd.proto))
                 val pr = probeOnce(target, PROBE_TIMEOUT_MS)
                 if (pr == null) {
                     throw RrpClientException(Msgs.PROBE_NOT_ANSWERED.t())
@@ -509,13 +518,16 @@ class RrpClient(
         try {
             val input = wireIn ?: throw RrpClientException(Msgs.TRANSPORT_NOT_READY.t())
             while (running.get()) {
-                dispatch(RrpFrame.parse(input))
+                val f = RrpFrame.parse(input)
+                // v1.8.4: TRACE — кадр за кадром (тип/размер) для диагностики протокола.
+                trace("recv ${f.javaClass.simpleName} id=${f.streamId} type=0x%02X".format(f.type))
+                dispatch(f)
             }
         } catch (e: Throwable) {
             if (state != State.READY && handshakeError == null) {
                 handshakeError = RrpClientException(Msgs.HANDSHAKE_FAILED.t(e.message), e)
             } else if (running.get()) {
-                log(Msgs.READER_STOPPED.t(e.message))
+                log(Msgs.READER_STOPPED.t(e.message), LogKind.WARN)
             }
         } finally {
             helloLatch.countDown()
@@ -537,8 +549,8 @@ class RrpClient(
                 readyFrame = frame
                 readyLatch.countDown()
             }
-            is RrpFrame.Auth -> log(Msgs.AUTH_UNEXPECTED.t())
-            is RrpFrame.Hello -> log(Msgs.HELLO_UNEXPECTED.t())
+            is RrpFrame.Auth -> debug(Msgs.AUTH_UNEXPECTED.t())
+            is RrpFrame.Hello -> debug(Msgs.HELLO_UNEXPECTED.t())
             is RrpFrame.Open -> handleIncomingOpen(frame)
             is RrpFrame.OpenOk -> pendingOpens.remove(frame.streamId)?.complete(frame.errCode)
             is RrpFrame.Data -> {
@@ -579,25 +591,25 @@ class RrpClient(
                 lastPingCounted = true
                 recordPingResult(true)
             }
-            is RrpFrame.Stats -> log("STATS: ${frame.json}")
+            is RrpFrame.Stats -> debug("STATS: ${frame.json}")
             is RrpFrame.ProbeResp -> {
-                log("RECV PROBE ok=${frame.ok} err=${frame.err} proto=${frame.proto}")
+                debug("RECV PROBE ok=${frame.ok} err=${frame.err} proto=${frame.proto}")
                 probeResp = frame
             }
-            is RrpFrame.ProbeReq -> log(Msgs.PROBE_UNEXPECTED.t())
+            is RrpFrame.ProbeReq -> debug(Msgs.PROBE_UNEXPECTED.t())
             is RrpFrame.KeyReq -> handleKeyReq(frame) // v0.8/v0.9.5: mtproto2 DH | wireguard WG_INIT
-            is RrpFrame.KeyResp -> log(Msgs.KEY_RESP_UNEXPECTED.t())
+            is RrpFrame.KeyResp -> debug(Msgs.KEY_RESP_UNEXPECTED.t())
             is RrpFrame.BtResp -> finishBtHandshake(frame)
-            is RrpFrame.BtInit -> log(Msgs.BT_INIT_UNEXPECTED.t())
+            is RrpFrame.BtInit -> debug(Msgs.BT_INIT_UNEXPECTED.t())
             is RrpFrame.ProtoSwitch -> handleProtoSwitchAck(frame)
             is RrpFrame.WgResp -> {
                 // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов.
                 // v0.9.6: дедлок-фикс — consume ЗДЕСЬ (reader-поток), а не в
                 // handleWgKeyReq: он единственный доставщик этого кадра.
-                log(Msgs.WG_RESP_RECV.t(frame.raw.size))
+                debug(Msgs.WG_RESP_RECV.t(frame.raw.size))
                 finishWgHandshake(frame)
             }
-            is RrpFrame.WgInit -> log(Msgs.WG_INIT_UNEXPECTED.t())
+            is RrpFrame.WgInit -> debug(Msgs.WG_INIT_UNEXPECTED.t())
             is RrpFrame.Noise -> {
                 // v0.8.2: ответ сервера на наш шум — байты считаются в общий
                 // трафик (честно: это реальные байты мобильной сети),
@@ -606,9 +618,9 @@ class RrpClient(
                 rxBytes.addAndGet(n.toLong())
                 noiseRx.addAndGet(n.toLong())
             }
-            is RrpFrame.CamCtl -> log(Msgs.CAM_CTL_UNEXPECTED.t())
+            is RrpFrame.CamCtl -> debug(Msgs.CAM_CTL_UNEXPECTED.t())
             is RrpFrame.ErrorFrame -> {
-                log(Msgs.SERVER_ERROR_RAW.t(frame.code, frame.message, frame.rawHex()))
+                log(Msgs.SERVER_ERROR_RAW.t(frame.code, frame.message, frame.rawHex()), LogKind.ERROR)
                 for (id in pendingOpens.keys) {
                     pendingOpens.remove(id)?.complete(ERR_PROTOCOL)
                 }
@@ -657,7 +669,7 @@ class RrpClient(
         return try {
             RrpFrame.Data(frame.streamId, frame.flags, decryptUpEnvelope(frame.bytes))
         } catch (e: Exception) {
-            log(Msgs.MTPROTO_DATA_ENVELOPE_BAD.t(frame.streamId, e.message))
+            log(Msgs.MTPROTO_DATA_ENVELOPE_BAD.t(frame.streamId, e.message), LogKind.ERROR)
             close()
             null
         }
@@ -669,14 +681,14 @@ class RrpClient(
         return try {
             RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, decryptUpEnvelope(frame.bytes))
         } catch (e: Exception) {
-            log(Msgs.MTPROTO_UDP_ENVELOPE_BAD.t(e.message))
+            log(Msgs.MTPROTO_UDP_ENVELOPE_BAD.t(e.message), LogKind.ERROR)
             null
         }
     }
 
     // ------------------------------------------------------------------ бесшовная смена протокола (v0.10)
 
-    @Volatile private var pendingSwitchTarget: String? = null
+    @Volatile internal var pendingSwitchTarget: String? = null // v1.8.4: internal — финалы крипты в RrpWg/RrpBt/RrpMproto
 
     /**
      * Бесшовная смена протокола в живой сессии (кадр 0x2C): просим сервер,
@@ -686,6 +698,7 @@ class RrpClient(
      */
     fun switchProto(target: String): Boolean {
         if (state != State.READY) return false
+        if (pendingSwitchTarget != null) return false // v1.8.4: свитч уже в полёте
         val nonce = ByteArray(8).also { rnd.nextBytes(it) }
             .joinToString("") { String.format("%02x", it) }
         protoSwitchNonce = nonce
@@ -698,7 +711,7 @@ class RrpClient(
             protoSwitchAck?.let { ack ->
                 if (ack.nonce != nonce) return@let // чужой/старый ответ
                 if (!ack.ok) {
-                    log(Msgs.PSW_DENIED.t(ack.reason.ifEmpty { "?" }))
+                    log(Msgs.PSW_DENIED.t(ack.reason.ifEmpty { "?" }), LogKind.WARN)
                     pendingSwitchTarget = null
                     return false
                 }
@@ -708,7 +721,7 @@ class RrpClient(
             }
             try { Thread.sleep(50) } catch (_: InterruptedException) { break }
         }
-        log(Msgs.PSW_TIMEOUT.t())
+        log(Msgs.PSW_TIMEOUT.t(), LogKind.WARN)
         pendingSwitchTarget = null
         return false
     }
@@ -738,7 +751,7 @@ class RrpClient(
     fun sendCamCtl(enabled: Boolean) {
         pendingCamCtl = enabled
         if (state == State.READY) {
-            log(Msgs.CAM_CTL_SENT.t(if (enabled) "on" else "off"))
+            debug(Msgs.CAM_CTL_SENT.t(if (enabled) "on" else "off"))
             sendFrame(RrpFrame.CamCtl(enabled))
         }
     }
@@ -747,11 +760,11 @@ class RrpClient(
         val want = pendingCamCtl ?: return
         pendingCamCtl = null
         if (state == State.READY) {
-            log(Msgs.CAM_CTL_SENT.t(if (want) "on" else "off"))
+            debug(Msgs.CAM_CTL_SENT.t(if (want) "on" else "off"))
             try {
                 sendFrame(RrpFrame.CamCtl(want))
             } catch (e: IOException) {
-                log(Msgs.CAM_CTL_FAILED.t(e.message ?: "?"))
+                log(Msgs.CAM_CTL_FAILED.t(e.message ?: "?"), LogKind.WARN)
             }
         }
     }
@@ -773,7 +786,7 @@ class RrpClient(
             return future
         }
         if (SsrfGuard.isBlocked(addr, allowLan)) {
-            log(Msgs.SEND_OPEN_SSRF.t(addr))
+            log(Msgs.SEND_OPEN_SSRF.t(addr), LogKind.WARN)
             future.complete(ERR_SSRF_BLOCKED)
             return future
         }
@@ -813,7 +826,7 @@ class RrpClient(
             return
         }
         if (SsrfGuard.isBlocked(targetHost, allowLan)) {
-            log(Msgs.OPEN_SSRF.t("$targetHost:${frame.port}"))
+            log(Msgs.OPEN_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
             sendOpenOk(streamId, ERR_SSRF_BLOCKED)
             return
         }
@@ -831,7 +844,7 @@ class RrpClient(
             return
         }
         if (allowedAddr == null) {
-            log(Msgs.OPEN_RESOLVES_SSRF.t("$targetHost:${frame.port}"))
+            log(Msgs.OPEN_RESOLVES_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
             sendOpenOk(streamId, ERR_SSRF_BLOCKED)
             return
         }
@@ -877,13 +890,13 @@ class RrpClient(
         try {
             parkExecutor.schedule({ closeParked(key) }, STREAM_PARK_MS, TimeUnit.MILLISECONDS)
         } catch (_: RejectedExecutionException) {}
-        log(Msgs.SOCKET_PARKED.t(st.id))
+        debug(Msgs.SOCKET_PARKED.t(st.id))
     }
 
     private fun closeParked(key: String) {
         parkedSockets.remove(key)?.let {
             try { it.socket.close() } catch (_: Exception) {}
-            log(Msgs.PARK_EXPIRED.t())
+            debug(Msgs.PARK_EXPIRED.t())
         }
     }
 
@@ -891,7 +904,7 @@ class RrpClient(
     private fun handleOpenResume(frame: RrpFrame.OpenResume) {
         val sock = parkedSockets.remove(tokenKey(frame.token))
         if (sock == null) {
-            log(Msgs.RESUME_NO_SOCKET.t())
+            debug(Msgs.RESUME_NO_SOCKET.t())
             sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_NO_PARKED))
             return
         }
@@ -904,7 +917,7 @@ class RrpClient(
         st.resumeToken = frame.token
         relayExecutor.execute { pumpOutgoing(st) }
         sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_OK))
-        log(Msgs.RESUME_ATTACHED.t(frame.streamId))
+        debug(Msgs.RESUME_ATTACHED.t(frame.streamId))
     }
 
     /** Поток: сокет цели → DATA кадры (с учётом окна flow-control).
@@ -926,7 +939,7 @@ class RrpClient(
                 if (n < 0) break
                 if (n == 0) continue
                 if (!st.sendWindow.tryAcquire(n, WINDOW_ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    log(Msgs.WINDOW_NOT_GROWN.t(st.id, WINDOW_ACQUIRE_TIMEOUT_MS))
+                    debug(Msgs.WINDOW_NOT_GROWN.t(st.id, WINDOW_ACQUIRE_TIMEOUT_MS))
                     sendFrameQuiet(RrpFrame.Close(st.id, ERR_TIMEOUT))
                     break
                 }
@@ -1007,7 +1020,7 @@ class RrpClient(
         val assoc = try {
             UdpAssoc(id)
         } catch (e: Exception) {
-            log(Msgs.UDP_ASSOC_FAILED.t(e.message))
+            log(Msgs.UDP_ASSOC_FAILED.t(e.message), LogKind.WARN)
             sendOpenOk(id, ERR_CONNECT_FAILED)
             return
         }
@@ -1046,7 +1059,7 @@ class RrpClient(
         // тот же резолвер, которым телефон пользуется сам (документировано в protocol.md).
         val allow = allowLan || frame.port == 53
         if (SsrfGuard.isBlocked(targetHost, allow)) {
-            log(Msgs.UDP_SSRF.t("$targetHost:${frame.port}"))
+            log(Msgs.UDP_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
             return
         }
         val dst: java.net.InetAddress = when (frame.atyp) {
@@ -1064,21 +1077,21 @@ class RrpClient(
                     null
                 }
                 if (resolved == null) {
-                    log(Msgs.UDP_RESOLVE_SSRF.t("$targetHost:${frame.port}"))
+                    log(Msgs.UDP_RESOLVE_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
                     return
                 }
                 resolved
             }
         }
         if (SsrfGuard.isBlockedAddress(dst, allow)) {
-            log(Msgs.UDP_ADDR_SSRF.t("$targetHost:${frame.port}"))
+            log(Msgs.UDP_ADDR_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
             return
         }
         if (frame.bytes.isEmpty()) return
         try {
             assoc.socket.send(DatagramPacket(frame.bytes, frame.bytes.size, dst, frame.port))
         } catch (e: Exception) {
-            log("udp send failed: ${e.message}")
+            log("udp send failed: ${e.message}", LogKind.WARN)
         }
     }
 
@@ -1123,7 +1136,7 @@ class RrpClient(
                     lastPingSentAt.set(System.currentTimeMillis())
                     sendFrame(RrpFrame.Ping(ByteArray(NONCE_SIZE).also { rnd.nextBytes(it) }))
                 } catch (e: IOException) {
-                    log(Msgs.PING_SEND_FAILED.t(e.message))
+                    log(Msgs.PING_SEND_FAILED.t(e.message), LogKind.WARN)
                 }
                 scheduleNextPing()
             }, pingIntervalMs(rnd, lastRttMs.get()), TimeUnit.MILLISECONDS)
@@ -1166,7 +1179,7 @@ class RrpClient(
                     val pr = try { probeOnce(target, PROBE_TIMEOUT_MS) } catch (_: Exception) { null }
                     lastProbeOk = pr?.ok
                     val (loss, rtt) = healthWindow()
-                    log(Msgs.PROBE_LOSS.t(loss * 100.0, rtt, 60))
+                    log(Msgs.PROBE_LOSS.t(loss * 100.0, rtt, 60), LogKind.WARN)
                 }
                 // 3) v1.8.0: E2E-пробник полезной нагрузки — сквозной путь
                 // (OPEN→DATA→ответ) в отдельном потоке relayExecutor: чтение
@@ -1180,7 +1193,7 @@ class RrpClient(
                                 val outcome = e2eProbeOnce(e2eTarget, E2eProbe.timeoutFor(rttEwmaMs))
                                 if (outcome != null) {
                                     lastE2e = System.currentTimeMillis() to outcome
-                                    log("E2E probe: $outcome")
+                                    debug("E2E probe: $outcome")
                                 }
                             } catch (_: Exception) {
                             } finally {
@@ -1264,7 +1277,7 @@ class RrpClient(
                 if (maxPlain != null) {
                     if (frame.bytes.size > maxPlain) {
                         // семантика UDP: слишком большая дейтаграмма дропается
-                        log(Msgs.UDP_DATA_LIMIT.t(frame.bytes.size))
+                        log(Msgs.UDP_DATA_LIMIT.t(frame.bytes.size), LogKind.WARN)
                         return
                     }
                     wire = RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, encryptDown(frame.bytes))
@@ -1301,7 +1314,7 @@ class RrpClient(
                 val body = try {
                     policy.engine.nextRequest()
                 } catch (e: Exception) {
-                    log(Msgs.NOISE_GEN_FAILED.t(e.message))
+                    log(Msgs.NOISE_GEN_FAILED.t(e.message), LogKind.WARN)
                     null
                 }
                 if (body == null) {
@@ -1321,7 +1334,7 @@ class RrpClient(
                     policy.engine.onSent(bytes)
                     log(policy.logLine(bytes, policy.engine.usedToday(), policy.engine.cfg.maxBytesPerDay))
                 } catch (e: IOException) {
-                    log(Msgs.NOISE_SEND_FAILED.t(e.message))
+                    log(Msgs.NOISE_SEND_FAILED.t(e.message), LogKind.WARN)
                 }
                 scheduleNoise()
             }, policy.engine.nextDelayMs(), TimeUnit.MILLISECONDS)
@@ -1333,7 +1346,7 @@ class RrpClient(
         try {
             sendFrame(frame)
         } catch (e: Exception) {
-            log(Msgs.SEND_FAILED.t(e.message))
+            log(Msgs.SEND_FAILED.t(e.message), LogKind.ERROR)
         }
     }
 
@@ -1348,6 +1361,7 @@ class RrpClient(
      * явный stop пользователем: чистое закрытие всего.
      */
     fun close(parkLive: Boolean) {
+        pendingSwitchTarget = null // v1.8.4: свитч не переживает смерть транспорта
         running.set(false)
         setState(State.CLOSED)
         helloLatch.countDown()
@@ -1399,9 +1413,20 @@ class RrpClient(
         listener?.onState(this, s)
     }
 
-    internal fun log(message: String) {
-        listener?.onLog(this, message)
+    /**
+     * v1.8.4: уровень по умолчанию INFO (виден при стандартном minLevel).
+     * Протокольные детали — DEBUG/TRACE, ошибки — WARN/ERROR: уровни задаются
+     * на месте вызова; фильтрацию выполняет LogStore (minLevel из настроек).
+     */
+    internal fun log(message: String, kind: LogKind = LogKind.INFO) {
+        listener?.onLog(this, message, kind)
     }
+
+    /** Детали протокола (хендшейки, кадры) — видны при minLevel ≤ DEBUG. */
+    internal fun debug(message: String) = log(message, LogKind.DEBUG)
+
+    /** Протокольная трассировка (кадр за кадром) — видна при minLevel TRACE. */
+    internal fun trace(message: String) = log(message, LogKind.TRACE)
 
     /** Hex-дамп первых 64 байт (для анализа raw-данных в журнале приложения). */
     private fun RrpFrame.rawHex(): String {

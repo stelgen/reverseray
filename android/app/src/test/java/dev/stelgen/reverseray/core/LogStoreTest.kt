@@ -11,6 +11,18 @@ import org.junit.Test
  */
 class LogStoreTest {
 
+    @org.junit.Before
+    fun resetMinLevel() {
+        // v1.8.4: тесты требуют полный спектр уровней — порог на TRACE.
+        LogStore.minLevel = LogKind.TRACE
+    }
+
+    @org.junit.After
+    fun restoreMinLevel() {
+        // дефолт прод-настройки (INFO) — не утекать глобальное состояние.
+        LogStore.minLevel = LogKind.INFO
+    }
+
     @Test
     fun ringKeepsCapacityAndDropsOldest() {
         LogStore.clear()
@@ -26,11 +38,11 @@ class LogStoreTest {
         LogStore.clear()
         LogStore.push("s1", LogKind.OK, LogStore.Channel.STATUS)
         LogStore.push("u1", LogKind.WARN, LogStore.Channel.UPDATE)
-        LogStore.push("s2", LogKind.ERR, LogStore.Channel.STATUS)
+        LogStore.push("s2", LogKind.ERROR, LogStore.Channel.STATUS)
 
         val status = LogStore.snapshot(LogStore.Channel.STATUS)
         assertEquals(listOf("s2", "s1"), status.map { it.text })
-        assertEquals(listOf(LogKind.ERR, LogKind.OK), status.map { it.kind })
+        assertEquals(listOf(LogKind.ERROR, LogKind.OK), status.map { it.kind })
 
         assertEquals(listOf("u1"), LogStore.snapshot(LogStore.Channel.UPDATE).map { it.text })
 
@@ -92,5 +104,35 @@ class LogStoreTest {
         assertEquals(listOf(LogKind.INFO, LogKind.OK), snap.map { it.kind })
         // в STATUS от апдейтера ничего не попало
         assertEquals(0, LogStore.snapshot(LogStore.Channel.STATUS).size)
+    }
+
+    /** v1.8.4: порог minLevel отсекает записи «тише» уровня ещё на входе. */
+    @Test
+    fun minLevelGateDropsQuieterEntries() {
+        LogStore.clear()
+        LogStore.minLevel = LogKind.WARN
+        LogStore.push("tr", LogKind.TRACE)
+        LogStore.push("db", LogKind.DEBUG)
+        LogStore.push("in", LogKind.INFO)
+        LogStore.push("nt", LogKind.NOTICE)
+        LogStore.push("ok", LogKind.OK)
+        LogStore.push("wr", LogKind.WARN)
+        LogStore.push("er", LogKind.ERROR)
+        LogStore.push("pn", LogKind.PANIC)
+        assertEquals(listOf("pn", "er", "wr"), LogStore.snapshot(null).map { it.text })
+        LogStore.minLevel = LogKind.TRACE
+        LogStore.push("now-visible", LogKind.TRACE)
+        assertEquals("now-visible", LogStore.snapshot(null).first().text)
+    }
+
+    /** v1.8.4: иерархия severity монотонна (для фильтра-порога). */
+    @Test
+    fun severityIsMonotonic() {
+        val kinds = LogKind.entries
+        assertEquals(listOf("TRACE", "DEBUG", "INFO", "NOTICE", "OK", "WARN", "ERROR", "PANIC"), kinds.map { it.name })
+        assertEquals(kinds.map { it.severity }, kinds.map { it.severity }.sorted())
+        assertEquals(LogKind.PANIC, LogKind.from("panic"))
+        assertEquals(LogKind.WARN, LogKind.from("warn"))
+        assertEquals(null, LogKind.from("bogus"))
     }
 }

@@ -246,7 +246,7 @@ class EvilServerTest {
         }
         try {
             val c = newClient(server, object : RrpClient.Listener {
-                override fun onLog(client: RrpClient, message: String) {
+                override fun onLog(client: RrpClient, message: String, kind: LogKind) {
                     synchronized(logs) { logs.add(message) }
                 }
             })
@@ -293,7 +293,7 @@ class EvilServerTest {
         }
         try {
             val c = newClient(server, object : RrpClient.Listener {
-                override fun onLog(client: RrpClient, message: String) {
+                override fun onLog(client: RrpClient, message: String, kind: LogKind) {
                     synchronized(logs) { logs.add(message) }
                 }
             })

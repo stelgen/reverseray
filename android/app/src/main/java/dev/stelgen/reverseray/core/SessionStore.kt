@@ -138,6 +138,12 @@ class SessionStore(private val backend: Backend) {
             val p = Profile(newId(), resolvedName, canonical, enabled, System.currentTimeMillis())
             list.add(p)
             writeProfiles(list)
+            // v1.8.4: если PRIMARY ещё не назначен — добавленный сервер СТАНОВИТСЯ
+            // PRIMARY: зеркало KEY_CONFIG наполняется сразу, главная кнопка и
+            // пикеры протокола/транспорта живы без ручного «сделать основным»
+            // (корневая причина жалоб: ссылка есть в профиле, кнопки говорили
+            // «нет конфига», потому что читали пустое зеркало).
+            if (activeId().isNullOrBlank()) setActiveInternal(p.id)
             p
         }
     }
@@ -149,6 +155,10 @@ class SessionStore(private val backend: Backend) {
         if (idx < 0) return@synchronized false
         list[idx] = profile
         writeProfiles(list)
+        // v1.8.4: правка PRIMARY-профиля синхронизирует зеркало KEY_CONFIG
+        // (ссылка — источник правды, зеркало — её отражение; было: зеркало
+        // устаревало после «Изменить», пикеры показывали старую ссылку).
+        if (activeId() == profile.id) setActiveInternal(profile.id)
         true
     }
 
