@@ -25,11 +25,6 @@
             "ver": "1"
         },
         {
-            "id": "bittorrent",
-            "name": "BitTorrent/1",
-            "ver": "1"
-        },
-        {
             "id": "apimask",
             "name": "API Mask/1",
             "ver": "1"
