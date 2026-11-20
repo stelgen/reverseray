@@ -27,7 +27,7 @@ class GuiScrollTest {
     fun `every tab page is a scrollview`() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                val content = UiFind.contentView(activity) as ViewGroup
+                val content = UiFind.contentView(activity)
                 // root(LinearLayout) → [TabLayout, pages(FrameLayout)]
                 // v1.6.0: снова 5 вкладок («Серверы» встроена в Home)
                 val pages = directChildren(content).filterIsInstance<ViewGroup>()
@@ -92,7 +92,7 @@ class GuiScrollTest {
             var home: ScrollView? = null
             var capturedY = -1
             scenario.onActivity { activity ->
-                val content = UiFind.contentView(activity) as ViewGroup
+                val content = UiFind.contentView(activity)
                 val pages = directChildren(content).filterIsInstance<ViewGroup>()
                     .firstOrNull { it !is androidx.appcompat.widget.LinearLayoutCompat && it.childCount == 5 }
                     ?: directChildren(content).last() as ViewGroup
@@ -124,9 +124,10 @@ class GuiScrollTest {
             }
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             scenario.onActivity {
+                val h = home ?: return@onActivity
                 assertTrue(
-                    "churn сдвинул страницу: ${home!!.scrollY} != $capturedY",
-                    home!!.scrollY == capturedY,
+                    "churn сдвинул страницу: ${h.scrollY} != $capturedY",
+                    h.scrollY == capturedY,
                 )
             }
         }

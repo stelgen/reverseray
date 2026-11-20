@@ -36,7 +36,8 @@ a{color:var(--blue);text-decoration:none}
 .ctrl{display:flex;gap:6px;align-items:center}
 .ctrl button,.ctrl select{background:var(--panel2);color:var(--dim);border:1px solid var(--border);border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer;font-family:inherit}
 .ctrl button.on{color:var(--txt);border-color:var(--blue);background:#232a35}
-svg.chart{width:100%;height:190px;display:block}
+svg.chart{width:100%;height:240px;display:block}
+.tip{position:absolute;pointer-events:none;background:#0d0e12;border:1px solid var(--border);border-radius:4px;padding:5px 8px;font-size:11px;font-family:var(--mono);color:var(--txt);display:none;z-index:8;white-space:nowrap}
 .legend{display:flex;gap:16px;font-size:11px;color:var(--dim);margin-top:6px}
 .legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
@@ -68,26 +69,24 @@ button.act.dw:hover{border-color:#ff6b6b}
 <div class="top">
  <div class="brand">Reverse<b>Ray</b></div>
  <div class="dot" id="dot"></div>
- <div class="chip">версия <b id="ver">—</b></div>
- <div class="chip">uptime <b id="upt">—</b></div>
- <div class="chip">egress <b class="mono" id="eg">—</b></div>
- <div class="chip">сертификат до <b id="cert">—</b></div>
  <div class="sp"></div>
- <div class="chip" id="hprofile">—</div>
 </div>
 <div class="wrap">
  <div class="grid kpis" id="kpis"></div>
  <div class="grid" style="margin-top:10px">
   <div class="panel">
-   <h3><span>Управление телефонами</span><span class="ctrl dim">hash-only</span></h3>
+   <h3><span>Устройства</span><span class="ctrl dim">hash-only</span></h3>
    <div style="overflow-x:auto"><table id="devs"><thead><tr>
-    <th>Устройство</th><th>Сессий</th><th>Протоколы</th><th>↓ релей</th><th>↑ релей</th><th>API Mask</th><th>Действия</th>
+    <th>Устройство</th><th>Сессий</th><th>Протоколы</th><th>↓ релей</th><th>↑ релей</th><th>Действия</th>
+   </tr></thead><tbody></tbody></table></div>
+   <h3 style="margin-top:14px"><span>Туннели</span><span class="ctrl dim" id="parkinfo"></span></h3>
+   <div style="overflow-x:auto"><table id="sess"><thead><tr>
+    <th>Устройство</th><th>Протокол</th><th>Транспорт</th><th>RTT</th><th>Потоки</th><th>Окно</th><th>↓ всего</th><th>↑ всего</th><th>↓/с</th><th>↑/с</th><th>Ошибки диала</th><th>Аптайм</th>
    </tr></thead><tbody></tbody></table></div>
   </div>
  </div>
- <div class="grid row2" style="margin-top:10px">
-  <div class="panel">
-   <h3><span>Трафик через туннель</span>
+ <div class="panel" style="margin-top:10px">
+  <h3><span>Трафик через туннель</span>
     <span class="ctrl">
      <button data-p="150" class="on">5 мин</button><button data-p="450">15 мин</button><button data-p="1800">1 ч</button>
      <select id="unit"><option value="b">Б/с</option><option value="kb" selected>КБ/с</option><option value="mb">МБ/с</option><option value="mbit">Мбит/с</option></select>
@@ -95,34 +94,13 @@ button.act.dw:hover{border-color:#ff6b6b}
    <svg class="chart" id="chart" preserveAspectRatio="none" viewBox="0 0 1000 190"></svg>
    <div class="legend"><span><i style="background:var(--green)"></i>входящий <b id="lin" class="mono">—</b></span><span><i style="background:var(--blue)"></i>исходящий <b id="lout" class="mono">—</b></span><span>пик <b id="lpeak" class="mono">—</b></span></div>
   </div>
-  <div class="panel">
-   <h3>Протоколы и защита</h3>
-   <div class="facts" id="protos"></div>
-   <h3 style="margin-top:12px">Канонические гарантии</h3>
-   <div class="facts" id="facts"></div>
-  </div>
- </div>
- <div class="grid" style="margin-top:10px">
-  <div class="panel">
-   <h3><span>Устройства и туннели</span><span class="ctrl dim" id="parkinfo"></span></h3>
-   <div style="overflow-x:auto"><table id="sess"><thead><tr>
-    <th>Устройство</th><th>Протокол</th><th>Транспорт</th><th>RTT</th><th>Потоки</th><th>Окно</th><th>↓ всего</th><th>↑ всего</th><th>↓/с</th><th>↑/с</th><th>Ошибки диала</th><th>Аптайм</th>
-   </tr></thead><tbody></tbody></table></div>
-  </div>
- </div>
- <div class="grid row2" style="margin-top:10px">
-  <div class="panel">
+ <div class="panel" style="margin-top:10px">
    <h3><span>Журнал событий</span>
     <span class="ctrl"><button id="fall" class="on">все</button><button id="fwarn">предупреждения</button></span></h3>
    <div class="logs" id="logs"></div>
-  </div>
-  <div class="panel">
-   <h3>Камуфляж и модули</h3>
-   <div class="facts" id="mods"></div>
-  </div>
  </div>
  <div class="foot">
-  <span>GET /status — полная телеметрия</span><span>GET /metrics — Prometheus</span><span>GET /ui/logs — журнал (JSON)</span><span>GET /healthz · /readyz</span>
+  <span>версия <b id="ver">—</b></span><span>uptime <b id="upt">—</b></span><span>egress <b class="mono" id="eg">—</b></span><span>сертификат до <b id="cert">—</b></span><span id="env"></span><span>GET /status</span><span>GET /metrics — Prometheus</span><span>GET /ui/logs</span><span>GET /healthz · /readyz</span>
  </div>
 </div>
 <script>
@@ -143,7 +121,6 @@ async function tick(){
   document.getElementById('upt').textContent=fmtUp(s.uptime_sec);
   document.getElementById('eg').textContent=s.egress_ip||'—';
   document.getElementById('cert').textContent=(s.cert_not_after||'—').slice(0,10);
-  document.getElementById('hprofile').innerHTML='<b>'+esc(s.hardening_profile||'')+'</b>';
   var k=[
    stat('Туннели',s.tunnels_up,s.tunnels_up>0?'ok':'bad'),
    stat('Открытых потоков',s.streams_open||null,'mut'),
@@ -151,13 +128,8 @@ async function tick(){
    stat('Устройств',s.devices||null,'mut'),
    stat('Пропущено всего',fmtB(s.bytes_relayed_total),'acc'),
    stat('Авторизаций устройств',s.auth_ok_total||null,'ok'),
-   stat('Отклонено рукопожатий',s.auth_failures_total||null,'mut'),
    stat('UDP-дейтаграмм',s.udp_datagrams_total||null,'mut'),
-   stat('Зондов отброшено (tarpit)',s.hardening_dropped_total||null,'mut'),
-   stat('Отказов по лимиту',s.hardening_limited_total||null,'mut'),
-   stat('Протокол apimask: байтов',s.apimask_bytes_total!=null?fmtB(s.apimask_bytes_total):null,'mut'),
    stat('WS-туннелей',s.ws_tunnels||null,'mut'),
-   stat('Сканирований отклонено',s.hardening_scans_total||null,'mut'),
    stat('RAM (Go heap)',s.mem_alloc_mb?fmtB(s.mem_alloc_mb*1048576):null,'mut'),
    stat('События',s.events_info!=null?('<span class="dim">'+s.events_info+'</span> / <span class="warn">'+(s.events_warn||0)+'</span>'):'','mut','info/warn')
   ].join('');
@@ -183,38 +155,69 @@ async function tick(){
   });
   document.querySelector('#sess tbody').innerHTML=rows||'<tr><td colspan="12" class="dim">нет активных туннелей</td></tr>';
   document.getElementById('parkinfo').textContent='в буфере: '+(s.parked_streams||0);
-  var pl=(s.protocols||[]).map(function(p){return '<span class="pill">'+esc(protoLabel(p,s))+'</span>'}).join(' ');
-  document.getElementById('protos').innerHTML='<div style="margin-bottom:6px">Реестр протоколов: '+pl+'</div><div>Протокол по умолчанию: <b>'+esc(protoLabel(s.default_proto,s))+'</b></div><div style="margin-top:4px">Сессии на не-дефолтном протоколе: '+s.proto_sessions_non_default+'</div>';
-  document.getElementById('facts').innerHTML=(s.facts||[]).map(function(f){return '· '+esc(f)}).join('<br>');
-  var m='';
-  if(s.camouflage)m+='<div>Камуфляж-протокол apimask: <b>'+esc(s.camouflage.name)+'</b> · v'+esc(s.camouflage.ver)+' · '+(s.camouflage.enabled?'<span class="ok">активен</span>':'<span class="warn">выключен</span>')+' · обменов NOISE: '+s.apimask_pairs_total+'</div>';
-  if(s.modules_version)m+='<div>Модули: манифест <b>v'+esc(s.modules_version)+'</b>'+(s.modules_source?' · '+esc(s.modules_source):'')+'</div>';
-  if(s.go_version)m+='<div>Среда: Go '+esc(s.go_version)+' · '+esc(s.goos)+'/'+esc(s.goarch)+' · state '+fmtB((s.state_dir_mb||0)*1048576)+'</div>';
-  document.getElementById('mods').innerHTML=m||'<span class="dim">—</span>';
+  var env=document.getElementById('env');
+  if(env)env.textContent='Go '+(s.go_version||'—')+' · '+(s.goos||'')+'/'+(s.goarch||'')+(s.modules_version?' · модули v'+s.modules_version:'');
  }catch(e){var d=document.getElementById('dot');if(d)d.className='dot warn'}
  pollLogs();
 }
+function niceCeil(v){if(v<=0)return 1;var e=Math.pow(10,Math.floor(Math.log(v)/Math.LN10)),m=v/e;return(m<=1?1:m<=2?2:m<=5?5:10)*e}
 function draw(){
  var svg=document.getElementById('chart');
  var win=hist.slice(-period);
- if(win.length<2){svg.innerHTML='<text x="12" y="100" fill="#8e9095" font-size="13">сбор данных…</text>';return}
- var W=1000,H=190,pad=26,max=0,sum=0;
- win.forEach(function(x){var a=inUnit(x.in)||0,b=inUnit(x.out)||0;if(a>max)max=a;if(b>max)max=b;sum+=a+b});
- if(max<=0)max=1;
- var pw=W-pad*2,ph=H-pad*1.4,x0=pad,y0=H-pad;
+ if(win.length<2){svg.innerHTML='<text x="12" y="120" fill="#8e9095" font-size="13">сбор данных…</text>';return}
+ var W=1000,H=240,pl=64,pr=12,pt=10,pb=22;
+ var max=0;win.forEach(function(x){var a=inUnit(x.in)||0,b=inUnit(x.out)||0;if(a>max)max=a;if(b>max)max=b});
+ max=niceCeil(max);
+ var pw=W-pl-pr,ph=H-pt-pb,x0=pl,y0=H-pb;
  function px(i){return x0+pw*i/(win.length-1)}
  function py(v){return y0-ph*(v/max)}
- function path(key){var d='';win.forEach(function(x,i){var v=inUnit(x[key])||0;d+=(i?'L':'M')+px(i).toFixed(1)+' '+py(v).toFixed(1)+' '});return d}
- var g='';for(var i=0;i<=4;i++){var yy=y0-ph*i/4;g+='<line x1="'+x0+'" y1="'+yy+'" x2="'+(x0+pw)+'" y2="'+yy+'" stroke="#23262c"/><text x="'+(x0-4)+'" y="'+(yy+3)+'" fill="#8e9095" font-size="9" text-anchor="end">'+fmtR(max*i/4*(unit==='mbit'?1:(unit==='b'?1:1)))+'</text>'}
- svg.innerHTML=g
-  +'<path d="'+path('in')+'" fill="none" stroke="#73bf69" stroke-width="1.6"/>'
-  +'<path d="'+path('out')+'" fill="none" stroke="#5794f2" stroke-width="1.6"/>';
- var lastIn=inUnit(win[win.length-1].in),lastOut=inUnit(win[win.length-1].out);
+ function path(key){var d='M'+px(0).toFixed(1)+' '+py(inUnit(win[0][key])||0).toFixed(1)+' ';for(var i=1;i<win.length;i++)d+='L'+px(i).toFixed(1)+' '+py(inUnit(win[i][key])||0).toFixed(1)+' ';return d}
+ function area(key){return path(key)+'L'+px(win.length-1).toFixed(1)+' '+y0+' L'+px(0).toFixed(1)+' '+y0+' Z'}
+ var ticks='',i,v;
+ for(i=0;i<=4;i++){v=max*i/4;var yy=y0-ph*i/4;
+  ticks+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+(x0+pw)+'" y2="'+yy.toFixed(1)+'" stroke="#23262c" stroke-dasharray="'+(i%4?'2 3':'0')+'"/>'
+  +'<text x="'+(x0-6)+'" y="'+(yy+3).toFixed(1)+'" fill="#8e9095" font-size="9" text-anchor="end">'+fmtR(v)+'</text>'}
+ // подписи времени по X: ~6 равномерных меток
+ var tl='',n=win.length,step=Math.max(1,Math.floor(n/6));
+ for(i=n-1;i>=0;i-=step){var d=new Date(win[i].t);tl+='<text x="'+px(i).toFixed(1)+'" y="'+(H-6)+'" fill="#8e9095" font-size="9" text-anchor="middle">'+d.toTimeString().slice(0,5)+'</text>'}
+ var g=''
+  +'<defs><linearGradient id="gin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#73bf69" stop-opacity="0.35"/><stop offset="1" stop-color="#73bf69" stop-opacity="0"/></linearGradient>'
+  +'<linearGradient id="gout" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5794f2" stop-opacity="0.30"/><stop offset="1" stop-color="#5794f2" stop-opacity="0"/></linearGradient></defs>'
+  +ticks
+  +'<path d="'+area('out')+'" fill="url(#gout)"/><path d="'+area('in')+'" fill="url(#gin)"/>'
+  +'<path d="'+path('out')+'" fill="none" stroke="#5794f2" stroke-width="1.6" stroke-linejoin="round"/>'
+  +'<path d="'+path('in')+'" fill="none" stroke="#73bf69" stroke-width="1.6" stroke-linejoin="round"/>';
+ // hover: вертикаль + маркеры ближайшей точки
+ var hover=window.__chartHover||(window.__chartHover={});
+ if(hover&&hover.i!=null){var hi=Math.max(0,Math.min(n-1,hover.i));
+  g+='<line x1="'+px(hi)+'" y1="'+pt+'" x2="'+px(hi)+'" y2="'+y0+'" stroke="#8e9095" stroke-opacity="0.5"/>'
+  +'<circle cx="'+px(hi)+'" cy="'+py(inUnit(win[hi].in)||0)+'" r="2.5" fill="#73bf69"/>'
+  +'<circle cx="'+px(hi)+'" cy="'+py(inUnit(win[hi].out)||0)+'" r="2.5" fill="#5794f2"/>'}
+ svg.innerHTML=g;
+ var lastIn=inUnit(win[n-1].in),lastOut=inUnit(win[n-1].out);
  document.getElementById('lin').textContent=lastIn==null?'—':lastIn.toFixed(1)+' '+unitName();
  document.getElementById('lout').textContent=lastOut==null?'—':lastOut.toFixed(1)+' '+unitName();
  document.getElementById('lpeak').textContent=max.toFixed(1)+' '+unitName();
 }
-async function pollLogs(){
+// hover-обработчики: crosshair + тултип (Grafana-style)
+(function(){
+ var svg=document.getElementById('chart'),tip=null,ht={i:null};
+ svg.addEventListener('mousemove',function(e){
+  var win=hist.slice(-period);if(win.length<2)return;
+  var r=svg.getBoundingClientRect(),W=1000,pl=64,pr=12,x0=pl,pw=W-pl-pr;
+  var mx=(e.clientX-r.left)/r.width*W;
+  var i=Math.round((mx-x0)/pw*(win.length-1));i=Math.max(0,Math.min(win.length-1,i));
+  window.__chartHover={i:i};draw();
+  if(!tip){tip=document.createElement('div');tip.className='tip';document.body.appendChild(tip)}
+  var d=new Date(win[i].t);
+  tip.innerHTML='<b>'+d.toTimeString().slice(0,8)+'</b><br><span style="color:#73bf69">↓ '+fmtR(inUnit(win[i].in))+'</span><br><span style="color:#5794f2">↑ '+fmtR(inUnit(win[i].out))+'</span>';
+  tip.style.display='block';
+  var lx=e.clientX+12,ly=e.clientY+12;
+  if(lx+140>window.innerWidth)lx=e.clientX-150;
+  tip.style.left=lx+'px';tip.style.top=ly+'px';
+ });
+ svg.addEventListener('mouseleave',function(){window.__chartHover={};draw();if(tip)tip.style.display='none'});
+})();async function pollLogs(){
  try{
   var r=await fetch('/ui/logs?limit=200',{cache:'no-store'}),list=await r.json();
   logCache=list||[];
@@ -223,10 +226,10 @@ async function pollLogs(){
 }
 function renderLogs(){
  var el=document.getElementById('logs');
- var rows=logCache.filter(function(e){return logFilter==='all'||e.level!=='info'});
+ var rows=logCache.filter(function(e){return logFilter==='all'||e.level!=='INFO'});
  el.innerHTML=rows.map(function(e){
   var t=new Date(e.at).toTimeString().slice(0,8);
-  return '<div class="le'+(e.level==='warn'?' w':'')+'"><span class="t">'+t+'</span><span class="k '+esc(e.kind)+'">'+esc(e.kind)+'</span>'+(e.device?'<span class="d">'+esc(e.device)+'</span>':'<span class="d">—</span>')+'<span class="m">'+esc(e.msg)+'</span></div>';
+  return '<div class="le'+(e.level==='WARN'?' w':'')+'"><span class="t">'+t+'</span><span class="k '+esc(e.kind)+'">'+esc(e.kind)+'</span>'+(e.device?'<span class="d">'+esc(e.device)+'</span>':'<span class="d">—</span>')+'<span class="m">'+esc(e.msg)+'</span></div>';
  }).join('')||'<div class="dim" style="padding:8px">журнал пуст</div>';
 }
 document.querySelectorAll('[data-p]').forEach(function(b){b.onclick=function(){

@@ -80,7 +80,7 @@ func TestStatusServerFactsAndUI(t *testing.T) {
 	if strings.Contains(html, "Константы защиты") {
 		t.Fatal("/ui не должен рендерить «Константы защиты» (v0.9.5)")
 	}
-	for _, need := range []string{"Трафик через туннель", "Устройства и туннели", "Журнал событий", "<svg", "relay_in"} {
+	for _, need := range []string{"Трафик через туннель", ">Устройства<", ">Туннели<", "Журнал событий", "<svg", "relay_in"} {
 		if !strings.Contains(html, need) {
 			t.Fatal("/ui без элемента дашборда 2026: " + need)
 		}
@@ -123,52 +123,36 @@ func TestUIGraphGridLegendAxis(t *testing.T) {
 	}
 }
 
-// v0.9.6: пустые поля не рендерятся — сессия без UDP/DNS/стримов/RTT не
-// содержит строк с этими подписями вовсе (не «0», а отсутствие элемента).
-func TestUICardsEmptyFieldsNotRendered(t *testing.T) {
+// v1.8.8: канон «пустое поле не рендерится» теперь проверяется на JSON
+// /status: сессия без UDP/DNS/стримов/RTT не содержит нулевых ключей
+// (не «0», а отсутствие ключа — тот же инвариант, но на честных данных).
+func TestUIStatusEmptyFieldsNotReported(t *testing.T) {
 	app, _, _ := startTestServer(t)
 
-	// фикстура: сессия только с обязательными полями — всё остальное ноль/пусто
 	sess := []map[string]any{
 		{
-			"session":  "abcd1234efgh5678",
-			"device":   "TestPhone",
-			"proto":    "rrp1",
-			"relay_in": float64(0), "relay_out": float64(0),
-			"bytes_in": float64(0), "bytes_out": float64(0),
+			"session": "abcd1234efgh5678",
+			"device":  "TestPhone",
+			"proto":   "rrp1",
 		},
 	}
 	app.hub.SetSnapshotForTest(sess)
-	html := app.cardsHTML()
-
-	// пустые поля отсутствуют целиком
-	for _, bad := range []string{">UDP<", ">DNS<", ">Стримы<", ">RTT<", ">В полёте<", ">↓ relay<", ">↓ телефон<"} {
-		if strings.Contains(html, bad) {
-			t.Fatalf("пустое поле рендерится в карточке: %s", bad)
+	out := app.statusJSON()
+	var report struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Sessions) != 1 {
+		t.Fatalf("sessions != 1: %q", out)
+	}
+	for _, bad := range []string{"dns", "udp", "streams", "rtt_ms"} {
+		if _, ok := report.Sessions[0][bad]; ok {
+			t.Fatalf("нулевой ключ %s присутствует в /status: %q", bad, out)
 		}
 	}
-	// устройство и бейдж протокола — есть
-	if !strings.Contains(html, "TestPhone") || !strings.Contains(html, "badge") {
-		t.Fatalf("карточка без базовых элементов: %q", html)
-	}
-	// сессия без данных не содержит нулевых заглушек
-	if strings.Contains(html, ">0<") {
-		t.Fatalf("нулевая заглушка в карточке: %q", html)
-	}
-
-	// а карточка с данными рендерит их честно
-	sess[0]["dns"] = float64(7)
-	sess[0]["relay_in"] = float64(2048)
-	sess[0]["relay_out"] = float64(4096)
-	sess[0]["udp"] = float64(3)
-	sess[0]["streams"] = float64(2)
-	sess[0]["rtt_ms"] = float64(42)
-	sess[0]["bytes_in"] = float64(1048576)
-	app.hub.SetSnapshotForTest(sess)
-	html = app.cardsHTML()
-	for _, need := range []string{">DNS<", ">UDP<", ">Стримы<", ">RTT<", "2.0 КБ", "4.0 КБ", "1.0 МБ"} {
-		if !strings.Contains(html, need) {
-			t.Fatalf("заполненное поле не отрендерилось: %s в %q", need, html)
-		}
+	if report.Sessions[0]["device"] != "TestPhone" {
+		t.Fatalf("device потерян: %q", out)
 	}
 }

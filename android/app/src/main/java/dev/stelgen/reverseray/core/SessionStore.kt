@@ -275,6 +275,7 @@ class SessionStore(private val backend: Backend) {
         if (raw.isBlank()) return emptyList()
         return try {
             val parsed = SessionJson.parse(raw)
+            @Suppress("UNCHECKED_CAST")
             (parsed as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.let { m -> fromMap(m as Map<String, Any?>) } }
                 ?: emptyList()
         } catch (_: Exception) {

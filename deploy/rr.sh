@@ -23,7 +23,7 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v1.0.2"
+DEFAULT_TAG="v1.8.9"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
 UI_LAN=1 # 1 = открывать веб-морду (/ui) в локальной сети; --no-ui закрывает в localhost
@@ -141,23 +141,17 @@ if [ -z "$ok" ]; then
   $SUDO docker ps -a --filter name=reverseray --format 'table {{.Names}}\t{{.Status}}' 2>/dev/null || true
   warn "Последние логи:"
   run logs --tail 60 reverseray || true
-  warn " governor FATAL в логах → состояние сломано: sudo bash rr.sh --reset"
-  warn " exec /bin/busybox в логах   → старый образ с багом v0.8.2: обнови тег (v0.8.3+)"
+  warn "governor FATAL в логах → состояние сломано: sudo bash rr.sh --reset"
+  warn "exec /bin/busybox в логах → старый образ с багом v0.8.2: обнови тег (v0.8.3+)"
   die "сервер не поднялся (не healthy)"
 fi
 log "Контейнер healthy ✔"
 
-# --- enroll (идемпотентно: только если ещё не делали) ---
-if [ ! -f "$MARKER" ]; then
-  log "Регистрирую устройство phone-1 (enroll)…"
-  ENROLL_OUT="$(mktemp)"
-  run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > "$ENROLL_OUT" 2>&1 || true
-  touch "$MARKER" 2>/dev/null || $SUDO touch "$MARKER"
-else
-  log "Устройство уже зарегистрировано (state/.enrolled) — токен не меняю"
-  ENROLL_OUT="$(mktemp)"
-  run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > "$ENROLL_OUT" 2>&1 || true
-fi
+# --- enroll: пересоздаёт вывод строки подключения (токен в state неизменен) ---
+log "Готовлю строку подключения (enroll phone-1)…"
+ENROLL_OUT="$(mktemp)"
+run exec -T reverseray /reverseray enroll -state-dir /var/lib/reverseray -name phone-1 > "$ENROLL_OUT" 2>&1 || true
+touch "$MARKER" 2>/dev/null || $SUDO touch "$MARKER"
 
 # --- строка подключения ---
 # v0.7.3: строка БЕЗ ведущих пробелов/переносов — новичок копирует как есть
@@ -207,7 +201,7 @@ if [ "$UI_LAN" = "1" ]; then
 else
   echo "   http://127.0.0.1:${RR_METRICS_PORT:-9090}/ui (только localhost)"
 fi
-echo " Протокол по умолчанию: RR_PROTOCOL=${RR_PROTOCOL:-rrp1} (мусор → автоматически стабильный rrp1)"
+echo " Протокол по умолчанию: RR_PROTOCOL=${RR_PROTOCOL:-rrp1} (неизвестное значение → стабильный rrp1)"
 echo " WAN-hardening: включён (анти-скан/tarpit на туннельном порту; RR_HARDENING)"
 echo " Модули: авто-чек манифеста раз в сутки (RR_MODULES_AUTO; качается только при изменении)"
 echo " Healthcheck: включён; governor (в самом бинаре) рестартит не чаще 1 раза/30 с,"

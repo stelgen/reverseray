@@ -142,7 +142,7 @@ class TunnelService : Service() {
     private val sessionStates = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val runnerStateKey = ThreadLocal<String>()
     private val rnd = Random()
-    private val lastNetKick = AtomicLong(0)
+    internal val lastNetKick = AtomicLong(0)
     @Volatile private var statsThread: Thread? = null
     private var lastTx = 0L
     private var lastRx = 0L
@@ -151,8 +151,8 @@ class TunnelService : Service() {
     internal var wakeLock: PowerManager.WakeLock? = null
     /** v0.9.6: Wi-Fi-lock — радио не засыпает в фоне (Android 4+, из коробки). */
     internal var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var legacyReceiver: BroadcastReceiver? = null
+    internal var networkCallback: ConnectivityManager.NetworkCallback? = null
+    internal var legacyReceiver: BroadcastReceiver? = null
 
     /** Идёт ли сейчас валидационная смена протокола. */
     @Volatile private var switchingProto = false
@@ -214,7 +214,7 @@ class TunnelService : Service() {
     }
 
     /** Сессия-владелец для менеджера: создаёт воркеры, принимает события. */
-    private val sessionOwner = object : ConnectionManager.Owner {
+    internal val sessionOwner = object : ConnectionManager.Owner {
         override fun createWorker(
             profile: SessionStore.Profile,
             sessionId: String,
@@ -507,7 +507,7 @@ class TunnelService : Service() {
                 if (updated != null) {
                     // v1.5.0: пин обновляется в URI PRIMARY-профиля + зеркало
                     commitPrimaryUri(updated)
-                    pushLog(Msgs.PIN_ACCEPTED.t(newPin ?: ""), LogKind.WARN)
+                    pushLog(Msgs.PIN_ACCEPTED.t(newPin), LogKind.WARN)
                     startTunnel()
                 } else {
                     pushLog(Msgs.SEND_FAILED.t("pin update failed"), LogKind.ERROR)
@@ -653,7 +653,7 @@ class TunnelService : Service() {
     }
 
     /** Все сессии из реестра (для kickAll-поднятия после Wi-Fi). */
-    private fun startAllSessions() {
+    internal fun startAllSessions() {
         for (p in sessionStore.profiles()) {
             if (p.enabled || p.id == sessionStore.activeId()) {
                 if (sessById.containsKey(p.id)) continue
@@ -1107,7 +1107,7 @@ class TunnelService : Service() {
                 pin = cfg.pin,
                 allowLan = allowLan(),
                 listener = clientListener,
-                deviceName = (cfg.name?.takeIf { it.isNotBlank() } ?: profile.name)?.takeIf { it.isNotBlank() } ?: "phone-1",
+                deviceName = (cfg.name?.takeIf { it.isNotBlank() } ?: profile.name).ifBlank { "phone-1" },
                 transport = cfg.transport,
                 agentName = "ReverseRay-Android/" + appVersion(),
                 noisePolicy = buildNoisePolicy(),
@@ -1282,76 +1282,6 @@ class TunnelService : Service() {
 
     // ---------- сеть ----------
 
-    private fun registerNetworkWatching() {
-        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        if (Build.VERSION.SDK_INT >= 21) {
-            val cb = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    kickAll()
-                }
-            }
-            try {
-                val req = if (Build.VERSION.SDK_INT >= 23 && wifiOnly()) {
-                    NetworkRequest.Builder()
-                        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                        .build()
-                } else {
-                    NetworkRequest.Builder().build()
-                }
-                cm.registerNetworkCallback(req, cb)
-                networkCallback = cb
-            } catch (e: Exception) {
-                Log.w(TAG, getString(R.string.log_netcallback_failed, e.message))
-            }
-        } else {
-            // Фолбэк для API 14..20: легаси-броадкаст
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == ConnectivityManager.CONNECTIVITY_ACTION) kickAll()
-                }
-            }
-            registerReceiver(receiver, IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION))
-            legacyReceiver = receiver
-        }
-    }
-
-    /** Мгновенный retry всех коннектов с cooldown 3 c. */
-    private fun kickAll() {
-        val now = System.currentTimeMillis()
-        val last = lastNetKick.get()
-        if (now - last < NET_RETRY_COOLDOWN_MS) return
-        if (!lastNetKick.compareAndSet(last, now)) return
-        Log.d(TAG, getString(R.string.log_network_back))
-        // wifi-only: kick только если мы на Wi-Fi
-        if (wifiOnly() && !isOnWifi()) {
-            updateStatus(STATE_INFO, getString(R.string.status_wait_wifi))
-            return
-        }
-        manager?.kickAll()
-        // если туннель ещё не поднимался из-за отсутствия Wi-Fi — поднимаем
-        if (manager == null && sessById.isEmpty() && !stopping) {
-            manager = ConnectionManager(sessionOwner)
-            startAllSessions()
-        }
-    }
-
-    private fun unregisterNetworkWatching() {
-        networkCallback?.let {
-            if (Build.VERSION.SDK_INT >= 21) {
-                try {
-                    (applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
-                        .unregisterNetworkCallback(it)
-                } catch (_: Exception) {
-                }
-            }
-        }
-        networkCallback = null
-        legacyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
-        legacyReceiver = null
-    }
-
-
-
     // ---------- статус ----------
 
     /** Приоритет агрегата статусов: PIN > LIMIT > CONNECTED > CONNECTING > ERROR. */
@@ -1498,7 +1428,7 @@ class TunnelService : Service() {
     private fun allowLan(): Boolean = prefs().getBoolean(KEY_ALLOW_LAN, false)
 
     companion object {
-        private const val TAG = "ReverseRay"
+        internal const val TAG = "ReverseRay"
 
         const val PREFS = "reverseray"
         const val KEY_CONFIG = "config"
@@ -1594,7 +1524,7 @@ class TunnelService : Service() {
 
         internal const val CHANNEL_ID = "tunnel"
         internal const val NOTIF_ID = 1
-        private const val NET_RETRY_COOLDOWN_MS = 3_000L
+        internal const val NET_RETRY_COOLDOWN_MS = 3_000L
 
         // смена протокола: ретраи/паузы/cooldown — защита от rate-limit циклов
         private const val SWITCH_RETRIES = 3

@@ -22,6 +22,7 @@ import dev.stelgen.reverseray.core.RrpFrame
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
+import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.service.PrefsBackend
@@ -68,6 +69,55 @@ internal fun MainActivity.showProtocolPicker() {
             } else {
                 val picked = ids[which - 2]
                 if (picked != current || rotateOn) requestProtoSwitch(picked)
+            }
+        }
+        .setNegativeButton(android.R.string.cancel, null)
+        .show()
+}
+
+/**
+ * v1.8.8: мульти-пикер модулей (аналог «Switch protocol», но с галочками):
+ * один диалог — несколько модулей сразу (API Mask / UDP-релей), применяется
+ * диффом только изменённых. Состояние живёт в TunnelService (prefs), выбор
+ * персистентен и синхронизируется с сервером (0x2A / UDP_ASSOC gate).
+ */
+internal fun MainActivity.showModulesPicker() {
+    val camoLabel = RrpProtocols.camouflageLabel()
+    val udpAvailable = Modules.lastUdp != null
+    if (camoLabel.isBlank() && !udpAvailable) {
+        Toast.makeText(this, R.string.modules_up_to_date, Toast.LENGTH_SHORT).show()
+        return
+    }
+    val items = mutableListOf<String>()
+    if (camoLabel.isNotBlank()) items.add(camoLabel)
+    if (udpAvailable) items.add(getString(R.string.udp_toggle))
+    val camoEnabled = !prefs().getBoolean(TunnelService.KEY_CAMO_OFF, false)
+    val udpEnabled = prefs().getBoolean(TunnelService.KEY_UDP_ENABLED, true)
+    val initial = booleanArrayOf(
+        camoLabel.isNotBlank() && camoEnabled,
+        udpAvailable && udpEnabled,
+    ).copyOf(items.size)
+    val checked = initial.copyOf()
+    MaterialAlertDialogBuilder(this)
+        .setTitle(R.string.modules_section_modules)
+        .setMultiChoiceItems(items.toTypedArray(), checked) { _, which, isChecked ->
+            checked[which] = isChecked
+        }
+        .setPositiveButton(R.string.link_ok) { dialog, _ ->
+            dialog.dismiss()
+            val intents = mutableListOf<Intent>()
+            if (camoLabel.isNotBlank() && checked[0] != initial[0]) {
+                intents += Intent(this, TunnelService::class.java)
+                    .setAction(TunnelService.ACTION_CAMO)
+                    .putExtra(TunnelService.EXTRA_ENABLED, checked[0])
+            }
+            if (udpAvailable && checked[1] != initial[1]) {
+                intents += Intent(this, TunnelService::class.java)
+                    .setAction(TunnelService.ACTION_UDP)
+                    .putExtra(TunnelService.EXTRA_ENABLED, checked[1])
+            }
+            intents.forEach { i ->
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
             }
         }
         .setNegativeButton(android.R.string.cancel, null)

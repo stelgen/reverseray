@@ -56,7 +56,12 @@ object L10nUi {
         }
         val loc = Locale.forLanguageTag(tag)
         val cfg = Configuration(base.resources.configuration)
-        if (Build.VERSION.SDK_INT >= 17) cfg.setLocale(loc) else @Suppress("DEPRECATION") cfg.locale = loc
+        if (Build.VERSION.SDK_INT >= 17) {
+            cfg.setLocale(loc)
+        } else {
+            @Suppress("DEPRECATION")
+            cfg.locale = loc
+        }
         return base.createConfigurationContext(cfg)
     }
 

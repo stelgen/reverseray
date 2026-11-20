@@ -246,7 +246,7 @@ func (a *App) certRenewLoop(ctx context.Context) {
 		a.bundle = nb
 		a.bundleMu.Unlock()
 		a.log.Info("TLS leaf renewed", "not_after", nb.Leaf.Leaf.NotAfter.UTC().Format(time.RFC3339))
-		a.ev.Add("info", "cert", "TLS-сертификат перевыпущен (лист), CA не менялся")
+		a.ev.Add(LevelNotice, "cert", "TLS-сертификат перевыпущен (лист), CA не менялся")
 	}
 }
 

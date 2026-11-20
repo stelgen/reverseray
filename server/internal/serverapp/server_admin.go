@@ -174,7 +174,7 @@ func (a *App) mountAdmin(mux *http.ServeMux) {
 		// перманентный выбор камуфляжа устройства тоже чистим
 		a.setCamouflageOverride(name, true)
 		a.log.Info("device deleted via web UI (auth revoked)", "devices_left", len(a.store.Devices()))
-		a.ev.AddDev("warn", "devices", "телефон удалён из авторизации через веб-панель", name)
+		a.ev.AddDev(LevelNotice, "devices", "телефон удалён из авторизации через веб-панель", name)
 		fmt.Fprint(w, "deleted")
 	})))
 }

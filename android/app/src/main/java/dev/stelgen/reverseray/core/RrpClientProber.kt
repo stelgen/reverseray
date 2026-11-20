@@ -65,7 +65,7 @@ internal fun RrpClient.e2eProbeOnce(target: String, timeoutMs: Long): E2eProbe.O
         closeQuietly(pair.second)
         return null
     }
-    val st = stRef!!
+    val st: RrpClient.Stream = stRef // DFA: sendOpen-лямбда уже заполнила, null вернут выше
     val id = st.id
     return try {
         val t0 = System.currentTimeMillis()

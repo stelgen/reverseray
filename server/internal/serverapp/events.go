@@ -1,6 +1,7 @@
 package serverapp
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,10 +13,36 @@ import (
 // Redaction-канон: хосты назначения и токены никогда не попадают в события.
 type Event struct {
 	At     time.Time `json:"at"`
-	Level  string    `json:"level"` // info|warn|error
+	Level  string    `json:"level"` // канон LogKind APK: TRACE|DEBUG|INFO|NOTICE|OK|WARN|ERROR|PANIC
 	Kind   string    `json:"kind"`  // tunnel|proto|keys|auth|park|dial|hardening|modules|inbound
 	Device string    `json:"device,omitempty"`
 	Msg    string    `json:"msg"`
+}
+
+// Уровни журнала — 1:1 канон APK (android/.../core/LogStore.kt, v1.8.4).
+// severity монотонно растёт; любые новые события обязаны использовать эти
+// константы (легаси "info"/"warn" нормализуются на входе Add/AddDev).
+const (
+	LevelTrace  = "TRACE"
+	LevelDebug  = "DEBUG"
+	LevelInfo   = "INFO"
+	LevelNotice = "NOTICE"
+	LevelOK     = "OK"
+	LevelWarn   = "WARN"
+	LevelError  = "ERROR"
+	LevelPanic  = "PANIC"
+)
+
+// canonLevel приводит уровень к канону LogKind APK. Легаси-алиасы
+// ("info", "warn", "error", "ok", "notice", "debug", "trace", "panic")
+// маппятся 1:1; неизвестное → INFO (не теряем событие).
+func canonLevel(level string) string {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case LevelTrace, LevelDebug, LevelInfo, LevelNotice, LevelOK, LevelWarn, LevelError, LevelPanic:
+		return strings.ToUpper(strings.TrimSpace(level))
+	default:
+		return LevelInfo
+	}
 }
 
 type EventLog struct {
@@ -42,6 +69,7 @@ func (l *EventLog) Add(level, kind, msg string) {
 func (l *EventLog) AddDev(level, kind, msg, device string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	level = canonLevel(level)
 	now := time.Now()
 	key := kind + "|" + msg
 	if last, ok := l.dedp[key]; ok && now.Sub(last) < 3*time.Second {
@@ -78,10 +106,10 @@ func (l *EventLog) Counts() (info, warn, errs int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for i := 0; i < l.size; i++ {
-		switch l.ring[i].Level {
-		case "warn":
+		switch canonLevel(l.ring[i].Level) {
+		case LevelWarn:
 			warn++
-		case "error":
+		case LevelError, LevelPanic:
 			errs++
 		default:
 			info++

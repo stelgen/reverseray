@@ -96,9 +96,8 @@ internal fun MainActivity.buildUpdatePage(): View {
         setPadding(0, dp(4), 0, dp(4))
     }
     modulesCard.addView(modulesInfoView)
-    modulesCard.addView(filled(R.string.modules_check_now).apply {
-        setOnClickListener { syncModulesAsync(force = true) }
-    })
+    // v1.8.8: кнопка «Обновить модули» упразднена — их обновляет ЕДИНАЯ
+    // кнопка «Проверить обновления» ниже (приложение → модули, с логом).
     p.addView(card(modulesCard))
 
     // Авто-проверка — в карточке (UX-канон: единый вид всех переключателей)
@@ -121,7 +120,7 @@ internal fun MainActivity.buildUpdatePage(): View {
     p.addView(
         row(
             filled(R.string.update_check).apply {
-                setOnClickListener { checkForUpdateAsync(showIfUpToDate = true) }
+                setOnClickListener { checkAllUpdatesAsync() }
             },
         )
     )

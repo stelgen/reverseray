@@ -10,10 +10,14 @@ package dev.stelgen.reverseray.core
  * Чистая логика без IO и логов (логирует клиент по PSW_FLUSHED) — тестируема
  * юнит-тестами без соединения. Потокобезопасно: park/offer/unpark/close из
  * разных потоков (помпы стримов/UDP, reader-диспетчер).
+ *
+ * v1.8.8: ReentrantLock+Condition вместо synchronized+wait/notify на
+ * java.lang.Object (Kotlin-канон: java.lang.Object в Kotlin не рекомендован).
  */
 internal class SwitchParking(private val max: Int) {
 
-    private val lock = Any()
+    private val mutex = java.util.concurrent.locks.ReentrantLock()
+    private val notFull: java.util.concurrent.locks.Condition = mutex.newCondition()
     private val queue = java.util.ArrayDeque<RrpFrame>()
     @Volatile private var parked = false
     @Volatile private var closed = false
@@ -23,7 +27,8 @@ internal class SwitchParking(private val max: Int) {
 
     /** Включить паркинг (после ok от сервера; до перехендшейка). */
     fun park() {
-        synchronized(lock) { parked = true }
+        mutex.lock()
+        try { parked = true } finally { mutex.unlock() }
     }
 
     /**
@@ -33,17 +38,20 @@ internal class SwitchParking(private val max: Int) {
      * @throws RrpClientException сессия умерла при ожидании места в очереди.
      */
     fun offer(frame: RrpFrame, isAlive: () -> Boolean): Boolean {
-        synchronized(lock) {
+        mutex.lock()
+        try {
             if (closed) throw RrpClientException(Msgs.NO_CONNECTION.t())
             if (!parked) return false
             while (queue.size >= max) {
                 if (!isAlive()) throw RrpClientException(Msgs.NO_CONNECTION.t())
-                (lock as java.lang.Object).wait(PARK_BLOCK_POLL_MS)
+                notFull.await(PARK_BLOCK_POLL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
                 if (closed) throw RrpClientException(Msgs.NO_CONNECTION.t()) // сессия мертва
                 if (!parked) return false // свитч завершился — обычный путь
             }
             queue.add(frame)
             return true
+        } finally {
+            mutex.unlock()
         }
     }
 
@@ -52,23 +60,29 @@ internal class SwitchParking(private val max: Int) {
      * конвертом). Пустой список — паркинг не был включён.
      */
     fun unpark(): List<RrpFrame> {
-        return synchronized(lock) {
+        mutex.lock()
+        try {
             if (!parked) return emptyList()
             parked = false
             val q = ArrayList(queue)
             queue.clear()
-            (lock as java.lang.Object).notifyAll() // разбудить backpressure-отправителей
-            q
+            notFull.signalAll() // разбудить backpressure-отправителей
+            return q
+        } finally {
+            mutex.unlock()
         }
     }
 
     /** Смерть сессии: очередь очищена, заблокированные отправители выходят с ошибкой. */
     fun close() {
-        synchronized(lock) {
+        mutex.lock()
+        try {
             closed = true
             parked = false
             queue.clear()
-            (lock as java.lang.Object).notifyAll()
+            notFull.signalAll()
+        } finally {
+            mutex.unlock()
         }
     }
 

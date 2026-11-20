@@ -289,7 +289,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	scfg.Logf = func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		a.log.Info(msg, "device", device, "session", sid)
-		a.ev.AddDev("info", "proto", msg, device)
+		a.ev.AddDev(LevelNotice, "proto", msg, device)
 	}
 	// v1.3.0 «буфер трафика»: клиент объявил cap stream-resume в HELLO.
 	if slices.Contains(hello.Caps, "stream-resume") {
@@ -313,7 +313,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	a.met.Reconnects.Add(1)
 	a.log.Info("tunnel ready", "device", device, "session", sid, "transport", transport,
 		"proto", proto, "proto_label", rrp.Label(proto), "proto_ver", rrp.Ver(proto), "camo_label", rrp.CamouflageLabel())
-	a.ev.AddDev("info", "tunnel", "туннель подключён: "+rrp.Label(proto)+" · транспорт "+transport, device)
+	a.ev.AddDev(LevelOK, "tunnel", "туннель подключён: "+rrp.Label(proto)+" · транспорт "+transport, device)
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)

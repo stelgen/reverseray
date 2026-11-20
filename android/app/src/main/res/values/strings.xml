@@ -207,7 +207,6 @@
     <string name="limit_dialog_wait">Wait for reset and connect</string>
 
     <string name="modules_section">Modules</string>
-    <string name="modules_check_now">Update modules</string>
     <string name="modules_up_to_date">Modules are up to date</string>
     <string name="modules_progress">Downloading modules: %1$d%% · %2$s</string>
     <string name="modules_applied">Modules applied: version %1$s, protocols: %2$s</string>
@@ -260,6 +259,7 @@
     <string name="console_live">↧ live</string>
     <string name="console_to_live">↧ to live</string>
     <string name="upd_check_start">Update: checking GitHub Releases · current version %1$s</string>
+    <string name="upd_check_all_start">Update: checking everything (app first, then modules) · current version %1$s</string>
     <string name="upd_check_none">Update: no new releases (or GitHub unreachable)</string>
     <string name="upd_check_available">Update: %1$s is available · APK: %2$s</string>
     <string name="upd_sums_found">Update: release has SHA256SUMS — install only after verification</string>
@@ -382,16 +382,14 @@
     <string name="graph_window">%1$d s</string>
     <string name="btn_timeout">Timeout</string>
     <string name="log_connect_cancelled">Connect cancelled by user</string>
-    <string name="sess_bulk_add">Add all</string>
-    <string name="sess_bulk_title">Import links</string>
+
     <string name="sess_edit">Edit</string>
     <string name="sess_edit_title">Edit: %1$s</string>
     <string name="sess_updated">Server updated</string>
     <string name="sess_off_state">Disabled</string>
     <string name="config_tools_title">Config</string>
     <string name="home_device_title">Device network</string>
-    <string name="sess_bulk_hint">One rrp:// link per line</string>
-    <string name="sess_bulk_result">Added: %1$d · unrecognized: %2$d</string>
+
     <!-- v1.8.4: log level setting (trace..panic) -->
     <string name="set_log_level">Log level</string>
         <string name="lvl_trace">Trace</string>

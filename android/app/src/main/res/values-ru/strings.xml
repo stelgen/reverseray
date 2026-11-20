@@ -207,7 +207,6 @@
     <string name="limit_dialog_wait">Ждать сброса и подключить</string>
 
     <string name="modules_section">Модули</string>
-    <string name="modules_check_now">Обновить модули</string>
     <string name="modules_up_to_date">Модули актуальны</string>
     <string name="modules_progress">Загрузка модулей: %1$d%% · %2$s</string>
     <string name="modules_applied">Модули применены: версия %1$s, протоколы: %2$s</string>
@@ -260,6 +259,7 @@
     <string name="console_live">↧ live</string>
     <string name="console_to_live">↧ к live</string>
     <string name="upd_check_start">Обновление: проверяю GitHub Releases · текущая версия %1$s</string>
+    <string name="upd_check_all_start">Обновление: проверяю всё (сначала приложение, затем модули) · текущая версия %1$s</string>
     <string name="upd_check_none">Обновление: новых релизов нет (или GitHub недоступен)</string>
     <string name="upd_check_available">Обновление: доступен %1$s · APK: %2$s</string>
     <string name="upd_sums_found">Обновление: в релизе есть SHA256SUMS — установка только после сверки</string>
@@ -382,16 +382,14 @@
     <string name="graph_window">%1$d с</string>
     <string name="btn_timeout">Тайм-аут</string>
     <string name="log_connect_cancelled">Подключение отменено владельцем</string>
-    <string name="sess_bulk_add">Добавить все</string>
-    <string name="sess_bulk_title">Импорт ссылок</string>
+
     <string name="sess_edit">Правка</string>
     <string name="sess_edit_title">Правка: %1$s</string>
     <string name="sess_updated">Сервер обновлён</string>
     <string name="sess_off_state">Отключён</string>
     <string name="config_tools_title">Конфиг</string>
     <string name="home_device_title">Сеть телефона</string>
-    <string name="sess_bulk_hint">По одной rrp://-ссылке на строку</string>
-    <string name="sess_bulk_result">Добавлено: %1$d · нераспознано: %2$d</string>
+
     <!-- v1.8.4: настройка уровня журнала (trace..panic) -->
     <string name="set_log_level">Уровень журнала</string>
         <string name="lvl_trace">Трейс</string>

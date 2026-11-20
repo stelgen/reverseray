@@ -200,7 +200,7 @@ object RrpUri {
         for (c in s) {
             if (Character.isISOControl(c)) continue // 0x00-0x1F, 0x7F-0x9F
             if (c.isWhitespace()) continue // все пробельные, включая NBSP/U+2028/U+3000
-            val t = Character.getType(c).toInt()
+            val t = Character.getType(c)
             if (t == Character.FORMAT.toInt()) continue // zero-width, bidi, U+FEFF
             if (t == Character.NON_SPACING_MARK.toInt() || t == Character.ENCLOSING_MARK.toInt()) continue
             sb.append(c)

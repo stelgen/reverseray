@@ -1000,29 +1000,6 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    /**
-     * v1.6.0: пакетный импорт ссылок на «Подключении» (по одной на строку;
-     * бронепарсер чинит мусор сам). Добавляются включёнными — коннект по
-     * кнопке Старт (PRIMARY коннектится всегда, остальные — по enabled).
-     * @return (добавлено, нераспознано).
-     */
-    internal fun addBulkSessions(text: String): Pair<Int, Int> {
-        if (text.isBlank()) return 0 to 0
-        val store = sessionStore()
-        var ok = 0
-        var bad = 0
-        for (raw in text.lines()) {
-            val line = raw.trim()
-            if (line.isEmpty()) continue
-            val created = when (val res = ConfigSource.validate(line)) {
-                is ConfigResult.Valid -> store.add(res.canonical, null, enabled = true)
-                else -> null
-            }
-            if (created != null) ok++ else bad++
-        }
-        return ok to bad
-    }
-
     private fun confirmDeleteSession(id: String) {
         val store = sessionStore()
         val pr = store.byId(id) ?: return

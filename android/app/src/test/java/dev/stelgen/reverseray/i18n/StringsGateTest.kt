@@ -63,7 +63,7 @@ class StringsGateTest {
             f.isAccessible = true
             val msg = f.get(Msgs) as? Msg ?: continue
             if (msg.en.isBlank()) bad += "${f.name}: en is blank"
-            if (msg.ru != null && msg.ru!!.isBlank()) bad += "${f.name}: ru is blank (используй null = фолбэк EN)"
+            if (msg.ru != null && msg.ru.isBlank()) bad += "${f.name}: ru is blank (используй null = фолбэк EN)"
         }
         assertTrue("битые записи каталога: $bad", bad.isEmpty())
     }
@@ -92,7 +92,7 @@ class StringsGateTest {
     fun `format uses US locale regardless of default`() {
         val saved = L10n.lang
         try {
-            Locale.setDefault(Locale("ru", "RU")) // в ru-RU десятичный разделитель — запятая
+            Locale.setDefault(Locale.forLanguageTag("ru-RU")) // в ru-RU десятичный разделитель — запятая
             L10n.lang = Lang.EN
             // String.format(L10n.locale=US): 1.5 → "1.5", не "1,5"
             assertEquals("x = 1.5", Msg("x = %.1f", "x = %.1f").t(1.5))
@@ -113,5 +113,29 @@ class StringsGateTest {
         assertEquals(Lang.EN, L10n.resolve(""))
         assertEquals(Lang.EN, L10n.resolve("de"))
         assertEquals(Lang.EN, L10n.resolve(";&drop table"))
+    }
+
+
+    @Test
+    fun `string resource files have identical key parity across languages`() {
+        // v1.8.8: гейт канона i18n — values/ (EN-канон) и values-ru/ содержат
+        // ИМЕННО один и тот же набор ключей: нет пропавшего/лишнего перевода.
+        val rel = listOf(
+            File("src/main/res/values/strings.xml"),
+            File("app/src/main/res/values/strings.xml"),
+        ).firstOrNull { it.isFile } ?: throw IllegalStateException("strings.xml не найден")
+        val resRoot = rel.parentFile!!.parentFile!! // …/res
+        fun keys(dir: String): Set<String> {
+            val rx = Regex("<string name=\"([^\"]+)\"")
+            return rx.findAll(File(resRoot, "$dir/strings.xml").readText()).map { it.groupValues[1] }.toSet()
+        }
+        val en = keys("values")
+        val ru = keys("values-ru")
+        val onlyEn = en - ru
+        val onlyRu = ru - en
+        assertTrue(
+            "перекос переводов: только в EN=$onlyEn, только в RU=$onlyRu",
+            onlyEn.isEmpty() && onlyRu.isEmpty(),
+        )
     }
 }

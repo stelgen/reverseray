@@ -251,6 +251,39 @@ internal fun MainActivity.maybeAutoConnect() {
 }
 
 
+/**
+ * v1.8.8: ЕДИНАЯ кнопка «Проверить обновления» — проверяет и обновляет ВСЁ:
+ * сначала приложение (проверка → скачивание APK → запрос установки),
+ * затем модули (modules.json) — разом, с полным логом в консоль обновлений.
+ */
+internal fun MainActivity.checkAllUpdatesAsync() {
+    val current = currentVersion()
+    UpdateLogger.add(getString(R.string.upd_check_all_start, current))
+    refreshUpdateConsoleSafe()
+    Thread {
+        // ── 1. Приложение ──
+        val info = UpdateChecker().check(current)
+        if (info != null) {
+            UpdateLogger.add(
+                getString(R.string.upd_check_available, info.latestTag, info.apkUrl.substringAfterLast('/')),
+                LogKind.OK,
+            )
+            if (info.sumsUrl.isNotEmpty()) {
+                UpdateLogger.add(getString(R.string.upd_sums_found), LogKind.OK)
+            } else {
+                UpdateLogger.add(getString(R.string.upd_sums_missing), LogKind.WARN)
+            }
+            downloadUpdate(info)
+        } else {
+            UpdateLogger.add(getString(R.string.upd_check_none), LogKind.OK)
+            runOnUiThread { Toast.makeText(this, R.string.update_latest, Toast.LENGTH_SHORT).show() }
+        }
+        // ── 2. Модули (после приложения; параллельно догружаются) ──
+        syncModulesAsync(force = true)
+    }.apply { isDaemon = true }.start()
+}
+
+
 internal fun MainActivity.checkForUpdateAsync(showIfUpToDate: Boolean) {
     val current = currentVersion()
     UpdateLogger.add(getString(R.string.upd_check_start, current))
@@ -350,6 +383,9 @@ internal fun MainActivity.downloadUpdate(info: UpdateInfo) {
 }
 
 
+// ACTION_INSTALL_PACKAGE deprecated с API 26 — здесь осознанный митигейт:
+// ветка используется на API < 26, где PackageInstaller-фейлсейф недоступен.
+@Suppress("DEPRECATION")
 internal fun MainActivity.installApk(file: File) {
     val uri: Uri = FileProvider.getUriForFile(this, "$packageName.files", file)
     val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
