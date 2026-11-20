@@ -332,7 +332,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.mountAdmin(mux)
 		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		go func() { errCh <- srv.Serve(ul) }()
-		defer func() { srv.Close(); os.Remove(sock) }()
+		defer func() { _ = srv.Close(); _ = os.Remove(sock) }()
 	}
 	if p := os.Getenv("RR_PPROF"); p != "" {
 		m := http.NewServeMux()

@@ -140,7 +140,7 @@ func tai64n() [StampSize]byte {
 }
 
 func tai64nAfter(a, b [StampSize]byte) bool {
-	for i := 0; i < StampSize; i++ {
+	for i := range StampSize {
 		if a[i] != b[i] {
 			return a[i] > b[i]
 		}

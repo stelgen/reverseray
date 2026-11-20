@@ -1,0 +1,48 @@
+# golangci-lint v2 — Фаза 1 (v1.8.5): curated-гейт вместо «включено всё».
+# Канон: `default: none` + явный набор — новые линтеры не врываются в код
+# сами (анти-деградация: включение = координированный коммит с правками).
+# Локально: `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...`
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck        # необработанные ошибки
+    - govet           # canonical vet-набор (вкл. stdversion на Go 1.27)
+    - ineffassign     # бесполезные присваивания
+    - staticcheck     # стагнация/скрытые баги
+  settings:
+    errcheck:
+      # Close-цепочки в протокольном коде: ошибка закрытия после fatal-пути
+      # не влияет на результат обработки — канон допускает игнор
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*os.File).Close
+        - fmt.Fprintf      # метрики/admin-вывод: best-effort по канону
+        - fmt.Fprint
+        - (*net/http.Server).Close  # teardown сервера
+    staticcheck:
+      checks:
+        - all
+        # Легаси-легально (не чистим задним числом, новые файлы — в стиль):
+        - -ST1000   # package comment не обязателен
+        - -ST1003   # caps-аббревиатуры в идентификаторах
+        - -ST1016   # имя ресивера консистентно внутри ТИПА — канон st.mu/s.mu не трогаем
+        - -ST1020   # комментарий на экспортируемой функции
+        - -ST1021   # комментарий на экспортируемом типе
+        - -ST1022   # комментарий на экспортируемой переменной
+        - -ST1023   # omit type в var-декларации — style-churn
+        - -QF1001   # De Morgan — style-churn
+        - -QF1003   # tagged switch — style-churn
+        - -QF1011   # omit type — style-churn
+  exclusions:
+    generated: lax
+    rules:
+      # Тесты: errcheck шумит на defer-закрытиях фикстур
+      - path: _test\.go
+        linters: [errcheck]
+
+formatters:
+  enable:
+    - gofmt

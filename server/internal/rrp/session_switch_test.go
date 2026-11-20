@@ -81,7 +81,7 @@ func shaOrdered(payloads [][]byte) []byte {
 // expectedOrdered — SHA-256 ожидаемого набора (та же конструкция).
 func expectedOrdered(n int) []byte {
 	payloads := make([][]byte, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		payloads = append(payloads, switchPayload(i, []byte(fmt.Sprintf("chunk-%d", i))))
 	}
 	return shaOrdered(payloads)
@@ -211,11 +211,11 @@ func TestSessionSwitchNoLoss(t *testing.T) {
 	const workers = 8
 	const per = 100
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < per; i++ {
+			for i := range per {
 				idx := w*per + i
 				sess.writeAsync(&Frame{Type: TypeData, StreamID: 7, Payload: switchPayload(idx, []byte(fmt.Sprintf("chunk-%d", idx)))})
 			}
@@ -267,11 +267,11 @@ func TestSessionSwitchParkSurvivesSlowClient(t *testing.T) {
 
 	// пишем кадры во время паркинга (в т.ч. за 600мс до коммита)
 	var wg sync.WaitGroup
-	for w := 0; w < 4; w++ {
+	for w := range 4 {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < 25; i++ {
+			for i := range 25 {
 				idx := w*25 + i
 				sess.writeAsync(&Frame{Type: TypeData, StreamID: 7, Payload: switchPayload(idx, []byte(fmt.Sprintf("chunk-%d", idx)))})
 			}

@@ -182,7 +182,7 @@ class SessionStore(private val backend: Backend) {
      */
     fun remove(id: String): Boolean = synchronized(lock) {
         val list = readProfiles().toMutableList()
-        val victim = list.firstOrNull { it.id == id } ?: return@synchronized false
+        if (list.none { it.id == id }) return@synchronized false
         list.removeAll { it.id == id }
         writeProfiles(list)
         if (activeId() == id) {
@@ -312,7 +312,7 @@ internal object SessionJson {
 
         fun value(): Any? {
             ws()
-            if (i >= s.length) throw IllegalArgumentException("eof")
+            require(i < s.length) { "eof" }
             return when (s[i]) {
                 '{' -> obj()
                 '[' -> arr()
@@ -325,7 +325,7 @@ internal object SessionJson {
         }
 
         fun expect(w: String) {
-            if (!s.startsWith(w, i)) throw IllegalArgumentException("at $i")
+            require(s.startsWith(w, i)) { "at $i" }
             i += w.length
         }
 
@@ -338,11 +338,11 @@ internal object SessionJson {
                 ws()
                 val k = str()
                 ws()
-                if (i >= s.length || s[i] != ':') throw IllegalArgumentException("at $i")
+                require(i < s.length && s[i] == ':') { "at $i" }
                 i++
                 m[k] = value()
                 ws()
-                if (i >= s.length) throw IllegalArgumentException("at $i")
+                require(i < s.length) { "at $i" }
                 when (s[i]) {
                     ',' -> i++
                     '}' -> { i++; return m }
@@ -359,7 +359,7 @@ internal object SessionJson {
             while (true) {
                 l.add(value())
                 ws()
-                if (i >= s.length) throw IllegalArgumentException("at $i")
+                require(i < s.length) { "at $i" }
                 when (s[i]) {
                     ',' -> i++
                     ']' -> { i++; return l }
@@ -369,11 +369,11 @@ internal object SessionJson {
         }
 
         fun str(): String {
-            if (i >= s.length || s[i] != '"') throw IllegalArgumentException("at $i")
+            require(i < s.length && s[i] == '"') { "at $i" }
             i++
             val sb = StringBuilder()
             while (true) {
-                if (i >= s.length) throw IllegalArgumentException("eof in string")
+                require(i < s.length) { "eof in string" }
                 val c = s[i]
                 when {
                     c == '"' -> { i++; return sb.toString() }
@@ -384,7 +384,7 @@ internal object SessionJson {
         }
 
         fun esc(): Char {
-            if (i >= s.length) throw IllegalArgumentException("eof in escape")
+            require(i < s.length) { "eof in escape" }
             val c = s[i]
             i++
             return when (c) {
@@ -397,7 +397,7 @@ internal object SessionJson {
                 '\\' -> '\\'
                 '"' -> '"'
                 'u' -> {
-                    if (i + 4 > s.length) throw IllegalArgumentException("eof in uXXXX")
+                    require(i + 4 <= s.length) { "eof in uXXXX" }
                     val hex = s.substring(i, i + 4)
                     i += 4
                     hex.toInt(16).toChar()
@@ -412,7 +412,7 @@ internal object SessionJson {
                 (s[i].isDigit() || s[i] == '-' || s[i] == '+' || s[i] == '.' || s[i] == 'e' || s[i] == 'E')
             ) i++
             val t = s.substring(start, i)
-            if (t.isEmpty()) throw IllegalArgumentException("at $start")
+            require(t.isNotEmpty()) { "at $start" }
             return if (t.contains('.') || t.contains('e') || t.contains('E')) {
                 t.toDouble()
             } else {

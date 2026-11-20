@@ -39,6 +39,7 @@ import org.bouncycastle.tls.TlsFatalAlert
 import org.bouncycastle.tls.TlsServerCertificate
 import org.bouncycastle.tls.crypto.TlsCrypto
 import org.bouncycastle.tls.crypto.impl.bc.BcTlsCrypto
+import java.util.Locale
 
 /** Ошибка клиента RRP (TCP/TLS/handshake/соединение). */
 open class RrpClientException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -700,7 +701,7 @@ class RrpClient(
         if (state != State.READY) return false
         if (pendingSwitchTarget != null) return false // v1.8.4: свитч уже в полёте
         val nonce = ByteArray(8).also { rnd.nextBytes(it) }
-            .joinToString("") { String.format("%02x", it) }
+            .joinToString("") { String.format(Locale.ROOT, "%02x", it) }
         protoSwitchNonce = nonce
         protoSwitchAck = null
         pendingSwitchTarget = target
@@ -1432,7 +1433,7 @@ class RrpClient(
     private fun RrpFrame.rawHex(): String {
         val p = try { encode().copyOfRange(RrpFrame.HEADER_SIZE, encode().size) } catch (e: Exception) { ByteArray(0) }
         val n = minOf(64, p.size)
-        return p.take(n).joinToString(" ") { String.format("%02x", it) } + if (p.size > n) "…" else ""
+        return p.take(n).joinToString(" ") { String.format(Locale.ROOT, "%02x", it) } + if (p.size > n) "…" else ""
     }
 
     internal fun closeQuietly(c: Socket?) {

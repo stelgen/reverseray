@@ -2,6 +2,7 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.detekt)
 }
 
 android {
@@ -16,7 +17,7 @@ android {
         // или дефолтом для локальной разработки; versionCode ВЫВОДИТСЯ из семвера
         // (major*1M + minor*1K + patch) — растёт с КАЖДЫМ релизом автоматически,
         // даже если APK-код не менялся (требование: цифра бежит в каждом релизе).
-        val releaseVersion: String = (project.findProperty("versionName") as String?) ?: "1.8.4"
+        val releaseVersion: String = (project.findProperty("versionName") as String?) ?: "1.8.5"
         val (maj, min, pat) = releaseVersion.removePrefix("v").split('.').map { it.toIntOrNull() ?: 0 }
         versionCode = maj * 1_000_000 + min * 1_000 + pat
         versionName = releaseVersion
@@ -147,4 +148,11 @@ kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+}
+
+// Фаза 1 (v1.8.5): стат-анализ Kotlin. Конфиг-барьеры: android/config/detekt/detekt.yml
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(files("$rootDir/config/detekt/detekt.yml"))
+    parallel = true
 }

@@ -343,7 +343,7 @@ func (sh *ServerHandshake) Respond(init []byte, rnd func([]byte) (int, error)) (
 	req3 := sha1Sum([]byte("req3"), sh.s[:])
 	req2Want := sha1Sum([]byte("req2"), sh.skey[:])
 	got := make([]byte, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got[i] = init[off+20+i] ^ req3[i]
 	}
 	if subtle.ConstantTimeCompare(got, req2Want) != 1 {

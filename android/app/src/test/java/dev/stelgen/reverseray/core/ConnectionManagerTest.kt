@@ -35,13 +35,13 @@ class ConnectionManagerTest {
         var failOnStart = false
 
         override fun start() {
-            if (failOnStart) throw RuntimeException("boom-$sessionId")
+            if (failOnStart) error("boom-$sessionId")
             running = true
             shared.started.incrementAndGet()
         }
 
         override fun stop() {
-            if (shared.throwOnStop.remove(sessionId)) throw RuntimeException("stop-throw-$sessionId")
+            if (shared.throwOnStop.remove(sessionId)) error("stop-throw-$sessionId")
             running = false
             shared.stopped.incrementAndGet()
         }
@@ -169,7 +169,7 @@ class ConnectionManagerTest {
         val failing = object : ConnectionManager.Owner by h {
             override fun createWorker(profile: SessionStore.Profile, sessionId: String): ConnectionManager.Worker {
                 return object : ConnectionManager.Worker by FakeWorker(h.shared, sessionId) {
-                    override fun start() = throw RuntimeException("boom")
+                    override fun start() = error("boom")
                 }
             }
         }

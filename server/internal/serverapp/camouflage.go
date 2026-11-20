@@ -8,6 +8,7 @@ package serverapp
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -28,9 +29,7 @@ func (a *App) setCamouflageOverride(device string, enabled bool) {
 		a.camoOff[device] = true
 	}
 	over := make(map[string]bool, len(a.camoOff))
-	for k, v := range a.camoOff {
-		over[k] = v
-	}
+	maps.Copy(over, a.camoOff)
 	a.camoMu.Unlock()
 	a.persistCamouflage(over)
 	a.log.Info("camouflage choice by client (persisted)", "device", device, "enabled", enabled)
@@ -59,9 +58,7 @@ func (a *App) CamouflageOverrides() map[string]bool {
 		return nil
 	}
 	out := make(map[string]bool, len(a.camoOff))
-	for k, v := range a.camoOff {
-		out[k] = v
-	}
+	maps.Copy(out, a.camoOff)
 	return out
 }
 

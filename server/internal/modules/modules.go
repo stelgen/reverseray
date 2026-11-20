@@ -32,7 +32,7 @@ type Manifest struct {
 	Version   string          `json:"version"`
 	Updated   string          `json:"updated"`
 	Protocols []ProtocolEntry `json:"protocols"`
-	Policy    Policy          `json:"policy,omitempty"`
+	Policy    Policy          `json:"policy"`
 	// Camouflage — секция модуля камуфляжа «API Mask» (v0.8.2, id apimask).
 	// Отсутствие секции = модуль выключен (nil). Один и тот же JSON парсит
 	// и Kotlin (dev.stelgen.reverseray.core.Modules) — менять синхронно.

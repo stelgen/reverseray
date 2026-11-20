@@ -1,3 +1,4 @@
+@file:Suppress("MatchingDeclarationName") // файл держит также top-level-хелперы рядом с главным типом
 // TunnelLimit.kt — зона «Лимит трафика: ожидание сброса, учёт, Wi-Fi-гейт» (pure move из TunnelService.kt, v1.8.3: дробление по зонам ответственности;
 // поведение не меняется, члены private→internal — тот же пакет).
 package dev.stelgen.reverseray.service

@@ -159,7 +159,7 @@ func TestMSEWrongSKEYRejected(t *testing.T) {
 func TestPieceEnvelopePlausible(t *testing.T) {
 	skey := SKEY(bytes.Repeat([]byte{3}, 32))
 	cTr, sTr := runHandshake(t, skey, detRand(11), detRand(12))
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		plain := bytes.Repeat([]byte{0xEE}, 1000+i)
 		box, err := cTr.Seal(plain)
 		if err != nil {

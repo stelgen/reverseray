@@ -235,7 +235,7 @@ object Wg {
      */
     fun newClientHandshake(
         serverPub: ByteArray,
-        psk: ByteArray,
+        @Suppress("UnusedParameter") psk: ByteArray, // канон: WG-PSK не поддерживается; параметр — контракт межъязыкового KAT
         injectClientStatic: KeyPair? = null,
         injectEph: KeyPair? = null,
         injectSender: Long? = null,
@@ -286,7 +286,7 @@ object Wg {
     class Transport(
         private val sendKey: ByteArray,
         private val recvKey: ByteArray,
-        private val sendIdx: Long, // наш sender_index
+        @Suppress("UnusedPrivateProperty") private val sendIdx: Long, // наш sender_index (метаданные handshake; приёмник не использует)
         private val recvIdx: Long, // sender_index пира
     ) {
         private val sendCtr = AtomicLong(0)

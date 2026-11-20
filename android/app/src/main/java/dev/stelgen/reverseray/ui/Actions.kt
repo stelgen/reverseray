@@ -96,7 +96,7 @@ internal fun MainActivity.handleMainButtonPress() {
     }
     if (now - lastStartPressMs < 700) return
     lastStartPressMs = now
-    if (now - lastStopPressMs < START_COOLDOWN_MS) {
+    if (now - lastStopPressMs < MainActivity.START_COOLDOWN_MS) {
         // раздрай: краткий неактив только для СТАРТА — визуальный намёк
         bigButton.animate().cancel()
         bigButton.animate().alpha(0.55f).setDuration(120).withEndAction {
@@ -166,7 +166,7 @@ internal fun MainActivity.setUiState(state: String) {
     // (попытки НЕ прекращаются: сервер/сеть медленные — это индикация, не сбой).
     connectTimeoutHandler.removeCallbacks(connectTimeoutRunnable)
     if (mode == Mode.CONNECTING) {
-        connectTimeoutHandler.postDelayed(connectTimeoutRunnable, CONNECT_TIMEOUT_MS)
+        connectTimeoutHandler.postDelayed(connectTimeoutRunnable, MainActivity.CONNECT_TIMEOUT_MS)
     }
 }
 
@@ -297,7 +297,11 @@ internal fun MainActivity.syncUiFromService() {
     refreshConnLine()
     // v1.5.1: история графика живёт в GraphHistory (пишется ВСЕГДА:
     // и туннелем, и общесистемным сэмплером) — восстанавливаем из неё
-    val (rxBuf, txBuf, head, valid) = GraphHistory.snapshot()
+    val snap = GraphHistory.snapshot()
+    val rxBuf = snap.rx
+    val txBuf = snap.tx
+    val head = snap.head
+    val valid = snap.valid
     val inter = FloatArray(GraphHistory.CAPACITY * 2)
     for (i in 0 until GraphHistory.CAPACITY) {
         inter[i * 2] = rxBuf[i]

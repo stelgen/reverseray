@@ -1,0 +1,74 @@
+# Фаза 1/2 (v1.8.5): стат-анализ Kotlin — «maxIssues: 0» + барьеры роста.
+# Философия как у .golangci.yml: гейт не должен болеть на текущем коде,
+# но ЛЮБОЕ ухудшение метрики (длина/сложность/размер гигантов) роняет сборку.
+# Пороги выставлены по замерам текущего кода (detekt.txt, релиз v1.8.5);
+# снижение порога = осознанный рефакторинг в отдельном PR.
+build:
+  maxIssues: 0
+
+complexity:
+  TooManyFunctions:
+    active: true
+    thresholdInFiles: 55      # барьер: TunnelService/RrpClient ~50-54 функций
+    thresholdInClasses: 45
+    thresholdInInterfaces: 25
+    thresholdInObjects: 35
+    thresholdInEnums: 20
+    ignoreDeprecated: true
+    ignorePrivate: true
+    ignoreOverridden: true
+  LongMethod:
+    active: true
+    threshold: 242            # барьер: max сейчас 241 (dispatch) — длиньше нельзя
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 60             # барьер: max сейчас 59
+  NestedBlockDepth:
+    active: true
+    threshold: 5              # барьер: max сейчас 4 (флаг при >=4 → 5 с запасом ветвлений)
+  LargeClass:
+    active: true
+    threshold: 966            # барьер: max сейчас 965 строк
+  LongParameterList:
+    active: true
+    functionThreshold: 15     # барьер: max сейчас 15 (RrpClient-конструктор)
+    constructorThreshold: 16
+  ComplexCondition:
+    active: true
+    threshold: 9              # барьер: max сейчас 8
+
+style:
+  ThrowsCount:
+    active: true
+    max: 17           # барьер: max сейчас 17 (RrpClient.connect); валидаторы 9-10
+  # Дисейблим шум, который ломается об UI/стейт-машинный канон проекта:
+  MagicNumber:
+    active: false             # dp/sp/int-ресурсы UI — константная дисциплина уже в коде
+  MaxLineLength:
+    active: false             # стиль прождёт ktlint (отдельная фаза)
+  ReturnCount:
+    active: false
+  NewLineAtEndOfFile:
+    active: false
+  LoopWithTooManyJumpStatements:
+    active: false             # парсеры/стейт-машины (parseFlat, pumpOutgoing) — канон
+
+empty-blocks:
+  EmptyFunctionBlock:
+    active: false             # no-op override-канон: NoopWorker, TabBar-листенеры, TrustManager-заглушки
+
+naming:
+  VariableNaming:
+    active: true              # константы класса → const в companion; локальные → camelCase
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false             # catch(Exception) в JNI/IO-слоях — канон проекта
+  SwallowedException:
+    active: false
+  TooGenericExceptionThrown:
+    active: false             # тест-стабы и «ожидаемо-generic» throw в конфиг-валидации
+
+coroutines:
+  GlobalCoroutineUsage:
+    active: true              # GlobalScope вне тестов = гейт

@@ -173,7 +173,7 @@ func TestOutstandBalancedDownload(t *testing.T) {
 
 	deadline := time.Now().Add(60 * time.Second)
 	const chunks, size = 3, 64 * 1024
-	for i := 0; i < chunks; i++ {
+	for i := range chunks {
 		if !p.sendChunk(size, deadline) {
 			t.Fatalf("phone send %d failed", i)
 		}
@@ -309,7 +309,7 @@ func TestAutotuneStallStopsGrowthNoKill(t *testing.T) {
 	// Фаза затора: шлём БЕЗ чтения. Рост обязан остановиться (окно выдаётся
 	// только на Read при пустом буфере); стрим обязан выжить — буфер вмещает
 	// грант, kill(4) при честном flow-control невозможен.
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		if !p.sendChunk(64*1024, time.Now().Add(10*time.Second)) {
 			break
 		}
@@ -335,7 +335,7 @@ func TestOpenBudgetBlocksAndRecovers(t *testing.T) {
 	defer st.Close()
 
 	deadline := time.Now().Add(60 * time.Second)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if !p.sendChunk(64*1024, deadline) {
 			break
 		}
@@ -413,7 +413,7 @@ func TestPushInKillsProtocolViolator(t *testing.T) {
 	id := p.streamID
 	big := make([]byte, 64*1024)
 	// 1МБ буфера + запас: 24 чанка по 64К без чтения.
-	for i := 0; i < 24; i++ {
+	for range 24 {
 		if err := WriteFrame(p.c, TypeData, 0, id, big); err != nil {
 			break
 		}

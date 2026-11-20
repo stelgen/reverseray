@@ -254,7 +254,7 @@ func (c *WsConn) writeFrame(opcode byte, payload []byte) error {
 	var hdr [10]byte
 	hdr[0] = 0x80 | opcode // FIN + opcode, сервер не маскирует
 	n := len(payload)
-	i := 1
+	var i int // присваивается в каждой ветке switch ниже
 	switch {
 	case n < 126:
 		hdr[1] = byte(n)

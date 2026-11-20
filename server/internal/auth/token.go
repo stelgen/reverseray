@@ -226,10 +226,7 @@ func (s *Store) ReportFailure(ip string) bool { // returns true if now locked
 	}
 	a.fails++
 	if a.fails >= maxFailsBeforeLock {
-		shift := a.fails - maxFailsBeforeLock
-		if shift > 5 {
-			shift = 5
-		}
+		shift := min(a.fails-maxFailsBeforeLock, 5)
 		a.lockUnt = time.Now().Add((30 << shift) * time.Second) // 30s..10min
 		return true
 	}

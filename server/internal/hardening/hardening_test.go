@@ -106,7 +106,8 @@ func TestParseTarpitSec(t *testing.T) {
 
 func TestConnLimit(t *testing.T) {
 	l := &ConnLimit{Max: 2}
-	if !l.Admit() || !l.Admit() {
+	a1, a2 := l.Admit(), l.Admit()
+	if !a1 || !a2 {
 		t.Fatal("первые два должны проходить")
 	}
 	if l.Admit() {

@@ -161,21 +161,21 @@ func (in *Inbound) socks5(c net.Conn, br *bufio.Reader) bool {
 		return false
 	case socksCmdConnect:
 	default: // BIND и прочее не поддерживаем
-		c.Write([]byte{5, 0x07, 0, 1, 0, 0, 0, 0, 0, 0})
+		_, _ = c.Write([]byte{5, 0x07, 0, 1, 0, 0, 0, 0, 0, 0})
 		return false
 	}
 	atyp, addr, port, err := readSocksTarget(br, head[3])
 	if err != nil {
-		c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
+		_, _ = c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
 		return false
 	}
 	dst, err := in.dial(c, atyp, addr, port)
 	if err != nil {
-		c.Write([]byte{5, socksErr(err), 0, 1, 0, 0, 0, 0, 0, 0})
+		_, _ = c.Write([]byte{5, socksErr(err), 0, 1, 0, 0, 0, 0, 0, 0})
 		return false
 	}
 	// Success reply.
-	c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 	wasParked := in.relayStream(c, dst)
 	dst.Close()
 	return wasParked
@@ -206,10 +206,10 @@ func (in *Inbound) socksAuth(c net.Conn, br *bufio.Reader) error {
 	wantAuth := in.Username != "" || in.Password != ""
 	if wantAuth {
 		if !hasUserPass {
-			c.Write([]byte{5, 0xFF})
+			_, _ = c.Write([]byte{5, 0xFF})
 			return errors.New("auth required but not offered")
 		}
-		c.Write([]byte{5, 0x02})
+		_, _ = c.Write([]byte{5, 0x02})
 		ver := make([]byte, 2) // ver, ulen
 		if _, err := io.ReadFull(br, ver); err != nil {
 			return err
@@ -228,18 +228,18 @@ func (in *Inbound) socksAuth(c net.Conn, br *bufio.Reader) error {
 		}
 		ok := subtleEqual(string(user), in.Username) && subtleEqual(string(pass), in.Password)
 		if ok {
-			c.Write([]byte{1, 0})
+			_, _ = c.Write([]byte{1, 0})
 		} else {
-			c.Write([]byte{1, 1})
+			_, _ = c.Write([]byte{1, 1})
 			return errors.New("bad credentials")
 		}
 		return nil
 	}
 	if !hasNoAuth {
-		c.Write([]byte{5, 0xFF})
+		_, _ = c.Write([]byte{5, 0xFF})
 		return errors.New("no acceptable auth method")
 	}
-	c.Write([]byte{5, 0x00})
+	_, _ = c.Write([]byte{5, 0x00})
 	return nil
 }
 
@@ -281,39 +281,39 @@ func (in *Inbound) http(c net.Conn, br *bufio.Reader) bool {
 	if in.Username != "" || in.Password != "" {
 		u, p, ok := proxyBasicAuth(req)
 		if !ok || !subtleEqual(u, in.Username) || !subtleEqual(p, in.Password) {
-			c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"reverseray\"\r\n\r\n"))
+			_, _ = c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"reverseray\"\r\n\r\n"))
 			return false
 		}
 	}
 	if req.Method == http.MethodConnect {
 		host, portS, err := net.SplitHostPort(req.Host)
 		if err != nil {
-			c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 			return false
 		}
 		port, err := strconv.ParseUint(portS, 10, 16)
 		if err != nil {
-			c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 			return false
 		}
 		atyp, addr, aerr := encodeHost(host)
 		if aerr != nil {
-			c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+			_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 			return false
 		}
 		dst, derr := in.dial(c, atyp, addr, uint16(port))
 		if derr != nil {
-			c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+			_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 			return false
 		}
-		c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		_, _ = c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 		wasParked := in.relayStream(c, dst)
 		dst.Close()
 		return wasParked
 	}
 	// Absolute-URI plain proxy (GET/POST ...). One request per connection.
 	if req.URL.Host == "" {
-		c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+		_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 		return false
 	}
 	host := req.URL.Hostname()
@@ -327,13 +327,13 @@ func (in *Inbound) http(c net.Conn, br *bufio.Reader) bool {
 	}
 	atyp, addr, aerr := encodeHost(host)
 	if aerr != nil {
-		c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return false
 	}
 	p64, _ := strconv.ParseUint(port, 10, 16)
 	dst, derr := in.dial(c, atyp, addr, uint16(p64))
 	if derr != nil {
-		c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return false
 	}
 	defer dst.Close()
@@ -452,7 +452,9 @@ func (in *Inbound) relayStream(c, dst net.Conn) bool {
 		}
 	}()
 
-	<-done
+	if err := <-done; err != nil {
+		in.logf("pump exit: %v", err)
+	}
 	if ps.Load() != nil {
 		// Паркинг состоялся: вторая горутина живёт как pump буфера, владение
 		// c у него — не ждём и не закрываем.
@@ -460,7 +462,9 @@ func (in *Inbound) relayStream(c, dst net.Conn) bool {
 	}
 	_ = dst.Close()
 	_ = c.Close()
-	<-done
+	if err := <-done; err != nil {
+		in.logf("second pump exit: %v", err)
+	}
 	return false
 }
 
@@ -493,11 +497,11 @@ func proxyBasicAuth(r *http.Request) (string, string, bool) {
 	if err != nil {
 		return "", "", false
 	}
-	i := bytes.IndexByte(dec, ':')
-	if i < 0 {
+	before, after, ok := bytes.Cut(dec, []byte{':'})
+	if !ok {
 		return "", "", false
 	}
-	return string(dec[:i]), string(dec[i+1:]), true
+	return string(before), string(after), true
 }
 
 func subtleEqual(a, b string) bool {

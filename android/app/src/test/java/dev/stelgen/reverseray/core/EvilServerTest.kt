@@ -71,7 +71,6 @@ private class EvilServer(
     val pin: String
 
     private val sslServer: SSLServerSocket
-    private val accepted = CountDownLatch(1)
 
     val port: Int get() = sslServer.localPort
 
@@ -378,6 +377,7 @@ class EvilServerTest {
 }
 
 /** Верхний уровень: доступен и EvilServerTest, и TofuTest. */
+@Suppress("UnusedParameter") // канон: заглушка-«сервер» не использует сокет клиента
 fun serverHandshake(conn: Socket, inp: DataInputStream, out: Sender) {
     val s = readFrame(inp) ?: return
     check(s.first == RrpFrame.TYPE_HELLO.toByte()) { "expected HELLO" }

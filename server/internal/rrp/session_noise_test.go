@@ -117,7 +117,7 @@ func TestSessionNoiseRateLimit(t *testing.T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	allowed := 0
-	for i := 0; i < noiseRate+25; i++ {
+	for i := range noiseRate + 25 {
 		if s.noiseAllows(base.Add(time.Duration(i) * 10 * time.Millisecond)) {
 			allowed++
 		}

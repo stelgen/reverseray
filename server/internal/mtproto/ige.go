@@ -35,11 +35,11 @@ func (c *igeCrypt) encryptIGE(data, iv []byte) []byte {
 	buf := make([]byte, aes.BlockSize)
 	for i := 0; i < len(data); i += aes.BlockSize {
 		blk := data[i : i+aes.BlockSize]
-		for j := 0; j < aes.BlockSize; j++ {
+		for j := range aes.BlockSize {
 			buf[j] = blk[j] ^ x[j]
 		}
 		c.block.Encrypt(buf, buf)
-		for j := 0; j < aes.BlockSize; j++ {
+		for j := range aes.BlockSize {
 			out[i+j] = buf[j] ^ y[j]
 		}
 		copy(x, out[i:i+aes.BlockSize])
@@ -62,11 +62,11 @@ func (c *igeCrypt) decryptIGE(data, iv []byte) []byte {
 	buf := make([]byte, aes.BlockSize)
 	for i := 0; i < len(data); i += aes.BlockSize {
 		blk := data[i : i+aes.BlockSize]
-		for j := 0; j < aes.BlockSize; j++ {
+		for j := range aes.BlockSize {
 			buf[j] = blk[j] ^ y[j]
 		}
 		c.block.Decrypt(buf, buf)
-		for j := 0; j < aes.BlockSize; j++ {
+		for j := range aes.BlockSize {
 			out[i+j] = buf[j] ^ x[j]
 		}
 		copy(x, blk)

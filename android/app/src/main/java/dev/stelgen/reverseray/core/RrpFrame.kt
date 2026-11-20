@@ -812,7 +812,7 @@ internal object MiniJson {
                     c == '"' -> return sb.toString()
                     c == '\\' -> {
                         if (i >= s.length) return null
-                        when (val e = s[i++]) {
+                        when (s[i++]) {
                             '"' -> sb.append('"')
                             '\\' -> sb.append('\\')
                             '/' -> sb.append('/')

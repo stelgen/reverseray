@@ -49,7 +49,7 @@ func TestWrongTokenFails(t *testing.T) {
 func TestRateLimitAndLockout(t *testing.T) {
 	s := New()
 	ip := "203.0.113.7"
-	for i := 0; i < defaultHandshakesPerMin; i++ {
+	for i := range defaultHandshakesPerMin {
 		if !s.AllowHandshake(ip) {
 			t.Fatalf("attempt %d must pass", i)
 		}
@@ -65,7 +65,7 @@ func TestRateLimitAndLockout(t *testing.T) {
 	}
 
 	locked := false
-	for i := 0; i < maxFailsBeforeLock; i++ {
+	for range maxFailsBeforeLock {
 		locked = s.ReportFailure(ip)
 	}
 	if !locked {

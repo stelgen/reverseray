@@ -2,6 +2,43 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.8.5] — 2026-11-20
+
+### Изменено
+- **Гейты стат-анализа зелёные (Фаза 1, ключевое)**:
+  - Go: `golangci-lint v2.15.0` (`default: none`; errcheck, govet, ineffassign,
+    staticcheck) — 0 issues; ~29 честных правок best-effort ошибок
+    (`_, _ = c.Write`, `_ = p.write`, `defer func() { _ = sock.Close() }()`
+    и т.п.), exception-лист для best-effort `fmt.Fprint*` и `http.Server.Close`.
+  - Kotlin: `detekt 1.23.8` подключён в gradle (`libs.versions.toml` + плагин
+    в `:app`), конфиг `android/config/detekt/detekt.yml` с **барьерными
+    порогами** по текущим максимумам (LongMethod 242, Cyclomatic 60,
+    LargeClass 966, NestedBlockDepth 5, LongParameterList 16, ComplexCondition 9,
+    ThrowsCount 17, TooManyFunctions 55): сейчас проходит, любое ухудшение
+    метрик роняет сборку. 152 → **0 issues**.
+- **Чистка dead-code и идиоматика Kotlin** (в рамках detekt):
+  удалены неиспользуемые `showRenameSessionDialog`, `configEditDebounce`,
+  `restartRunnersQuietly`, `apimaskDefaultPolicy`, `BAL_TICK_MS`, `accepted`;
+  `Formats.uptime(ctx, ms)` → `uptime(ms)`; `runLoop(r, proto)` → `runLoop(r)`
+  (протокол перечитывается из профиля на каждой итерации);
+  SessionStore JSON-парсер переведён на канон `require(...)` (10 сайтов);
+  `Locale.ROOT` в hex-форматировании (RrpClient ×2, UpdateChecker);
+  константы `CONNECT_TIMEOUT_MS`/`START_COOLDOWN_MS` → `const` в companion;
+  тестовые стабы → `error(...)` вместо generic-throw.
+- **Фаза 2**: `go fix ./...` — 25 строк механической модернизации stdlib
+  (strings.Cut и др.); `govulncheck` — 0 уязвимостей; ADR-0001 (пин AGP 8.7.3 /
+  Kotlin 2.4.21, координация R8).
+
+### Добавлено
+- **Фаза 0 — гейт синхрона доков**: `scripts/docs_sync_check.py` — единая
+  версия тулчейна (go.mod ↔ CI go-version ↔ WORKFLOW.md) и продукта
+  (CHANGELOG ↔ versionName ↔ ROADMAP); рассинхрон роняет сборку.
+- `docs/adr/0001-agp-pin.md`.
+
+### Обслуживание
+- Пин `toolchain go1.27.4` в go.mod, CI и docs синхронизированы;
+  дедуп дубликатов рабочих копий в песочнице (единая копия под serena gopls).
+
 ## [1.8.4] — 2026-11-20
 
 ### Добавлено

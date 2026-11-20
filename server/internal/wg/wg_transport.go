@@ -97,7 +97,7 @@ type replayWindow struct {
 	max    uint64 // старший принятый
 }
 
-func newReplayWindow() *replayWindow { return &replayWindow{max: ^uint64(0)>>1 | 0} }
+func newReplayWindow() *replayWindow { return &replayWindow{max: ^uint64(0) >> 1} }
 
 func (w *replayWindow) check(ctr uint64) bool {
 	switch {
@@ -135,7 +135,7 @@ func (w *replayWindow) advance(shift uint64) {
 	wIdx := int(shift / 64)
 	bShift := shift % 64
 	newBitmap := make([]uint64, len(w.bitmap))
-	for i := 0; i < len(w.bitmap); i++ {
+	for i := range len(w.bitmap) {
 		src := i + wIdx
 		if src < len(w.bitmap) {
 			newBitmap[i] = w.bitmap[src] >> bShift

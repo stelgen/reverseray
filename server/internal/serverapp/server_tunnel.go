@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"time"
 
@@ -151,7 +152,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 		return
 	}
 	sid := rrp.NewID()
-	writeJSONTyped(framed, rrp.TypeHelloOK, &rrp.HelloOK{
+	_ = writeJSONTyped(framed, rrp.TypeHelloOK, &rrp.HelloOK{
 		SessionID: sid,
 		ServerVer: Version,
 		Nonce:     nonce,
@@ -291,11 +292,8 @@ func (a *App) handleTunnel(conn net.Conn) {
 		a.ev.AddDev("info", "proto", msg, device)
 	}
 	// v1.3.0 «буфер трафика»: клиент объявил cap stream-resume в HELLO.
-	for _, c := range hello.Caps {
-		if c == "stream-resume" {
-			scfg.ResumeCapable = true
-			break
-		}
+	if slices.Contains(hello.Caps, "stream-resume") {
+		scfg.ResumeCapable = true
 	}
 	// v0.9.2: честный лог даунгрейда — клиент попросил протокол, заявленный
 	// в реестре, но не исполняемый этой сборкой (модуль прилетел раньше кода).
@@ -307,7 +305,7 @@ func (a *App) handleTunnel(conn net.Conn) {
 	sess := rrp.NewSession(sid, device, framed, scfg)
 	if err := a.hub.Attach(device, sess, a.cfg.Limits.MaxTunnelsPerDevice); err != nil {
 		a.log.Warn("attach rejected", "device", device, "err", err)
-		writeJSONTyped(framed, rrp.TypeHelloOK, map[string]string{"error": err.Error()})
+		_ = writeJSONTyped(framed, rrp.TypeHelloOK, map[string]string{"error": err.Error()})
 		_ = framed.Close()
 		return
 	}

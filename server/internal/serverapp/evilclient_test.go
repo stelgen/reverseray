@@ -109,7 +109,7 @@ func TestEvilUnknownFrameTypeNoPanic(t *testing.T) {
 	// Сервер вправе закрыть коннект после первого же неизвестного типа кадра —
 	// EPIPE/ECONNRESET на последующих записях это норма, а не фейл (флейк на CI).
 	// Суть теста — сервер выжил и не запаниковал: проверяет serverSurvives.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := sendRawHeader(conn, 1, 0x55, uint32(i), 0); err != nil {
 			break
 		}
@@ -214,7 +214,7 @@ func TestPingFloodSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if err := p.WritePing([]byte{byte(i)}); err != nil {
 			t.Fatalf("ping %d: %v", i, err)
 		}
@@ -228,7 +228,7 @@ func TestAuthBruteForceTriggersLockout(t *testing.T) {
 
 	// 5 неверных HMAC -> lockout на IP: даже валидный токен с того же IP
 	// обязан быть отклонён (брутфорс токена бессмыслен)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, _, err := DialPhone(t, cfg.Listen.Tunnels, app.CAPin(), token+"x", "phone-bf",
 			func(host string, port uint16) (net.Conn, error) { return nil, fmt.Errorf("no dial") }); err == nil {
 			t.Fatalf("attempt %d with bad HMAC must fail", i)
@@ -244,7 +244,7 @@ func TestConcurrentGarbageThenLegitClient(t *testing.T) {
 	app, cfg, token := startTestServer(t)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

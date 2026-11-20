@@ -660,7 +660,6 @@ class TunnelService : Service() {
         } catch (_: Exception) {
             return
         }
-        val proto = protoOf(sess.profile.uri)
         for (port in cfg.ports) {
             val r = Runner(Target(cfg.host, port))
             r.sess = sess
@@ -669,7 +668,7 @@ class TunnelService : Service() {
             Thread({
                 runnerStateKey.set(stateKey)
                 try {
-                    runLoop(r, proto)
+                    runLoop(r)
                 } finally {
                     sessionStates.remove(stateKey)
                 }
@@ -955,14 +954,6 @@ class TunnelService : Service() {
     }
 
     /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
-    private fun restartRunnersQuietly() {
-        if (stopping) return
-        // v1.5.0: сессий может быть несколько — перезапускаем все живые
-        val sess = sessById.values.toList()
-        sess.forEach { killRunnersOf(it) }
-        sess.forEach { spawnRunnersFor(it) }
-    }
-
     private fun buildClient(cfg: RrpUriConfig, proto: String, validate: Boolean): RrpClient {
         // v1.0.0: гейт UDP-релея — единая точка для боевого и валидационного клиентов
         val client = RrpClient(
@@ -1018,18 +1009,6 @@ class TunnelService : Service() {
         if (claimedProto() == Apimask.FEATURE) true else null
 
     /** v1.6.0: дефолтная политика шума для proto=apimask (без манифеста). */
-    private fun apimaskDefaultPolicy(): Apimask.NoisePolicy {
-        val cfg = Apimask.Config(Apimask.FEATURE, "API Mask", "1", true, 300, 900, 256 * 1024)
-        val engine = Apimask.Engine(cfg)
-        return Apimask.NoisePolicy(engine) { bytes, used, budget ->
-            if (bytes > 0) {
-                getString(R.string.apimask_beat, cfg.name, bytes, fmtBytes(used), fmtBytes(budget.toLong()))
-            } else {
-                getString(R.string.apimask_budget_done, cfg.name, fmtBytes(used), fmtBytes(budget.toLong()))
-            }
-        }
-    }
-
     /**
      * Управление камуфляжем из GUI (v0.9.5): сохранить выбор + честный лог +
      * немедленный кадр 0x2A живой сессии (если есть); иначе применится при
@@ -1062,7 +1041,7 @@ class TunnelService : Service() {
         "?"
     }
 
-    private fun runLoop(r: Runner, proto: String) {
+    private fun runLoop(r: Runner) {
         var lastError = "?"
         // v0.8.1: подряд идущие неудачи на ТЕКУЩЕМ протоколе (для фоллбека)
         var failStreak = 0
@@ -1568,8 +1547,6 @@ class TunnelService : Service() {
         const val ACTION_SESSION = "dev.stelgen.reverseray.action.SESSION"
         const val EXTRA_SESSION_CMD = "session_cmd" // connect|disconnect|reconnect|probe|primary
         private const val STATS_INTERVAL_MS = 500L
-        /** v0.10: тик умного балансера (5с — только СБОР данных, решение — по гистерезису). */
-        private const val BAL_TICK_MS = 5_000L
         private const val ERROR_HOLD_MS = 1_500L
         private const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
         internal const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту

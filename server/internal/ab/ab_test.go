@@ -146,7 +146,6 @@ func buildPairs(t *testing.T) []abPair {
 // TestAbCorrectnessAllProtocols — корпус в обе стороны через каждый конверт.
 func TestAbCorrectnessAllProtocols(t *testing.T) {
 	for _, p := range buildPairs(t) {
-		p := p
 		t.Run(p.name, func(t *testing.T) {
 			sizes := []int{1, 13, 4096, 65536, p.maxPlain, 65536}
 			for i, n := range sizes {
@@ -266,7 +265,7 @@ func TestAbThroughputBenchmark(t *testing.T) {
 	for _, p := range buildPairs(t) {
 		n := chunks * chunk
 		// прогрев: полный канал клиент → сервер → клиент × 16
-		for i := 0; i < 16; i++ {
+		for range 16 {
 			box, _ := p.client.seal(payload)
 			mid, _ := p.server.open(box)
 			back, _ := p.server.seal(mid)
@@ -275,7 +274,7 @@ func TestAbThroughputBenchmark(t *testing.T) {
 		// throughput по секундомеру: 512 итераций полного канала (конверты
 		// направленные — WG/MTProto ключи асимметричны по направлению, канон)
 		start := time.Now()
-		for i := 0; i < 512; i++ {
+		for range 512 {
 			box, _ := p.client.seal(payload)
 			mid, _ := p.server.open(box)
 			back, _ := p.server.seal(mid)

@@ -38,7 +38,7 @@ func TestCmdEnrollWritesTokensFile(t *testing.T) {
 // Повторный enroll того же устройства обновляет запись, не ломая файл.
 func TestCmdEnrollUpsertSameDevice(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		args := []string{"-state-dir", dir, "-name", "phone-dup", "-host", "203.0.113.9"}
 		if err := cmdEnroll(args); err != nil {
 			t.Fatalf("cmdEnroll #%d: %v", i, err)

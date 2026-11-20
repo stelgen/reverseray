@@ -97,10 +97,7 @@ func (st *stream) pushIn(b []byte) {
 	// v1.2.0: буфер обязан вместить текущее окно (autotune поднимает его выше
 	// стартового), минимум — прежний анти-абьюз 1 МБ; агрегат по устройству
 	// ограничен grantedTotal ≤ Budget.
-	bufCap := int(st.grant)
-	if bufCap < 1<<20 {
-		bufCap = 1 << 20
-	}
+	bufCap := max(int(st.grant), 1<<20)
 	if st.inLen+len(b) > bufCap {
 		st.mu.Unlock()
 		st.sess.writeAsync(&Frame{Type: TypeClose, StreamID: st.id, Payload: EncodeClose(4)})
@@ -192,16 +189,10 @@ func (st *stream) Read(p []byte) (int, error) {
 	grow := int64(0)
 	if n > 0 && st.inLen == 0 && !st.closed {
 		if room := int64(st.sess.cfg.MaxStreamWin) - st.grant; room > 0 {
-			grow = int64(n)
-			if grow > room {
-				grow = room
-			}
+			grow = min(int64(n), room)
 			st.sess.mu.Lock()
 			if st.sess.grantedTotal+grow > st.sess.cfg.Budget {
-				grow = st.sess.cfg.Budget - st.sess.grantedTotal
-				if grow < 0 {
-					grow = 0
-				}
+				grow = max(st.sess.cfg.Budget-st.sess.grantedTotal, 0)
 			}
 			st.sess.grantedTotal += grow
 			st.sess.windowGrow += uint64(grow)

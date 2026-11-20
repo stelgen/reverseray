@@ -183,7 +183,9 @@ object DnsProbe {
         i = skipName(buf, i)
         i += 4 // qtype/qclass
         val texts = mutableListOf<String>()
-        for (a in 0 until anCount) {
+        var rr = 0
+        while (rr < anCount) {
+            rr++
             i = skipName(buf, i) // RR name (может быть указателем)
             if (i + 10 > len) break
             val rtype = ((buf[i].toInt() and 0xFF) shl 8) or (buf[i + 1].toInt() and 0xFF)

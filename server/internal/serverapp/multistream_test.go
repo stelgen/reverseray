@@ -131,7 +131,7 @@ func TestMultiStreamThroughput(t *testing.T) {
 
 	// Одиночный поток: целостность + базовая скорость (медиана 3 прогонов).
 	var singles []float64
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		got, dur := msFetchSHA(t, cfg.Listen.Mixed, bulkHost, bulkPort, 60*time.Second)
 		if sha256.Sum256(got) != wantSum {
 			t.Fatalf("single stream payload corrupted (round %d)", i)
@@ -147,10 +147,8 @@ func TestMultiStreamThroughput(t *testing.T) {
 	var firstErr error
 	var aggBytes int64
 	wall0 := time.Now()
-	for i := 0; i < parallelStreams; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range parallelStreams {
+		wg.Go(func() {
 			got, _ := msFetchSHA(t, cfg.Listen.Mixed, bulkHost, bulkPort, 90*time.Second)
 			if sha256.Sum256(got) != wantSum {
 				mu.Lock()
@@ -163,7 +161,7 @@ func TestMultiStreamThroughput(t *testing.T) {
 			mu.Lock()
 			aggBytes += int64(len(got))
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	wall := time.Since(wall0)
@@ -185,7 +183,7 @@ func TestMultiStreamThroughput(t *testing.T) {
 }
 
 func medianF(xs []float64) float64 {
-	for i := 0; i < len(xs); i++ {
+	for i := range xs {
 		for j := i + 1; j < len(xs); j++ {
 			if xs[j] < xs[i] {
 				xs[i], xs[j] = xs[j], xs[i]

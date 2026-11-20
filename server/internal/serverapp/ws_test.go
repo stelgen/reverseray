@@ -94,8 +94,8 @@ func readHttpResponse(br *bufio.Reader) (string, error) {
 }
 
 func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "\n"); ok {
+		return before
 	}
 	return s
 }
@@ -176,7 +176,7 @@ func (c *wsTestClient) writeFrame(opcode byte, payload []byte) error {
 	hdr[0] = 0x80 | opcode
 	mask := [4]byte{0x11, 0x22, 0x33, 0x44}
 	n := len(payload)
-	i := 1
+	var i int // присваивается в каждой ветке switch ниже
 	switch {
 	case n < 126:
 		hdr[1] = 0x80 | byte(n)

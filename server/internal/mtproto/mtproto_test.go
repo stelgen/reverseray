@@ -122,12 +122,11 @@ func TestIGERoundTrip(t *testing.T) {
 func TestEnvelopeRoundTripBothDirections(t *testing.T) {
 	salt := []byte("12345678")
 	sid := []byte("87654321")
-	sc, err := NewSessionCrypto(make([]byte, 256)[:0], salt, sid)
-	if err == nil {
+	if _, err := NewSessionCrypto(make([]byte, 256)[:0], salt, sid); err == nil {
 		t.Fatal("короткий auth_key должен быть отвергнут")
 	}
 	key := testAuthKey()
-	sc, err = NewSessionCrypto(key, salt, sid)
+	sc, err := NewSessionCrypto(key, salt, sid)
 	if err != nil {
 		t.Fatal(err)
 	}

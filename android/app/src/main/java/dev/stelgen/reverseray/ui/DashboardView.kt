@@ -244,7 +244,7 @@ class DashboardView(context: Context) : LinearLayout(context) {
         val proto = if (s.proto.isBlank()) RrpProtocolsLabel.auto(context) else s.proto
         v.details.text = proto +
             "  ·  RTT " + (if (s.rttMs > 0) "${s.rttMs} ms" else "—") +
-            "  ·  " + context.getString(R.string.dash_uptime, Formats.uptime(context, s.uptimeMs))
+            "  ·  " + context.getString(R.string.dash_uptime, Formats.uptime(s.uptimeMs))
         v.details.maxLines = 1
         v.details.ellipsize = android.text.TextUtils.TruncateAt.END
         v.counters.text = context.getString(R.string.dash_switches, s.switches.toInt()) +

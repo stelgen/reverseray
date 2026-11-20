@@ -87,7 +87,7 @@ object MtProto {
             private set
 
         fun generatePrivate() {
-            for (attempt in 0 until 64) {
+            repeat(64) {
                 val buf = ByteArray(256)
                 rnd.nextBytes(buf)
                 var x = BigInteger(1, buf)

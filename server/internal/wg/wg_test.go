@@ -54,7 +54,7 @@ func TestHandshakeRoundtrip(t *testing.T) {
 	// Транспорт в обе стороны + точность данных.
 	ct := NewTransport(true, ch)
 	st := NewTransportServer(sh)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		payload := bytes.Repeat([]byte{byte(i)}, 1000+i)
 		pkt, err := ct.Seal(payload)
 		if err != nil {
@@ -121,7 +121,7 @@ func TestReplayWindow(t *testing.T) {
 	}
 	st := NewTransportServer(sh)
 	var boxes [][]byte
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		pkt, _ := st.Seal([]byte{byte(i)})
 		boxes = append(boxes, pkt)
 	}
@@ -132,7 +132,7 @@ func TestReplayWindow(t *testing.T) {
 	}
 	ct := NewTransport(true, ch)
 	var fromClient [][]byte
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		pkt, _ := ct.Seal([]byte{byte(i)})
 		fromClient = append(fromClient, pkt)
 	}
@@ -146,7 +146,7 @@ func TestReplayWindow(t *testing.T) {
 		t.Fatal("повтор пакета должен отвергаться (анти-реплей канона WG)")
 	}
 	// Дальний сдвиг окна: пакет 0 уже позади окна после прыжка вперёд.
-	for i := 0; i < ReplayWindowSize+5; i++ {
+	for i := range ReplayWindowSize + 5 {
 		pkt, _ := ct.Seal([]byte{byte(i % 256)})
 		if _, err := st.Open(pkt); err != nil {
 			t.Fatalf("stream at %d: %v", i, err)

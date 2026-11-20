@@ -270,7 +270,7 @@ func DecodeUdpData(payload []byte) (atyp byte, addr []byte, port uint16, data []
 		return 0, nil, 0, nil, errors.New("rrp: UDP_DATA payload too short")
 	}
 	atyp = payload[0]
-	off := 1
+	var off int // присваивается в каждой ветке switch ниже
 	switch atyp {
 	case ATYPIPv4:
 		off = 1 + 4

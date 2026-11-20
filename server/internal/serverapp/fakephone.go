@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -320,7 +321,7 @@ func (p *fakePhone) loop() {
 		case rrp.TypeOpen:
 			atyp, addr, port, derr2 := rrp.DecodeOpen(f.Payload)
 			if derr2 != nil {
-				p.write(rrp.TypeOpenOK, f.StreamID, []byte{1})
+				_ = p.write(rrp.TypeOpenOK, f.StreamID, []byte{1})
 				continue
 			}
 			host := string(addr)
@@ -331,10 +332,10 @@ func (p *fakePhone) loop() {
 			}
 			dst, derr := p.dial(host, port)
 			if derr != nil {
-				p.write(rrp.TypeOpenOK, f.StreamID, []byte{1})
+				_ = p.write(rrp.TypeOpenOK, f.StreamID, []byte{1})
 				continue
 			}
-			p.write(rrp.TypeOpenOK, f.StreamID, []byte{0})
+			_ = p.write(rrp.TypeOpenOK, f.StreamID, []byte{0})
 			p.mu.Lock()
 			p.dst[f.StreamID] = dst
 			p.mu.Unlock()
@@ -362,10 +363,10 @@ func (p *fakePhone) loop() {
 			}
 			p.mu.Unlock()
 			if ok {
-				p.write(rrp.TypeOpenOK, f.StreamID, []byte{0})
+				_ = p.write(rrp.TypeOpenOK, f.StreamID, []byte{0})
 				go p.pumpToPhone(f.StreamID, conn2)
 			} else {
-				p.write(rrp.TypeOpenOK, f.StreamID, []byte{5})
+				_ = p.write(rrp.TypeOpenOK, f.StreamID, []byte{5})
 			}
 		case rrp.TypeData:
 			p.mu.Lock()
@@ -373,7 +374,7 @@ func (p *fakePhone) loop() {
 			p.mu.Unlock()
 			if dst != nil && len(f.Payload) > 0 {
 				if _, err := dst.Write(f.Payload); err != nil {
-					p.write(rrp.TypeClose, f.StreamID, []byte{1})
+					_ = p.write(rrp.TypeClose, f.StreamID, []byte{1})
 				}
 			}
 		case rrp.TypeClose:
@@ -395,7 +396,7 @@ func (p *fakePhone) loop() {
 				p.fmu.Unlock()
 			}
 		case rrp.TypePing:
-			p.write(rrp.TypePong, 0, f.Payload)
+			_ = p.write(rrp.TypePong, 0, f.Payload)
 		}
 	}
 }
@@ -431,7 +432,7 @@ func (p *fakePhone) pumpToPhone(id uint32, dst net.Conn) {
 				// Сокет таргета закрылся по-настоящему (сайт/сеть) —
 				// штатное закрытие стрима, сокет уже мёртв.
 			}
-			p.write(rrp.TypeClose, id, []byte{0})
+			_ = p.write(rrp.TypeClose, id, []byte{0})
 			p.mu.Lock()
 			delete(p.dst, id)
 			p.mu.Unlock()
@@ -481,9 +482,7 @@ func (p *fakePhone) ParkedConns() map[[16]byte]net.Conn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make(map[[16]byte]net.Conn, len(p.parked))
-	for k, v := range p.parked {
-		out[k] = v
-	}
+	maps.Copy(out, p.parked)
 	return out
 }
 

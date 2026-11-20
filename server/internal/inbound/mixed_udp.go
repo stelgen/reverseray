@@ -38,13 +38,13 @@ func (a *udpAssoc) isClosed() bool {
 func (in *Inbound) socks5UdpAssociate(c net.Conn, br *bufio.Reader, atyp byte) {
 	// DST.ADDR/DST.PORT в запросе — информационные (обычно 0.0.0.0:0), читаем и игнорируем.
 	if _, _, _, err := readSocksTarget(br, atyp); err != nil {
-		c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
+		_, _ = c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	port := in.udpBindPort()
 	relay, err := in.Dialer.DialUDP(context.Background(), in.DialTimeout)
 	if err != nil {
-		c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0}) // general failure
+		_, _ = c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0}) // general failure
 		return
 	}
 	ip, _, splitErr := net.SplitHostPort(c.RemoteAddr().String())
@@ -54,7 +54,7 @@ func (in *Inbound) socks5UdpAssociate(c net.Conn, br *bufio.Reader, atyp byte) {
 	a := &udpAssoc{ip: ip, relay: relay, closed: make(chan struct{})}
 	if !in.udpRegister(a) {
 		relay.Close()
-		c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
+		_, _ = c.Write([]byte{5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	defer c.Close()
@@ -152,7 +152,7 @@ func (in *Inbound) udpWithSock(fn func(*net.UDPConn)) {
 }
 
 func (in *Inbound) udpReadLoop(sock *net.UDPConn) {
-	defer sock.Close()
+	defer func() { _ = sock.Close() }()
 	buf := make([]byte, 65535)
 	for {
 		n, src, err := sock.ReadFromUDP(buf)

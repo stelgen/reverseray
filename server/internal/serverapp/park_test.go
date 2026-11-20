@@ -120,7 +120,7 @@ func TestParkResumeBuffer(t *testing.T) {
 		t.Fatalf("phone reconnect: %v", err)
 	}
 	t.Logf("DIAG: phone1 parked conns=%d", nParkedIn)
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		time.Sleep(200 * time.Millisecond)
 		t.Logf("DIAG3: parked=%d", app.hub.ParkedTotal())
 		if app.hub.ParkedTotal() == 0 {

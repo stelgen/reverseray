@@ -6,6 +6,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.Locale
 
 /** Простое сравнение версий "0.4.1" — лексикографически по числовым сегментам. */
 object SemVer {
@@ -166,7 +167,7 @@ class UpdateChecker(
                     md.update(buf, 0, n)
                 }
             }
-            return md.digest().joinToString("") { String.format("%02x", it) }
+            return md.digest().joinToString("") { String.format(Locale.ROOT, "%02x", it) }
         }
     }
 

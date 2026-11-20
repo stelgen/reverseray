@@ -20,6 +20,8 @@ bcpkix = "1.86"
 zxingEmbedded = "4.3.0" # скан/генерация QR: либа декларирует minSdk 19 — overrideLibrary + runtime-guard в UI
 desugarJdkLibs = "2.1.5"
 junit = "4.13.2"
+# v1.8.5 Фаза 1: стат-анализ Kotlin (барьеры роста — см. config/detekt/detekt.yml)
+detekt = "1.23.8"
 multidex = "2.0.1"
 
 [libraries]
@@ -38,3 +40,4 @@ androidx-multidex = { group = "androidx.multidex", name = "multidex", version.re
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }

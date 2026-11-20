@@ -59,7 +59,7 @@ type KeyPair struct {
 // GeneratePair генерирует пару, повторяя до попадания ПУБЛИЧНОЙ доли
 // в канонический коридор (guidelines требуют его и для своей доли).
 func GeneratePair() (*KeyPair, error) {
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		// приватная доля: 2048 бит (256 байт), нормирована в коридор
 		buf := make([]byte, 256)
 		if _, err := rand.Read(buf); err != nil {

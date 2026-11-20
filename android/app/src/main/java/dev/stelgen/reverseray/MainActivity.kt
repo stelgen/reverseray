@@ -1,3 +1,5 @@
+@file:Suppress("WildcardImport") // ui.* — DSL расширений (см. комментарий у импорта)
+
 package dev.stelgen.reverseray
 
 import android.Manifest
@@ -60,19 +62,12 @@ import dev.stelgen.reverseray.core.SecurityFacts
 import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.service.PrefsBackend
 import dev.stelgen.reverseray.core.ThemeMode
-import dev.stelgen.reverseray.ui.Formats
-import dev.stelgen.reverseray.ui.GraphHistory
-import dev.stelgen.reverseray.ui.DashboardView
-import dev.stelgen.reverseray.ui.PulseRingView
 import dev.stelgen.reverseray.net.DnsProbe
 import dev.stelgen.reverseray.net.NetInfo
 import dev.stelgen.reverseray.net.NetInfoFetcher
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.service.LogKind
 import dev.stelgen.reverseray.service.TunnelService
-import dev.stelgen.reverseray.ui.*
-import dev.stelgen.reverseray.ui.StatusConsole
-import dev.stelgen.reverseray.ui.TrafficGraphView
 import dev.stelgen.reverseray.update.UpdateChecker
 import dev.stelgen.reverseray.update.UpdateInfo
 import dev.stelgen.reverseray.update.UpdateLogger
@@ -81,6 +76,9 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import dev.stelgen.reverseray.ui.* // ui-пакет — DSL расширений MainActivity;
+                                   // имена классов и builder-extension совпадают —
+                                   // явный импорт невозможен (ktlint-фаза переименует)
 
 /**
  * ReverseRay v0.8 — Dashboard с пятью вкладками:
@@ -156,7 +154,6 @@ class MainActivity : AppCompatActivity() {
     // ---------- связь ----------
     internal lateinit var linkValueView: TextView
     internal lateinit var linkStatusView: TextView
-    private var configEditDebounce = 0L
 
     // ---------- обновление ----------
     internal lateinit var versionView: TextView
@@ -646,7 +643,6 @@ class MainActivity : AppCompatActivity() {
     internal var lastStartPressMs = 0L
     internal var lastStopPressMs = 0L
 
-    internal val START_COOLDOWN_MS = 1_200L
 
     /** v1.6.0: 3 с в CONNECTING → красный «Тайм-аут» (канон владельца). */
     internal val connectTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -654,8 +650,6 @@ class MainActivity : AppCompatActivity() {
         if (lastButtonMode == Mode.CONNECTING) applyButtonMode(Mode.TIMEOUT)
     }
 
-    /** v1.6.0: тайм-аут-режим кнопки (красный «Тайм-аут», коннект продолжается). */
-    internal val CONNECT_TIMEOUT_MS = 3_000L
 
     /**
      * v0.9.5 (канон владельца): Старт/Стоп — СИНЯЯ кнопка; подключение —
@@ -1028,35 +1022,6 @@ class MainActivity : AppCompatActivity() {
         return ok to bad
     }
 
-    private fun showRenameSessionDialog(id: String) {
-        val store = sessionStore()
-        val pr = store.byId(id) ?: return
-        val input = TextInputEditText(this).apply {
-            setText(pr.name)
-            setTextSize(12f)
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = dp(16)
-            setPadding(pad, pad, pad, 0)
-            addView(input)
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.sess_rename)
-            .setView(container)
-            .setPositiveButton(R.string.link_ok) { d, _ ->
-                d.dismiss()
-                val name = input.text?.toString()?.trim().orEmpty()
-                if (name.isNotBlank() && store.rename(id, name)) {
-                    Toast.makeText(this, R.string.sess_renamed, Toast.LENGTH_SHORT).show()
-                    refreshSessionsCard()
-                    preserveScroll { dashboard.update(offlineStats()) }
-                }
-            }
-            .setNegativeButton(R.string.link_cancel, null)
-            .show()
-    }
-
     private fun confirmDeleteSession(id: String) {
         val store = sessionStore()
         val pr = store.byId(id) ?: return
@@ -1080,6 +1045,9 @@ class MainActivity : AppCompatActivity() {
 
     internal companion object {
         const val NETINFO_REFRESH_MS = 60_000L
+        /** v1.6.0: 3 с в CONNECTING → красный «Тайм-аут» (канон владельца). */
+        internal const val CONNECT_TIMEOUT_MS = 3_000L
+        internal const val START_COOLDOWN_MS = 1_200L
         const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
         const val KEY_LAST_UPDATE_CHECK = "last_update_check"
         const val KEY_MODULES_HASH = "modules_hash"
