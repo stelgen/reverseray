@@ -319,6 +319,12 @@ func (a *App) handleTunnel(conn net.Conn) {
 	defer func() {
 		a.hub.Detach(device, sess)
 		a.met.TunnelsUp.Add(-1)
+		// v1.8.4: честная причина закрытия — молчаливое «tunnel closed»
+		// мешало отладке (битый конверт после свитча не был виден).
+		if cerr := sess.Err(); cerr != nil && !errors.Is(cerr, net.ErrClosed) &&
+			cerr.Error() != "session ended" {
+			a.log.Warn("tunnel closed with error", "device", device, "session", sid, "err", cerr.Error())
+		}
 		a.log.Info("tunnel closed", "device", device, "session", sid)
 		a.ev.AddDev("warn", "tunnel", "туннель отключён — активные потоки в буфере, ожидание реконнекта", device)
 	}()
