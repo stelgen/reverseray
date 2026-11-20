@@ -219,4 +219,3 @@ func pbDataProbe(c *pbCrypto, target string) error {
 	}
 	return c.writeFrame(rrp.TypeClose, 1, []byte{0})
 }
-
