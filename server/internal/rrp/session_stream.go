@@ -227,6 +227,14 @@ func (st *stream) Write(p []byte) (int, error) {
 		if len(chunk) > MaxDataPayload {
 			chunk = chunk[:MaxDataPayload]
 		}
+		// v1.8.6 ФИКС «rotate сломан»: DATA из живого стрима шёл в outq
+		// МИМО writeAsync → без parkWait. Во время бесшовной смены протокола
+		// такой кадр запечатывался СТАРЫМ конвертом (emit берёт текущую
+		// крипту) и после коммита клиент не мог его расшифровать → смерть
+		// сессии. Payload-отправители обязаны стоять в паркинге, как и все.
+		if !st.sess.parkWait() {
+			return total, &StreamError{Code: 1} // сессия умерла в паркинге
+		}
 		errc := make(chan error, 1)
 		st.sess.outq <- outItem{
 			frame: &Frame{Type: TypeData, StreamID: st.id, Payload: append([]byte(nil), chunk...)},

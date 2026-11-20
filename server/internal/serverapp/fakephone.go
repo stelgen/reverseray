@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -16,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stelgen/reverseray/server/internal/bt"
 	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
+	"github.com/stelgen/reverseray/server/internal/wg"
 )
 
 // fakePhone is a minimal Go RRP/1 client used by e2e tests.
@@ -31,6 +34,26 @@ type fakePhone struct {
 	conn net.Conn
 	// wrap — mtproto2-обёртка (v0.8): nil в обычном режиме RRP/1.
 	wrap io.ReadWriteCloser
+
+	// v1.8.6 e2e-матрица протоколов: envMu охраняет wrap/env — свитч меняет
+	// их из loop-горутины, pump'ы читают при каждой записи. env — WG/BT
+	// конверт payload-кадров; wrap — MT-обёртка (семантика идентична:
+	// контроль-кадры насквозь, DATA/UDP_DATA запечатаны).
+	envMu sync.RWMutex
+
+	// wm сериализует записи в коннект (loop-p.write против pump-writePaced):
+	// rrpWriteS пишет кадр двумя Write-вызовами (header+payload) — без
+	// блокировки конкурентные записи чередуются и корраптят поток (WS).
+	wm  sync.Mutex
+	env envelope
+
+	// состояние mid-session свитча (v1.8.6): ack и результат установки
+	// нового конверта. Поля создаются в dialPhoneOnCapsParked; литеральные
+	// конструкторы (keyrace) получают nil — select/default страхует.
+	sid       string
+	token     string
+	ackCh     chan switchAck
+	switchRes chan error
 
 	wmu sync.Mutex
 	mu  sync.Mutex
@@ -46,12 +69,60 @@ type fakePhone struct {
 	// (читают с коротким дедлайном, чтобы увидеть флаг).
 	dead atomic.Bool
 
+	loopErr   atomic.Value // диагностика смерти loop-горутины (тесты)
+	switching atomic.Bool  // идёт бесшовный свитч: только тогда KEY_REQ-обмен пишет в switchRes
+	lastSeen  atomic.Value // трассировка: последний кадр, дошедший до loop
+
 	// flow-control (v0.9.3): не подтверждённые сервером байты на стрим.
 	win int64
 	fmu sync.Mutex
 	out map[uint32]int64
 
 	dial func(host string, port uint16) (net.Conn, error)
+}
+
+// envelope — активный конверт payload'ов DATA/UDP_DATA (v1.8.6, e2e-матрица
+// протоколов): WG transport-пакеты и MSE/PE piece-сообщения. Контроль-кадры
+// всегда идут насквозь (сервер так же шифрует только payload-кадры).
+type envelope interface {
+	seal(payload []byte) ([]byte, error)
+	open(payload []byte) ([]byte, error)
+}
+
+type wgEnvelope struct{ tr *wg.Transport }
+
+func (e *wgEnvelope) seal(b []byte) ([]byte, error) { return e.tr.Seal(b) }
+func (e *wgEnvelope) open(b []byte) ([]byte, error) { return e.tr.Open(b) }
+
+type btEnvelope struct{ tr *bt.Transport }
+
+func (e *btEnvelope) seal(b []byte) ([]byte, error) { return e.tr.Seal(b) }
+func (e *btEnvelope) open(b []byte) ([]byte, error) { return e.tr.Open(b) }
+
+// switchAck / protoSwitchReq — кадр 0x2C бесшовной смены протокола.
+type protoSwitchReq struct {
+	Proto string `json:"proto"`
+	Nonce string `json:"nonce"`
+}
+
+type switchAck struct {
+	OK     bool   `json:"ok"`
+	Proto  string `json:"proto"`
+	Nonce  string `json:"nonce"`
+	Reason string `json:"reason"`
+}
+
+func (p *fakePhone) currentEnv() envelope {
+	p.envMu.RLock()
+	defer p.envMu.RUnlock()
+	return p.env
+}
+
+func (p *fakePhone) setCrypto(w io.ReadWriteCloser, e envelope) {
+	p.envMu.Lock()
+	p.wrap = w
+	p.env = e
+	p.envMu.Unlock()
 }
 
 func rrpWrite1(w io.Writer, t uint8, payload []byte) error {
@@ -206,6 +277,10 @@ func dialPhoneOnCapsParked(t *testing.T, conn net.Conn, token, device, proto str
 	}
 	p.win = int64(win)
 	p.out = make(map[uint32]int64)
+	p.sid = sid
+	p.token = token
+	p.ackCh = make(chan switchAck, 8)
+	p.switchRes = make(chan error, 1)
 	if proto == "mtproto2" {
 		p.wrap, err = mtproto.UpgradeClient(conn, sid, nil)
 		if err != nil {
@@ -269,10 +344,26 @@ func (p *fakePhone) WritePing(nonce []byte) error {
 }
 
 func (p *fakePhone) write(t uint8, streamID uint32, payload []byte) error {
+	p.wm.Lock()
+	defer p.wm.Unlock()
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
-	if p.wrap != nil {
-		return rrpWriteS(p.wrap, t, streamID, payload)
+	// MT-обёртка (wrap) сама запечатывает DATA/UDP_DATA — кадр идёт целиком.
+	p.envMu.RLock()
+	wrap := p.wrap
+	p.envMu.RUnlock()
+	if wrap != nil {
+		return rrpWriteS(wrap, t, streamID, payload)
+	}
+	// v1.8.6: активный WG/BT-конверт — payload-кадры запечатываются.
+	if t == rrp.TypeData || t == rrp.TypeUdpData {
+		if env := p.currentEnv(); env != nil && len(payload) > 0 {
+			sealed, err := env.seal(payload)
+			if err != nil {
+				return err
+			}
+			payload = sealed
+		}
 	}
 	return rrpWriteS(p.conn, t, streamID, payload)
 }
@@ -315,7 +406,20 @@ func (p *fakePhone) loop() {
 			if p.resume {
 				p.dead.Store(true)
 			}
+			p.loopErr.Store(fmt.Sprintf("loop read: %v", err))
 			return
+		}
+		p.lastSeen.Store(fmt.Sprintf("0x%02x sid=%d len=%d", f.Type, f.StreamID, len(f.Payload)))
+		// v1.8.6: активный WG/BT-конверт — расшифровка payload-кадров.
+		if p.wrap == nil {
+			if env := p.currentEnv(); env != nil &&
+				(f.Type == rrp.TypeData || f.Type == rrp.TypeUdpData) && len(f.Payload) > 0 {
+				plain, oerr := env.open(f.Payload)
+				if oerr != nil {
+					return
+				}
+				f.Payload = plain
+			}
 		}
 		switch f.Type {
 		case rrp.TypeOpen:
@@ -374,7 +478,10 @@ func (p *fakePhone) loop() {
 			p.mu.Unlock()
 			if dst != nil && len(f.Payload) > 0 {
 				if _, err := dst.Write(f.Payload); err != nil {
-					_ = p.write(rrp.TypeClose, f.StreamID, []byte{1})
+					// code 0: цель недоступна — обычное закрытие стрима.
+					// code 1 зарезервирован за «транспорт умер» (v1.3.0:
+					// сервер запаркует сокет и переоткроет фантомный стрим).
+					_ = p.write(rrp.TypeClose, f.StreamID, []byte{0})
 				}
 			}
 		case rrp.TypeClose:
@@ -397,6 +504,23 @@ func (p *fakePhone) loop() {
 			}
 		case rrp.TypePing:
 			_ = p.write(rrp.TypePong, 0, f.Payload)
+		case rrp.TypeKeyReq:
+			// v1.8.6 e2e-матрица: обмен ключами целевого протокола.
+			// ВАЖНО: начальный хендшейк тоже приходит сюда (KEY_REQ при
+			// коннекте) — его результат НЕ должен попадать в switchRes,
+			// иначе следующий SwitchTo съест stale-значение и вернётся
+			// ДО завершения обмена ключами (гонка e2e-матрицы).
+			if p.switching.Load() {
+				p.handleKeyReq(f)
+			}
+		case rrp.TypeProtoSwitch:
+			var m switchAck
+			if json.Unmarshal(f.Payload, &m) == nil {
+				select {
+				case p.ackCh <- m:
+				default:
+				}
+			}
 		}
 	}
 }
@@ -484,6 +608,163 @@ func (p *fakePhone) ParkedConns() map[[16]byte]net.Conn {
 	out := make(map[[16]byte]net.Conn, len(p.parked))
 	maps.Copy(out, p.parked)
 	return out
+}
+
+// readExpect — чтение кадров до ожидаемого типа (v1.8.6): во время обмена
+// ключами свитча по каналу идут и «мирские» контрольные кадры (CLOSE/
+// WINDOW/PING завершающихся стримов) — их пропускаем, на Ping отвечаем.
+func (p *fakePhone) readExpect(want uint8) (*rrp.Frame, error) {
+	for {
+		f, err := rrp.ReadFrame(p.conn)
+		if err != nil {
+			return nil, err
+		}
+		if f.Type == want {
+			return f, nil
+		}
+		switch f.Type {
+		case rrp.TypePing:
+			_ = p.write(rrp.TypePong, 0, f.Payload)
+		case rrp.TypeClose, rrp.TypeWindow, rrp.TypeOpenOK,
+			rrp.TypePong, rrp.TypeOpenResume, rrp.TypeResumeToken, rrp.TypeError:
+			// фоновые контрольные кадры — не наша цель
+		default:
+			return nil, fmt.Errorf("switch: ждали 0x%02x, получили 0x%02x", want, f.Type)
+		}
+	}
+}
+
+// SwitchTo — инициирует бесшовную смену протокола (0x2C) и дожидается ack +
+// установки нового конверта (v1.8.6, e2e-матрица протоколов). Клиентский
+// дедлайн ack-ожидания — 10с (строго меньше серверных 15с, канон v1.8.3).
+func (p *fakePhone) SwitchTo(target, nonce string) error {
+	p.switching.Store(true)
+	defer p.switching.Store(false)
+	req, _ := json.Marshal(&protoSwitchReq{Proto: target, Nonce: nonce})
+	if err := p.write(rrp.TypeProtoSwitch, 0, req); err != nil {
+		return err
+	}
+	select {
+	case m := <-p.ackCh:
+		if !m.OK {
+			return fmt.Errorf("switch to %s denied: %s", target, m.Reason)
+		}
+		if m.Proto != target || m.Nonce != nonce {
+			return fmt.Errorf("switch ack mismatch: got %s/%s", m.Proto, m.Nonce)
+		}
+	case <-time.After(10 * time.Second):
+		return errors.New("switch ack timeout")
+	}
+	select {
+	case err := <-p.switchRes:
+		return err
+	case <-time.After(20 * time.Second):
+		return errors.New("switch exchange timeout")
+	}
+}
+
+// handleKeyReq — обмен ключами целевого протокола после свитча (выполняется
+// В loop-горутине — единственном читателе conn). Результат — в switchRes.
+func (p *fakePhone) handleKeyReq(f *rrp.Frame) {
+	env, w, err := p.keyExchange(f)
+	select {
+	case p.switchRes <- err:
+	default:
+	}
+	if err != nil {
+		return
+	}
+	p.setCrypto(w, env)
+}
+
+// keyExchange — клиентская сторона обмена ключами по payload'у KEY_REQ:
+// JSON kind — wireguard (spub) / bittorrent (yb) / mtproto2 (p,g,g_a).
+func (p *fakePhone) keyExchange(f *rrp.Frame) (envelope, io.ReadWriteCloser, error) {
+	var probe struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(f.Payload, &probe); err != nil {
+		return nil, nil, fmt.Errorf("KEY_REQ не JSON: %w", err)
+	}
+	switch probe.Kind {
+	case "wireguard":
+		env, err := p.wgExchange(f.Payload)
+		return env, nil, err
+	case "bittorrent":
+		env, err := p.btExchange(f.Payload)
+		return env, nil, err
+	default: // mtproto2 (kind отсутствует; p/g/g_a)
+		w, err := mtproto.ClientExchange(p.conn, f, p.sid)
+		return nil, w, err
+	}
+}
+
+// wgExchange — канонный WG msg1/msg2 по канону Noise_IKpsk2 (v1.8.6):
+// PSK = SHA256(token), серверный static — из KEY_REQ (spub).
+func (p *fakePhone) wgExchange(req []byte) (envelope, error) {
+	var kw struct {
+		SPub string `json:"spub"`
+	}
+	if err := json.Unmarshal(req, &kw); err != nil {
+		return nil, err
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(kw.SPub)
+	if err != nil || len(raw) != wg.KeySize {
+		return nil, fmt.Errorf("wg: bad spub (len=%d)", len(raw))
+	}
+	var spub [wg.KeySize]byte
+	copy(spub[:], raw)
+	psk := wg.TokenPSK(p.token)
+	msg1, ch, err := wg.NewClientHandshake(&spub, &psk)
+	if err != nil {
+		return nil, err
+	}
+	if err := rrpWriteS(p.conn, rrp.TypeWgInit, 0, msg1); err != nil {
+		return nil, err
+	}
+	f2, err := p.readExpect(rrp.TypeWgResp)
+	if err != nil {
+		return nil, err
+	}
+	if err := ch.ConsumeResponse(f2.Payload, &psk); err != nil {
+		return nil, err
+	}
+	return &wgEnvelope{tr: wg.NewTransport(true, ch)}, nil
+}
+
+// btExchange — канонный MSE-хендшейк: packet1||packet3 → BT_INIT, packet4
+// → BT_RESP (v1.8.6). SKEY = SHA1("reverseray-bt:"+SHA256(token)).
+func (p *fakePhone) btExchange(req []byte) (envelope, error) {
+	var kb struct {
+		YB string `json:"yb"`
+	}
+	if err := json.Unmarshal(req, &kb); err != nil {
+		return nil, err
+	}
+	yb, err := base64.RawURLEncoding.DecodeString(kb.YB)
+	if err != nil || len(yb) != bt.KeySize {
+		return nil, fmt.Errorf("bt: bad yb (len=%d)", len(yb))
+	}
+	skey := bt.TokenSKEY(p.token)
+	pkt1, ch, err := bt.NewClientInit(skey, nil)
+	if err != nil {
+		return nil, err
+	}
+	pkt3, err := ch.BuildPacket3(yb)
+	if err != nil {
+		return nil, err
+	}
+	if err := rrpWriteS(p.conn, rrp.TypeBtInit, 0, ch.Init(pkt3, pkt1)); err != nil {
+		return nil, err
+	}
+	f2, err := p.readExpect(rrp.TypeBtResp)
+	if err != nil {
+		return nil, err
+	}
+	if err := ch.ConsumeResponse(f2.Payload); err != nil {
+		return nil, err
+	}
+	return &btEnvelope{tr: ch.Transport()}, nil
 }
 
 func (p *fakePhone) Close() {

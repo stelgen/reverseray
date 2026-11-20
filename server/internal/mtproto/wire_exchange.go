@@ -85,7 +85,8 @@ func UpgradeServer(framed io.ReadWriteCloser, sid string, log *slog.Logger) (io.
 	return newWrapper(framed, sc, true), nil
 }
 
-// UpgradeClient — клиентская сторона (Go; используется fakephone в тестах).
+// UpgradeClient — клиентская сторона (Go; используется fakephone в тестах):
+// читает KEY_REQ из потока и завершает обмен (v1.8.6).
 func UpgradeClient(framed io.ReadWriteCloser, sid string, log *slog.Logger) (io.ReadWriteCloser, error) {
 	f, err := readFrameWithTimeout(framed, 15*time.Second)
 	if err != nil {
@@ -94,8 +95,16 @@ func UpgradeClient(framed io.ReadWriteCloser, sid string, log *slog.Logger) (io.
 	if f.Type != rrp.TypeKeyReq {
 		return nil, fmt.Errorf("%w: ждали KEY_REQ (0x24), получили 0x%02x", ErrKeyExchange, f.Type)
 	}
+	return ClientExchange(framed, f, sid)
+}
+
+// ClientExchange — клиентская сторона обмена mtproto2 ВНУТРИ живой сессии
+// (v1.8.6, e2e-матрица смены протоколов): KEY_REQ уже прочитан вызывающим —
+// единственным читателем потока (loop fakephone). Отвечает KEY_RESP и
+// возвращает MT-обёртку; зеркально ServerPlan.Complete (серверная сторона).
+func ClientExchange(framed io.ReadWriteCloser, keyReq *rrp.Frame, sid string) (io.ReadWriteCloser, error) {
 	var req keyReqJSON
-	if err := json.Unmarshal(f.Payload, &req); err != nil {
+	if err := json.Unmarshal(keyReq.Payload, &req); err != nil {
 		return nil, fmt.Errorf("%w: KEY_REQ не JSON: %v", ErrKeyExchange, err)
 	}
 	pRaw, err := base64.RawURLEncoding.DecodeString(req.P)
@@ -132,9 +141,6 @@ func UpgradeClient(framed io.ReadWriteCloser, sid string, log *slog.Logger) (io.
 	sc, err := NewSessionCrypto(authKey, saltFor(sid, gaRaw, gb), sessionID8(sid))
 	if err != nil {
 		return nil, err
-	}
-	if log != nil {
-		log.Info("mtproto2: клиент применил ключи", "session", sid)
 	}
 	return newWrapper(framed, sc, false), nil
 }
