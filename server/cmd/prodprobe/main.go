@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stelgen/reverseray/server/internal/bt"
 	"github.com/stelgen/reverseray/server/internal/mtproto"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 	"github.com/stelgen/reverseray/server/internal/wg"
@@ -36,6 +37,7 @@ func main() {
 	proto := flag.String("proto", "", "согласовать протокол сессии: пусто/rrp1 | mtproto2 | wireguard (апгрейд после READY)")
 	streams := flag.Int("streams", 1, "параллельных PROBE-запросов (многоканальность)")
 	holdSecs := flag.Int("hold", 0, "держать сессию N секунд после проверки (отладка mixed/egress)")
+	switchList := flag.String("switch", "", "бесшовная цепочка свитчей 0x2C после согласования: mtproto2,wireguard,bittorrent[,rrp1] — прод-проба ротации")
 	flag.Parse()
 	if *streams < 1 {
 		*streams = 1
@@ -286,6 +288,16 @@ func main() {
 		fmt.Printf("WARN: got 0x%02x вместо PONG\n", f.Type)
 	}
 
+	// v1.8.6: прод-проба бесшовной ротации — цепочка 0x2C против боевого
+	// сервера: ack → обмен ключами целиком → PING + DATA-проба в новом
+	// конверте (ключевой регресс «фолбэк на wireguard» ловится именно тут).
+	if *switchList != "" {
+		if err := runSwitchChain(conn, token, hok.SessionID, strings.Split(*switchList, ","), *target); err != nil {
+			fmt.Println("ERR: switch-chain:", err)
+			os.Exit(1)
+		}
+	}
+
 	// PROBE: валиден только при подключённом телефоне; streams>1 — проверка
 	// многоканальности (параллельные запросы в одну сессию).
 	pb, _ := json.Marshal(map[string]any{"target": *target, "timeout_ms": 5000})
@@ -357,6 +369,287 @@ func main() {
 	}
 	fmt.Println(" — телефон не подключён или egress недоступен")
 	os.Exit(0)
+}
+
+// pbCrypto — текущая клиентская крипта после свитча: MT-обёртка (wrap) либо
+// WG/BT-конверт (seal/open только для payload-кадров DATA/UDP_DATA).
+type pbCrypto struct {
+	conn net.Conn
+	wrap io.ReadWriteCloser
+	seal func([]byte) ([]byte, error)
+	open func([]byte) ([]byte, error)
+}
+
+func (c *pbCrypto) writeFrame(t uint8, streamID uint16, payload []byte) error {
+	if c.wrap != nil {
+		return rrp.WriteFrame(c.wrap, t, streamID, 0, payload)
+	}
+	if (t == rrp.TypeData || t == rrp.TypeUdpData) && c.seal != nil && len(payload) > 0 {
+		sealed, err := c.seal(payload)
+		if err != nil {
+			return err
+		}
+		payload = sealed
+	}
+	return rrp.WriteFrame(c.conn, t, streamID, 0, payload)
+}
+
+func (c *pbCrypto) readFrame() (*rrp.Frame, error) {
+	src := io.Reader(c.conn)
+	if c.wrap != nil {
+		src = c.wrap
+	}
+	for {
+		_ = c.conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		f, err := rrp.ReadFrame(src)
+		if err != nil {
+			return nil, err
+		}
+		// Фон: WINDOW-гранты и echo-CLOSE закрытых стримов — не ответы.
+		if f.Type == rrp.TypeWindow || f.Type == rrp.TypeClose {
+			continue
+		}
+		if c.wrap == nil && c.open != nil && (f.Type == rrp.TypeData || f.Type == rrp.TypeUdpData) && len(f.Payload) > 0 {
+			plain, oerr := c.open(f.Payload)
+			if oerr != nil {
+				return nil, fmt.Errorf("open payload: %w", oerr)
+			}
+			f.Payload = plain
+		}
+		return f, nil
+	}
+}
+
+// runSwitchChain — бесшовная цепочка свитчей против боевого сервера.
+func runSwitchChain(conn net.Conn, token string, sid string, targets []string, dataTarget string) error {
+	c := &pbCrypto{conn: conn}
+	for i, tgt := range targets {
+		tgt = strings.TrimSpace(tgt)
+		if tgt == "" {
+			continue
+		}
+		nonce := fmt.Sprintf("prodprobe-%d", i+1)
+		req, _ := json.Marshal(map[string]string{"proto": tgt, "nonce": nonce})
+		if err := c.writeFrame(rrp.TypeProtoSwitch, 0, req); err != nil {
+			return fmt.Errorf("switch→%s: write: %w", tgt, err)
+		}
+		f, err := c.readFrame()
+		if err != nil {
+			return fmt.Errorf("switch→%s: ack read: %w", tgt, err)
+		}
+		if f.Type != rrp.TypeProtoSwitch {
+			return fmt.Errorf("switch→%s: ждали 0x2C ack, получили 0x%02x", tgt, f.Type)
+		}
+		var ack struct {
+			OK     bool   `json:"ok"`
+			Nonce  string `json:"nonce"`
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(f.Payload, &ack)
+		if !ack.OK {
+			if tgt == rrp.DefaultProtocolID {
+				fmt.Printf("SWITCH→%s: отказ сервера (ОЖИДАЕМО, rrp1 бесшовно недостижим): %s\n", tgt, ack.Reason)
+				continue
+			}
+			return fmt.Errorf("switch→%s: отказ: %s", tgt, ack.Reason)
+		}
+		// Обмен ключами целевого протокола (KEY_REQ → INIT/RESP).
+		kf, err := c.readFrame()
+		if err != nil {
+			return fmt.Errorf("switch→%s: KEY_REQ read: %w", tgt, err)
+		}
+		if kf.Type != rrp.TypeKeyReq {
+			return fmt.Errorf("switch→%s: ждали KEY_REQ, получили 0x%02x", tgt, kf.Type)
+		}
+		var kind struct {
+			Kind string `json:"kind"`
+		}
+		_ = json.Unmarshal(kf.Payload, &kind)
+		switch kind.Kind {
+		case "wireguard":
+			tr, err := pbWgClient(conn, kf.Payload, token)
+			if err != nil {
+				return fmt.Errorf("switch→%s: wg: %w", tgt, err)
+			}
+			c.wrap, c.seal, c.open = nil, tr.Seal, tr.Open
+			fmt.Printf("SWITCH→%s: KEY_REQ→WG_INIT→WG_RESP OK (Noise_IKpsk2)\n", tgt)
+		case "bittorrent":
+			tr, err := pbBtClient(conn, kf.Payload, token)
+			if err != nil {
+				return fmt.Errorf("switch→%s: bt: %w", tgt, err)
+			}
+			c.wrap, c.seal, c.open = nil, tr.Seal, tr.Open
+			fmt.Printf("SWITCH→%s: KEY_REQ→BT_INIT→BT_RESP OK (MSE/PE)\n", tgt)
+		default: // mtproto2: KEY_REQ без kind (p,g,g_a)
+			w, err := mtproto.ClientExchange(conn, kf, sid)
+			if err != nil {
+				return fmt.Errorf("switch→%s: mtproto2: %w", tgt, err)
+			}
+			c.wrap, c.seal, c.open = w, nil, nil
+			fmt.Printf("SWITCH→%s: KEY_REQ→KEY_RESP OK (DH→IGE)\n", tgt)
+		}
+		// Сессия жива после коммита: PING/PONG (контроль — насквозь).
+		pingNonce := []byte("swpong" + nonce)
+		if err := c.writeFrame(rrp.TypePing, 0, pingNonce); err != nil {
+			return fmt.Errorf("switch→%s: ping: %w", tgt, err)
+		}
+		pf, err := c.readFrame()
+		if err != nil {
+			return fmt.Errorf("switch→%s: pong read: %w", tgt, err)
+		}
+		if pf.Type != rrp.TypePong || !bytes.HasPrefix(pf.Payload, pingNonce) && !bytes.Equal(pf.Payload, pingNonce[:8]) {
+			return fmt.Errorf("switch→%s: PONG нет/битый: type=0x%02x", tgt, pf.Type)
+		}
+		// Данные реально идут в НОВОМ конверте: OPEN → DATA → DATA-ответ.
+		if err := pbDataProbe(c, dataTarget); err != nil {
+			return fmt.Errorf("switch→%s: DATA-проба: %w", tgt, err)
+		}
+		fmt.Printf("SWITCH→%s: сессия жива, DATA-проба до %s через новый конверт OK\n", tgt, dataTarget)
+	}
+	return nil
+}
+
+func pbWgClient(conn net.Conn, keyReq []byte, token string) (*wg.Transport, error) {
+	var kw struct {
+		SPub string `json:"spub"`
+	}
+	if err := json.Unmarshal(keyReq, &kw); err != nil {
+		return nil, err
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(kw.SPub)
+	if err != nil || len(raw) != wg.KeySize {
+		return nil, fmt.Errorf("bad spub: %v len=%d", err, len(raw))
+	}
+	var spub [wg.KeySize]byte
+	copy(spub[:], raw)
+	psk := wg.TokenPSK(token)
+	msg1, ch, err := wg.NewClientHandshake(&spub, &psk)
+	if err != nil {
+		return nil, err
+	}
+	if err := rrp.WriteFrame(conn, rrp.TypeWgInit, 0, 0, msg1); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	f, err := rrp.ReadFrame(conn)
+	if err != nil {
+		return nil, err
+	}
+	if f.Type != rrp.TypeWgResp {
+		return nil, fmt.Errorf("ждали WG_RESP, получили 0x%02x", f.Type)
+	}
+	if err := ch.ConsumeResponse(f.Payload, &psk); err != nil {
+		return nil, err
+	}
+	return wg.NewTransport(true, ch), nil
+}
+
+func pbBtClient(conn net.Conn, keyReq []byte, token string) (*bt.Transport, error) {
+	var kb struct {
+		YB string `json:"yb"`
+	}
+	if err := json.Unmarshal(keyReq, &kb); err != nil {
+		return nil, err
+	}
+	yb, err := base64.RawURLEncoding.DecodeString(kb.YB)
+	if err != nil || len(yb) != bt.KeySize {
+		return nil, fmt.Errorf("bad yb: %v len=%d", err, len(yb))
+	}
+	skey := bt.TokenSKEY(token)
+	pkt1, ch, err := bt.NewClientInit(skey, nil)
+	if err != nil {
+		return nil, err
+	}
+	pkt3, err := ch.BuildPacket3(yb)
+	if err != nil {
+		return nil, err
+	}
+	if err := rrp.WriteFrame(conn, rrp.TypeBtInit, 0, 0, ch.Init(pkt3, pkt1)); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	f, err := rrp.ReadFrame(conn)
+	if err != nil {
+		return nil, err
+	}
+	if f.Type != rrp.TypeBtResp {
+		return nil, fmt.Errorf("ждали BT_RESP, получили 0x%02x", f.Type)
+	}
+	if err := ch.ConsumeResponse(f.Payload); err != nil {
+		return nil, err
+	}
+	return ch.Transport(), nil
+}
+
+// pbDataProbe — «данные идут»: OPEN(host:port) → OPEN_OK → DATA(TLS ClientHello)
+// → читаем DATA-ответ (≥1 байт; TLS alert/Handshake от 1.1.1.1:443) → CLOSE.
+func pbDataProbe(c *pbCrypto, target string) error {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return err
+	}
+	port := 0
+	_, err = fmt.Sscanf(portStr, "%d", &port)
+	if err != nil || port <= 0 || port > 65535 {
+		return fmt.Errorf("bad port %q", portStr)
+	}
+	var atyp byte
+	var addr []byte
+	if ip := net.ParseIP(host); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			atyp, addr = rrp.ATYPIPv4, v4
+		} else {
+			atyp, addr = rrp.ATYPIPv6, ip
+		}
+	} else {
+		atyp, addr = rrp.ATYPDomain, []byte(host)
+	}
+	if err := c.writeFrame(rrp.TypeOpen, 1, rrp.EncodeOpen(atyp, addr, uint16(port))); err != nil {
+		return err
+	}
+	for {
+		f, err := c.readFrame()
+		if err != nil {
+			return fmt.Errorf("open: %w", err)
+		}
+		if f.Type == rrp.TypeOpenOK {
+			if len(f.Payload) > 0 && f.Payload[0] != 0 {
+				return fmt.Errorf("сервер отказал в dial %s: %v", target, f.Payload)
+			}
+			break
+		}
+	}
+	// TLS 1.0 ClientHello (cipher 0x002f) — TLS-alert/ответ гарантирован.
+	hello := []byte{
+		0x16, 0x03, 0x01, 0x00, 0x2f, // record: handshake
+		0x01, 0x00, 0x00, 0x2b, // ClientHello len=43
+		0x03, 0x03, // version TLS1.2
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, // random
+		0x00,                   // session id len
+		0x00, 0x02, 0x00, 0x2f, // cipher suites
+		0x01, 0x00, // compression
+	}
+	if err := c.writeFrame(rrp.TypeData, 1, hello); err != nil {
+		return err
+	}
+	for {
+		f, err := c.readFrame()
+		if err != nil {
+			return fmt.Errorf("data read: %w", err)
+		}
+		if f.Type == rrp.TypeWindow {
+			continue
+		}
+		if f.Type != rrp.TypeData {
+			return fmt.Errorf("ждали DATA-ответ, получили 0x%02x", f.Type)
+		}
+		if len(f.Payload) == 0 {
+			return fmt.Errorf("пустой DATA-ответ")
+		}
+		fmt.Printf("DATA: %d байт от %s через текущий конверт\n", len(f.Payload), target)
+		break
+	}
+	return c.writeFrame(rrp.TypeClose, 1, []byte{0})
 }
 
 func splitAmp(s string) []string {

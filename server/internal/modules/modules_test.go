@@ -128,6 +128,33 @@ func TestSetRegistryKeepsRRP1(t *testing.T) {
 	}
 }
 
+// TestSetRegistryKeepsBuiltinProtocols — v1.8.6-регресс прода: манифест без
+// записи bittorrent не должен «потерять» протокол, код которого вкомпилирован
+// в бинарь (SetRegistry сливает манифест со встроенными, а не замещает).
+func TestSetRegistryKeepsBuiltinProtocols(t *testing.T) {
+	defer func() {
+		rrp.SetRegistry(rrp.SupportedProtocols(), "")
+	}()
+	ok := rrp.SetRegistry([]rrp.Protocol{
+		{ID: "rrp1", Name: "RRP/1", Ver: "1", Default: true},
+		{ID: "mtproto2", Name: "MTProto/2", Ver: "2.0"},
+	}, "1.0.0")
+	if !ok {
+		t.Fatal("SetRegistry вернул false")
+	}
+	for _, id := range []string{"rrp1", "mtproto2", "wireguard", "bittorrent", "apimask"} {
+		if !rrp.IsSupported(id) {
+			t.Fatalf("встроенный протокол %q потерян после SetRegistry", id)
+		}
+	}
+	if rrp.NormalizeProto("bittorrent") != "bittorrent" {
+		t.Fatal("NormalizeProto(bittorrent) свалился не в bittorrent")
+	}
+	if rrp.RegistryVersion() != "1.0.0" {
+		t.Fatalf("registryVersion = %q", rrp.RegistryVersion())
+	}
+}
+
 func TestVersionNewer(t *testing.T) {
 	cases := []struct {
 		a, b string

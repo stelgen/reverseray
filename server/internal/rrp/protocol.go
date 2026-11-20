@@ -1,6 +1,7 @@
 package rrp
 
 import (
+	"sort"
 	"strings"
 	"sync"
 )
@@ -78,6 +79,13 @@ var regMu sync.RWMutex
 // протоколы по умолчанию»). Наполняется встроенными + манифестом модулей
 // (SetRegistry). rrp1 присутствует ВСЕГДА — это фундамент.
 var supportedProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT, ProtocolAPIMask}
+
+// builtinProtocols — протоколы, КОД КОТОРЫХ вкомпилирован в бинарь. Сервер
+// умеет их всегда (канон: «сервер должен принимать все протоколы по
+// умолчанию»); манифест модулей не может их «потерять» (v1.8.6-регресс:
+// прод без bt-записи в modules.json терял bittorrent → свитч валится в
+// rrp1). Манифест может добавлять новые и переопределять name/ver/default.
+var builtinProtocols = []Protocol{ProtocolRRP1, ProtocolMTProto2, ProtocolWG, ProtocolBT, ProtocolAPIMask}
 
 // registryVersion — версия реестра (берётся из манифеста модулей; пусто = встроенная).
 var registryVersion = ""
@@ -202,14 +210,18 @@ func RegistryVersion() string {
 	return registryVersion
 }
 
-// SetRegistry заменяет реестр протоколов (манифест модулей).
-// Гарантии: rrp1 остаётся и остаётся дефолтом; пустой/битый список НЕ
-// применён (возвращается false); «enabled:false» записи не попадают.
+// SetRegistry применяет реестр манифеста модулей СЛИЯНИЕМ со встроенными
+// протоколами (v1.8.6): builtinProtocols присутствуют всегда — манифест
+// добавляет новые id и переопределяет name/ver/default встроенных, но не
+// может вычесть протокол, код которого в бинаре. rrp1 остаётся дефолтом;
+// порядок детерминирован: rrp1 → builtin → прочие по алфавиту.
 func SetRegistry(ps []Protocol, version string) bool {
 	regMu.Lock()
 	defer regMu.Unlock()
-	out := make([]Protocol, 0, len(ps)+1)
-	hasDefault := false
+	final := make(map[string]Protocol, len(builtinProtocols)+len(ps))
+	for _, p := range builtinProtocols {
+		final[p.ID] = p
+	}
 	for _, p := range ps {
 		p.ID = NormalizeID(p.ID)
 		if p.ID == "" {
@@ -217,25 +229,26 @@ func SetRegistry(ps []Protocol, version string) bool {
 		}
 		p.Ver = SanitizeVer(p.Ver)
 		if p.ID == DefaultProtocolID {
-			hasDefault = true
 			p.Default = true
 		}
-		out = append(out, p)
+		final[p.ID] = p
 	}
-	if !hasDefault {
-		out = append(out, ProtocolRRP1)
-	}
-	// дубликаты не допустимы
-	seen := map[string]bool{}
-	final := out[:0]
-	for _, p := range out {
-		if seen[p.ID] {
-			continue
+	out := make([]Protocol, 0, len(final))
+	for _, id := range []string{"rrp1", "mtproto2", "wireguard", "bittorrent", "apimask"} {
+		if p, ok := final[id]; ok {
+			out = append(out, p)
+			delete(final, id)
 		}
-		seen[p.ID] = true
-		final = append(final, p)
 	}
-	supportedProtocols = final
+	extra := make([]string, 0, len(final))
+	for id := range final {
+		extra = append(extra, id)
+	}
+	sort.Strings(extra)
+	for _, id := range extra {
+		out = append(out, final[id])
+	}
+	supportedProtocols = out
 	registryVersion = version
 	return true
 }
