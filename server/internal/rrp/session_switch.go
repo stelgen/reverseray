@@ -10,9 +10,11 @@ import (
 // в план обмена ключами (rrp.InitResponder). Вызывается из Run — гонок нет.
 func (s *Session) handleWgInit(f *Frame) {
 	s.mu.Lock()
-	if s.crypto != nil || s.keyPlan == nil {
+	// Внутри бесшовной смены протокола (pendingProto != "") целевой обмен
+	// ключами приходит ПРИ ещё живой старой крипте — INIT и есть коммит.
+	if (s.crypto != nil && s.pendingProto == "") || s.keyPlan == nil {
 		s.mu.Unlock()
-		return // повторный/неожиданный INIT — игнор (анти-мусор)
+		return // повторный/неожиданный INIT вне смены — игнор (анти-мусор)
 	}
 	ir, ok := s.keyPlan.(InitResponder)
 	if !ok || ir.ClientInitFrameType() != TypeWgInit {
@@ -37,9 +39,11 @@ func (s *Session) handleWgInit(f *Frame) {
 // в план обмена ключами (rrp.InitResponder). Вызывается из Run — гонок нет.
 func (s *Session) handleBtInit(f *Frame) {
 	s.mu.Lock()
-	if s.crypto != nil || s.keyPlan == nil {
+	// Внутри бесшовной смены протокола (pendingProto != "") целевой обмен
+	// ключами приходит ПРИ ещё живой старой крипте — INIT и есть коммит.
+	if (s.crypto != nil && s.pendingProto == "") || s.keyPlan == nil {
 		s.mu.Unlock()
-		return // повторный/неожиданный INIT — игнор (анти-мусор)
+		return // повторный/неожиданный INIT вне смены — игнор (анти-мусор)
 	}
 	ir, ok := s.keyPlan.(InitResponder)
 	if !ok || ir.ClientInitFrameType() != TypeBtInit {

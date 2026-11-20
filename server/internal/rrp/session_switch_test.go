@@ -375,3 +375,85 @@ func TestSessionSwitchOpenDataInFlight(t *testing.T) {
 	}
 	t.Fatalf("echoed target response must arrive after commit (parked → flush)")
 }
+
+// TestSessionSwitchFromCryptoSession: бесшовная смена протокола ПРИ живой
+// крипте (свитч mtproto2→mtproto2 «на вращение»). Регресс-тест v1.8.4:
+// guard-ы KEY_RESP/INIT требовали crypto==nil, из-за чего целевой обмен
+// из-под крипты молча игнорировался и сессия умирала по дедлайну смены.
+func TestSessionSwitchFromCryptoSession(t *testing.T) {
+	cfg := switchConfig()
+	cfg.KeyPlan = &fakeSwitchPlan{n: 1} // стартовый обмен ключами при Run
+	sess, c2, p := runSwitchSession(t, cfg, 100)
+
+	// 1) начальный KEY_REQ → echo → крипта включена (pendingProto пуст)
+	waitCryptoEngaged(t, sess)
+
+	// 2) смена протокола из-под крипты: целевой KEY_REQ → echo → коммит
+	startSwitchFromPhone(t, c2)
+	m := waitAck(t, p, 3*time.Second)
+	if !m.OK {
+		t.Fatalf("switch denied: %s", m.Reason)
+	}
+	waitSwitchCommitted(t, sess)
+
+	sess.mu.Lock()
+	proto := sess.Proto
+	crypto := sess.crypto
+	sess.mu.Unlock()
+	if proto != "mtproto2" {
+		t.Fatalf("proto = %q, want mtproto2", proto)
+	}
+	if crypto == nil {
+		t.Fatal("crypto lost after switch")
+	}
+
+	// 3) паркинг снят, трафик идёт сквозь новую крипту (fake = passthrough)
+	sess.writeAsync(&Frame{Type: TypeData, StreamID: 9, Payload: switchPayload(1, []byte("after-switch"))})
+	got := drainData(t, p, 1, 5*time.Second)
+	if _, ok := parseSwitchPayload(got[0]); !ok {
+		t.Fatal("bad payload after switch")
+	}
+	assertAlive(t, sess)
+}
+
+// waitSwitchCommitted — ждёт атомарного коммита смены (pendingProto снят).
+// Дедлайн смены уже остановлен; если коммита нет — тест падает по таймауту.
+func waitSwitchCommitted(t *testing.T, s *Session) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		s.mu.Lock()
+		pp := s.pendingProto
+		s.mu.Unlock()
+		if pp == "" {
+			return
+		}
+		select {
+		case <-s.Done():
+			t.Fatalf("session died mid-switch (pendingProto=%q)", pp)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("switch not committed in 3s (pendingProto=%q)", pp)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitCryptoEngaged — ждёт включения крипто-контекста сессии.
+func waitCryptoEngaged(t *testing.T, s *Session) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		s.mu.Lock()
+		c := s.crypto
+		s.mu.Unlock()
+		if c != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("crypto not engaged in 3s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

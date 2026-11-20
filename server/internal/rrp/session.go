@@ -430,9 +430,11 @@ func (s *Session) Protocol() string { return s.cfg.Protocol }
 // Вызывается из Run (единственный читатель) — гонок нет.
 func (s *Session) handleKeyResp(f *Frame) {
 	s.mu.Lock()
-	if s.crypto != nil || s.keyPlan == nil {
+	// Внутри бесшовной смены протокола (pendingProto != "") целевой обмен
+	// ключами приходит ПРИ ещё живой старой крипте — KEY_RESP и есть коммит.
+	if (s.crypto != nil && s.pendingProto == "") || s.keyPlan == nil {
 		s.mu.Unlock()
-		return // повторный/неожиданный KEY_RESP — игнор (анти-мусор)
+		return // повторный/неожиданный KEY_RESP вне смены — игнор (анти-мусор)
 	}
 	crypto, err := s.keyPlan.Complete(f.Payload)
 	if err != nil {
@@ -568,6 +570,14 @@ func (s *Session) getStream(id uint32) *stream {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.streams[id]
+}
+
+// Err — причина закрытия сессии (nil, если ещё жива). Для наблюдаемости:
+// сервер обязан логировать, ПОЧЕМУ туннель умер (v1.8.4).
+func (s *Session) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
 }
 
 func (s *Session) shutdown(err error) {
