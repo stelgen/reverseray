@@ -29,12 +29,15 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 | Govulncheck | известные уязвимости stdlib/зависимостей |
 | Screenshot bots | ДВА полностью независимых воркфлоу, асинхронно ПОСЛЕ релиза (workflow_run Release=success + cron + dispatch), НИКОГДА не блокируют релиз и друг друга: `screenshot-apk.yml` — JVM-рендер MainActivity (Robolectric NATIVE graphics, эмулятор удалён) → `assets/brand/screenshot.png`; `screenshot-web.yml` — веб-панель /ui из ОПУБЛИКОВАННОГО образа релиза (headless-chromium) → `assets/brand/web.png`; каждый коммитит только свой файл; APK-бот — явный git-цикл (без magic-action): ошибки пуша уезжают артефактом `screenshot-push-debug` |
 | CodeQL | стат-анализ безопасности |
+| Go lint | `golangci-lint v2.15.0 run ./...` (конфиг `server/.golangci.yml`, `default: none`: errcheck/govet/ineffassign/staticcheck) — 0 issues. ЛОКАЛЬНО перед тегом; перенос в CI — тех-долг |
+| Kotlin lint | `./gradlew :app:detekt` 1.23.8 (конфиг-барьеры `android/config/detekt/detekt.yml`) — 0 issues. ЛОКАЛЬНО перед тегом; перенос в CI — тех-долг |
+| Docs sync | `scripts/docs_sync_check.py` — пин тулчейна и версия продукта синхронны по всем докам |
 
 ## Политики тулчейна
 
 | Политика | Правило |
 |---|---|
-| Пин Go | патч-версия Go пиннится РУКАМИ (сейчас 1.27.4; пин дублируется toolchain-директивой в go.mod — CI, локальные стейты и агенты видят РОВНО один компилятор; бамп патча — координированный коммит после зелёного govulncheck) во всех go-джобах CI/release — govulncheck и тайминговые тесты видят ровно тот тулчейн, что проверен локально; бамп патча — координированный коммит. govulncheck — пиннутая версия + retry ×3 |
+| Пин Go | патч-версия Go пиннится РУКАМИ (сейчас 1.27.4) во всех go-джобах CI/release; пин дублируется toolchain-директивой в go.mod — CI, локальные стейты и агенты видят РОВНО один компилятор; govulncheck и тайминговые тесты видят ровно тот тулчейн, что проверен локально; бамп патча — координированный коммит после зелёного govulncheck. govulncheck — пиннутая версия + retry ×3. Синхронность пина и версии продукта проверяет гейт `scripts/docs_sync_check.py` (см. «Гейты перед тегом») |
 | Диагностика фейлов | упавший шаг обязан оставить артефакт/step-summary с причиной (логи джоб без токена нечитаемы) |
 
 ## Политики канона
@@ -73,6 +76,7 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 - Android 4.0 (API 14–20): полный паритет UX (тинты/анимации Material 21+) — приоритет низкий.
 - Эмуляторные (instrumentation) тесты APK в CI.
 - cosign-подписи релизов + SBOM для APK.
+- Линт-гейты в CI (golangci-lint + detekt + docs-sync сейчас — локальные шаги релиза).
 
 ## Спидтест-методика
 
@@ -82,6 +86,15 @@ Conventional Commits: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `style
 4. Окна по умолчанию (512 КБ → 4 МБ max) достаточны для 100 Мбит/с при RTT ≤ 100 мс — менять без замеров запрещено.
 
 ## Релизы
+
+### Гейты перед тегом vX.Y.Z (обязательны, локально)
+
+1. **Go build+test**: `GOTOOLCHAIN=go1.27.4 go build ./... && go test ./...` — зелёные.
+2. **Go lint**: `golangci-lint v2.15.0 run ./...` — 0 issues.
+3. **Go fix/vuln**: `go fix ./...` (коммитить только фактические правки) + `govulncheck` — 0 уязвимостей.
+4. **Kotlin**: `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:detekt` — сборка, тесты и detekt зелёные. Пороги detekt — барьеры по текущим максимумам: ЛЮБОЕ ухудшение метрики роняет сборку (AGP/Kotlin-пины — ADR-0001).
+5. **Доки**: `python3 scripts/docs_sync_check.py` — тулчейн (go.mod ↔ CI ↔ WORKFLOW.md) и версия (CHANGELOG ↔ versionName ↔ ROADMAP) синхронны; CHANGELOG-запись и бамп versionName — до гейта.
+6. **Тег**: `deploy/rel.sh X.Y.Z` (pull --rebase → чистый HEAD → тег → Release).
 
 1. Тег `vX.Y.Z` → `release.yml`: test → build-binaries (amd64/arm64/armv7) → docker (multi-arch, SBOM/provenance) → build-apk (подпись) → publish (SHA256SUMS + Release, тело из CHANGELOG).
 2. Версионирование: SemVer; versionCode в `android/app/build.gradle.kts` растёт на каждый релиз.
