@@ -371,10 +371,6 @@ object Msgs {
         "сервер не подтвердил %s — работаю на %s",
     )
 
-    // ── RrpProtocols: суффиксы меток ─────────────────────────────────────
-    val LABEL_STABLE = Msg(" · stable", " · стабильный")
-    val LABEL_PAYLOAD_ENC = Msg(" · payload encryption", " · шифрование payload")
-    val LABEL_BT_MASK = Msg(" · torrent DPI mask", " · маска под BitTorrent")
 
     // ── Протокол bittorrent (v0.10) ──────────────────────────────────
     val BT_INIT_SENT = Msg(

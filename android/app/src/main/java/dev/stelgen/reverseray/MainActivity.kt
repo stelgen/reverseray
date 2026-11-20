@@ -53,6 +53,7 @@ import dev.stelgen.reverseray.core.ConfigSource
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.ProtoFallback
+import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpFrame
 import dev.stelgen.reverseray.core.RrpProtocols
@@ -146,8 +147,6 @@ class MainActivity : AppCompatActivity() {
     /** Строки «текущий протокол» живут на двух вкладках — обновляем все. */
     internal val connLineViews = mutableListOf<TextView>()
 
-    /** Актуальный согласованный протокол сессии (EXTRA_PROTO); пусто = не подключались. */
-    @Volatile private var lastNegotiatedProto = ""
     /** Сводка лимита трафика — на главной и в настройках. */
     internal val usageViews = mutableListOf<TextView>()
 
@@ -274,22 +273,19 @@ class MainActivity : AppCompatActivity() {
                             // «подключено с протоколом X»; раньше проваливался в
                             // else → DISCONNECTED и кнопка откатывалась в «Start»
                             // при живом туннеле (канон M2: смена состояния — fade).
-                            intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { p ->
-                                lastNegotiatedProto = p
-                                refreshConnLine()
-                            }
+                            // v1.8.6: протокол живёт в ProtocolState (сервис —
+                            // единственный писатель); строка перерисовывается
+                            // подпиской ProtocolState.onChange.
                             setUiState(state)
                         }
                         TunnelService.STATE_PROTO_ROLLBACK -> {
-                            intent.getStringExtra(TunnelService.EXTRA_PROTO)?.let { old ->
-                                lastNegotiatedProto = old
-                                refreshConnLine()
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    R.string.proto_rollback_toast,
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
+                            // v1.8.6: значение протокола — в ProtocolState; здесь
+                            // только уведомление владельца об откате.
+                            Toast.makeText(
+                                this@MainActivity,
+                                R.string.proto_rollback_toast,
+                                Toast.LENGTH_LONG,
+                            ).show()
                             setUiState(state)
                         }
                         TunnelService.STATE_CONNECTED -> {
@@ -325,6 +321,11 @@ class MainActivity : AppCompatActivity() {
         // v0.9.2 (R9): реестр обновился (модуль нового протокола прилетел) —
         // строки протокола перерисовываются СРАЗУ, не дожидаясь статуса.
         RrpProtocols.onRegistryChanged = {
+            runOnUiThread { refreshConnLine() }
+        }
+        // v1.8.6: единый источник «текущий протокол» — перерисовка строк
+        // соединения на любое изменение (согласование/фоллбек/ротация).
+        ProtocolState.onChange {
             runOnUiThread { refreshConnLine() }
         }
         // v0.8.2: журнал обновлений льётся в консоль СРАЗУ (реалтайм),

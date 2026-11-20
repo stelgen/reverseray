@@ -481,12 +481,6 @@ internal fun MainActivity.buildLogLevelCard(): LinearLayout {
         setTypeface(typeface, Typeface.BOLD)
         setPadding(0, dp(12), 0, dp(4))
     })
-    box.addView(TextView(this).apply {
-        setText(R.string.set_log_level_hint)
-        textSize = 12f
-        setTextColor(0xFF8FA3D9.toInt())
-        setPadding(0, 0, 0, dp(4))
-    })
     val btn = outlined(R.string.set_log_level)
     fun labelOf(k: LogKind): Int = when (k) {
         LogKind.TRACE -> R.string.lvl_trace

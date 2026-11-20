@@ -56,6 +56,7 @@ import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.ProtoFallback
+import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpFrame
 import dev.stelgen.reverseray.core.RrpProtocols
@@ -176,25 +177,12 @@ internal fun MainActivity.setConnText(text: String) {
 
 
 internal fun MainActivity.refreshConnLine() {
-    val negotiated = TunnelService.lastNegotiatedProto
-    val proto = if (negotiated.isNotBlank() && TunnelService.isSessionState(TunnelService.lastState)) {
-        negotiated
-    } else {
-        try {
-            RrpUri.parse(prefs().getString(TunnelService.KEY_CONFIG, "") ?: "").proto
-        } catch (_: Exception) {
-            ""
-        }.ifBlank { RrpProtocols.DEFAULT }
-    }
+    // v1.8.6: протокол читается ТОЛЬКО из ProtocolState (единый источник:
+    // согласованный сессией > заявленный из ссылки > AUTO/ROTATE) и показывается
+    // без пояснений — канон «как WS».
     val t = currentTransport()
     val transportShort = if (t == RrpUri.TRANSPORT_WS) "WS" else "TCP"
-    connLineViews.forEach {
-        it.text = getString(
-            R.string.conn_line,
-            RrpProtocols.labelWithVer(RrpProtocols.normalize(proto)),
-            transportShort,
-        )
-    }
+    connLineViews.forEach { it.text = getString(R.string.conn_line, ProtocolState.display(), transportShort) }
 }
 
 

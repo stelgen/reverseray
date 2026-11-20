@@ -56,6 +56,7 @@ import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.Modules
 import dev.stelgen.reverseray.core.MtProto
 import dev.stelgen.reverseray.core.ProtoFallback
+import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpFrame
 import dev.stelgen.reverseray.core.RrpProtocols
@@ -122,7 +123,7 @@ internal fun MainActivity.refreshAppPanel() {
     infoRow(appInfoBox, getString(R.string.app_ram_row), fmtBytes(ramUsed))
     infoRow(appInfoBox, getString(R.string.app_disk_row), fmtBytes(apkLen + dataLen))
     infoRow(appInfoBox, getString(R.string.app_traffic_life_row), fmtBytes(lifetime))
-    infoRow(appInfoBox, getString(R.string.app_proto_row), RrpProtocols.labelWithVer(currentProto))
+    infoRow(appInfoBox, getString(R.string.app_proto_row), ProtocolState.display())
     // v0.8.1: версия текущего протокола (или пусто, если версии нет — канон)
     val pver = RrpProtocols.ver(currentProto)
     infoRow(appInfoBox, getString(R.string.app_proto_ver_row), pver.ifEmpty { "—" })

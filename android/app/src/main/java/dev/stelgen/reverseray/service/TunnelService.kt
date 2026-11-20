@@ -34,6 +34,7 @@ import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.core.Msgs
 import dev.stelgen.reverseray.core.Negotiation
 import dev.stelgen.reverseray.core.ProtoFallback
+import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.RrpAuthException
 import dev.stelgen.reverseray.core.RrpClient
 import dev.stelgen.reverseray.core.RrpProtocols
@@ -84,6 +85,17 @@ import java.util.concurrent.atomic.AtomicLong
  */
 /** Цветовая роль строки журнала — в едином лог-центре LogStore (v0.9.6). */
 typealias LogKind = dev.stelgen.reverseray.core.LogKind
+
+/**
+ * v1.8.6: имя протокола/режима для статусов и UI БЕЗ пояснений (канон «как
+ * WS»): AUTO/ROTATE — постоянные метки, остальное — короткое имя протокола.
+ * Файловая (чистая, без состояния сервиса) — общий клиент и сервис без дублей.
+ */
+internal fun protoDisplayName(id: String): String = when {
+    id == TunnelService.PROTO_AUTO || id.isBlank() -> ProtocolState.AUTO
+    id == TunnelService.PROTO_ROTATE -> ProtocolState.ROTATE
+    else -> RrpProtocols.label(id)
+}
 
 class TunnelService : Service() {
 
@@ -347,6 +359,7 @@ class TunnelService : Service() {
                     pushLog(getString(R.string.log_mtp_keys), LogKind.OK)
                 }
                 lastNegotiatedProto = client.negotiatedProto
+                syncProtoState()
                 sendBroadcast(
                     Intent(ACTION_STATUS).setPackage(packageName)
                         .putExtra(EXTRA_STATUS, client.negotiatedProto)
@@ -541,10 +554,6 @@ class TunnelService : Service() {
         ""
     }
 
-    /** Честное имя протокола для статусов: AUTO — словом, остальное — меткой. */
-    internal fun protoDisplayName(id: String): String =
-        if (id == PROTO_AUTO || id.isBlank()) getString(R.string.proto_auto_label)
-        else RrpProtocols.labelWithVer(id)
 
     internal fun currentProto(): String {
         val cfg = try {
@@ -585,6 +594,7 @@ class TunnelService : Service() {
         val canon = (res as? ConfigResult.Valid)?.canonical
         if (canon != null && canon != fromMirror) {
             prefs().edit().putString(KEY_CONFIG, canon).apply()
+            syncProtoState()
         }
         return res
     }
@@ -807,6 +817,7 @@ class TunnelService : Service() {
     private fun commitPrimaryUri(canonical: String) {
         ensureStore()
         prefs().edit().putString(KEY_CONFIG, canonical).apply()
+        syncProtoState()
         val active = sessionStore.active() ?: return
         sessionStore.update(active.copy(uri = canonical))
     }
@@ -898,9 +909,20 @@ class TunnelService : Service() {
                 val client = buildClient(cfg, validateProto, validate = true)
                 try {
                     client.connect()
-                    // валидация (PROBE) уже прошла внутри connect() — коммитим
-                    commitProto(commitProtoId, cfg, primarySess)
-                    updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, protoDisplayName(commitProtoId)))
+                    // валидация (PROBE) уже прошла внутри connect() — коммитим.
+                    // v1.8.6: коммитим СОГЛАСОВАННЫЙ протокол (не запрошенный):
+                    // сервер мог согласовать вниз (просили bittorrent — получил
+                    // wireguard), тогда ссылка и весь UI обязаны показывать
+                    // фактический протокол — канон единого источника правды.
+                    val agreed = client.negotiatedProto
+                    commitProto(if (isAuto) "" else agreed, cfg, primarySess)
+                    if (!isAuto && agreed != commitProtoId) {
+                        pushLog(
+                            getString(R.string.log_proto_agreed, RrpProtocols.labelWithVer(agreed), RrpProtocols.labelWithVer(commitProtoId)),
+                            LogKind.INFO,
+                        )
+                    }
+                    updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, protoDisplayName(agreed)))
                     try { client.close() } catch (_: Exception) {}
                     primarySess?.let { spawnRunnersFor(it) }
                     return
@@ -951,6 +973,7 @@ class TunnelService : Service() {
             prefs().edit().putString(KEY_CONFIG, updated).apply()
         }
         pushLog(getString(R.string.log_proto_applied, proto))
+        syncProtoState()
     }
 
     /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
@@ -1186,11 +1209,13 @@ class TunnelService : Service() {
                     sessionStore.update(sess.profile.copy(uri = updated))
                     if (sess.id == sessionStore.activeId()) {
                         prefs().edit().putString(KEY_CONFIG, updated).apply()
+                        syncProtoState()
                     }
                 }
             }
         } catch (_: Exception) {
         }
+        syncProtoState()
         sendBroadcast(
             Intent(ACTION_STATUS).setPackage(packageName)
                 .putExtra(EXTRA_STATE, STATE_PROTO_ROLLBACK)
@@ -1244,6 +1269,10 @@ class TunnelService : Service() {
         unregisterNetworkWatching()
         releaseWakeLock()
         persistUsageSafely()
+        // v1.8.6: сессии нет — согласованного протокола нет; читатели видят
+        // заявленный из ссылки (или AUTO), а не хвост прошлой сессии.
+        lastNegotiatedProto = ""
+        syncProtoState()
         updateStatus(STATE_STOPPED, getString(R.string.status_stopped))
     }
 
@@ -1336,6 +1365,16 @@ class TunnelService : Service() {
         else -> fallback
     }
 
+    /**
+     * v1.8.6: синхронизация ProtocolState — ЕДИНОГО источника «текущий
+     * протокол» для всех вкладок/логов. Вызывается на каждом статусе и после
+     * каждой записи ссылки; UI и логи только читают (никакой разношерсти).
+     */
+    private fun syncProtoState() {
+        ProtocolState.sync(prefs().getString(KEY_CONFIG, "") ?: "", prefs().getBoolean(KEY_PROTO_ROTATE, false))
+        ProtocolState.update(negotiated = lastNegotiatedProto)
+    }
+
     internal fun updateStatus(state: String, text: String) {
         lastStatus = text
         // v0.9.2 (R3): источник истины для UI — сервис (переживает recreate).
@@ -1357,7 +1396,9 @@ class TunnelService : Service() {
             aggregateStates(mgr.all().map { it.state }, state)
         }
         lastState = agg
-        lastProto = claimedProto()
+        // v1.8.6: единый источник «текущий протокол» синхронизируется на
+        // КАЖДЫЙ статус (сервис — единственный писатель, UI — только читатели).
+        syncProtoState()
         // цветовая роль по состоянию (канон единого консольного окна v0.8)
         val kind = when (state) {
             STATE_CONNECTED, STATE_PROTO -> LogKind.OK
@@ -1572,8 +1613,7 @@ class TunnelService : Service() {
         /** v0.9.9: живая ли сессия (для показа согласованного протокола в UI). */
         fun isSessionState(s: String): Boolean =
             s == STATE_CONNECTED || s == STATE_PROTO
-        @Volatile var lastProto: String = ""
-
+    
         // v1.6.0: буфер графика УБРАН из сервиса — единственный источник
         // истории главного графика: ui/GraphHistory (пишется ВСЕГДА:
         // туннелем и общесистемным сэмплером Activity; переживает recreate).

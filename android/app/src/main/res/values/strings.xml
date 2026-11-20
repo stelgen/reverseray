@@ -71,9 +71,9 @@
     <string name="proto_section">Tunnel protocol</string>
     <string name="proto_unknown">Protocol: unknown</string>
         <!-- v0.9.5: AUTO protocol mode + client-side module controls -->
-    <string name="proto_auto_label">AUTO (best common)</string>
+    <string name="proto_auto_label">AUTO</string>
     <!-- v1.8.0: ROTATE protocol mode (alternative to AUTO, mutually exclusive) -->
-    <string name="proto_rotate_label">ROTATE (30 min)</string>
+    <string name="proto_rotate_label">ROTATE</string>
     <string name="status_rotate_on">Protocol rotation enabled: switching every %1$d min</string>
     <string name="log_proto_rotation_on">Protocol rotation ON (every %1$d min, strict order)</string>
     <string name="log_proto_rotation">Rotation: %1$s → %2$s (every %3$d min)</string>
@@ -89,14 +89,14 @@
 <string name="modules_hint">Synced with the server, survives offline.</string>
     <string name="modules_camo_desc">Background API-like chatter inside the tunnel.</string>
 <string name="proto_switch">Switch protocol</string>
-    <string name="proto_switching">Switching to %1$s (validating with real traffic…)</string>
+    <string name="proto_switching">Switching to %1$s</string>
     <string name="proto_current">Protocol: %1$s</string>
     <string name="proto_current_list">Protocol: %1$s · server supports: %2$s</string>
     <string name="proto_rollback_toast">New protocol failed validation — rolled back to the last working one</string>
     <string name="transport_switch">Transport</string>
     <string name="transport_current">Transport: %1$s</string>
-    <string name="transport_tcp_label">TCP — plain TLS stream</string>
-    <string name="transport_ws_label">WebSocket — looks like a regular website</string>
+    <string name="transport_tcp_label">TCP</string>
+    <string name="transport_ws_label">WebSocket</string>
     <string name="transport_applied">transport set to %1$s (applies on next Start)</string>
     <string name="transport_same">Transport already selected</string>
     <string name="conn_line">Connection: %1$s · %2$s</string>
@@ -313,6 +313,7 @@
     <string name="traffic_stats">avg %1$s · peak %2$s</string>
     <string name="log_proto_not_executable">protocol %1$s is advertised by a module but not executable in this build — connecting with %2$s (update the APK)</string>
     <string name="log_proto_applied">protocol applied: %1$s (link updated)</string>
+    <string name="log_proto_agreed">agreed %1$s (requested %2$s — downgraded)</string>
     <string name="log_netcallback_failed">NetworkCallback not registered: %1$s</string>
     <string name="log_network_back">network is back — instant retry</string>
 
@@ -393,10 +394,9 @@
     <string name="sess_bulk_result">Added: %1$d · unrecognized: %2$d</string>
     <!-- v1.8.4: log level setting (trace..panic) -->
     <string name="set_log_level">Log level</string>
-    <string name="set_log_level_hint">Minimum level kept in the log: trace is the most verbose, panic is fatal-only. Home and Updates tabs keep their own channels; the Log tab shows everything</string>
-    <string name="lvl_trace">Trace (all frames)</string>
-    <string name="lvl_debug">Debug (handshakes)</string>
-    <string name="lvl_info">Info (default)</string>
+        <string name="lvl_trace">Trace</string>
+    <string name="lvl_debug">Debug</string>
+    <string name="lvl_info">Info</string>
     <string name="lvl_notice">Notice</string>
     <string name="lvl_ok">Info + successes</string>
     <string name="lvl_warn">Warnings and up</string>

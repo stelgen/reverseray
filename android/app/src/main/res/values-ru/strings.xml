@@ -71,9 +71,9 @@
     <string name="proto_section">Протокол туннеля</string>
     <string name="proto_unknown">Протокол: неизвестно</string>
         <!-- v0.9.5: режим AUTO протокола + управление модулями из GUI -->
-    <string name="proto_auto_label">AUTO (лучший общий)</string>
+    <string name="proto_auto_label">AUTO</string>
     <!-- v1.8.0: режим «Ротация» (альтернатива AUTO, взаимоисключающие) -->
-    <string name="proto_rotate_label">РОТАЦИЯ (30 мин)</string>
+    <string name="proto_rotate_label">РОТАЦИЯ</string>
     <string name="status_rotate_on">Ротация протоколов включена: смена каждые %1$d мин</string>
     <string name="log_proto_rotation_on">Ротация протоколов ВКЛ (каждые %1$d мин, строго по порядку)</string>
     <string name="log_proto_rotation">Ротация: %1$s → %2$s (каждые %3$d мин)</string>
@@ -91,8 +91,8 @@
 <string name="proto_switch">Сменить протокол</string>
     <string name="transport_switch">Транспорт</string>
     <string name="transport_current">Транспорт: %1$s</string>
-    <string name="transport_tcp_label">TCP — обычный TLS-поток</string>
-    <string name="transport_ws_label">WebSocket — выглядит как обычный сайт</string>
+    <string name="transport_tcp_label">TCP</string>
+    <string name="transport_ws_label">WebSocket</string>
     <string name="transport_applied">транспорт изменён на %1$s (применится при следующем Старте)</string>
     <string name="transport_same">Транспорт уже выбран</string>
     <string name="conn_line">Соединение: %1$s · %2$s</string>
@@ -100,7 +100,7 @@
     <string name="udp_toggle">UDP-релей (DNS+, QUIC)</string>
     <string name="log_udp_on">UDP-релей включён — дейтаграммы снова ходят</string>
     <string name="log_udp_off">UDP-релей выключен галочкой — дейтаграммы отклоняются (правило нуля байт)</string>
-    <string name="proto_switching">Смена протокола: %1$s (валидация реального трафика…)</string>
+    <string name="proto_switching">Смена протокола: %1$s</string>
     <string name="proto_current">Протокол: %1$s</string>
     <string name="proto_current_list">Протокол: %1$s · сервер поддерживает: %2$s</string>
     <string name="proto_rollback_toast">Новый протокол не прошёл валидацию — вернулись на последний рабочий</string>
@@ -313,6 +313,7 @@
     <string name="traffic_stats">ср. %1$s · пик %2$s</string>
     <string name="log_proto_not_executable">протокол %1$s заявлен модулем, но не исполняется этой версией приложения — подключение на %2$s (обновите APK)</string>
     <string name="log_proto_applied">протокол применён: %1$s (ссылка обновлена)</string>
+    <string name="log_proto_agreed">согласовано %1$s (просили %2$s — согласовано вниз)</string>
     <string name="log_netcallback_failed">NetworkCallback не зарегистрирован: %1$s</string>
     <string name="log_network_back">сеть появилась — мгновенный retry</string>
 
@@ -393,10 +394,9 @@
     <string name="sess_bulk_result">Добавлено: %1$d · нераспознано: %2$d</string>
     <!-- v1.8.4: настройка уровня журнала (trace..panic) -->
     <string name="set_log_level">Уровень журнала</string>
-    <string name="set_log_level_hint">Минимальный уровень, который пишется в лог: трейс — самый подробный, паника — только фатальное. Вкладки «Главная» и «Обновления» показывают свои каналы, «Лог» — всё</string>
-    <string name="lvl_trace">Трейс (все кадры)</string>
-    <string name="lvl_debug">Отладка (хендшейки)</string>
-    <string name="lvl_info">Инфо (по умолчанию)</string>
+        <string name="lvl_trace">Трейс</string>
+    <string name="lvl_debug">Отладка</string>
+    <string name="lvl_info">Инфо</string>
     <string name="lvl_notice">Уведомления</string>
     <string name="lvl_ok">Инфо + успехи</string>
     <string name="lvl_warn">Предупреждения и выше</string>

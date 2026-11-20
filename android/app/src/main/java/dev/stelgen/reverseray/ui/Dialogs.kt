@@ -22,9 +22,11 @@ import dev.stelgen.reverseray.core.RrpFrame
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
 import dev.stelgen.reverseray.core.RrpUriConfig
+import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.service.PrefsBackend
 import dev.stelgen.reverseray.service.TunnelService
+import dev.stelgen.reverseray.service.protoDisplayName
 
 internal fun MainActivity.showProtocolPicker() {
     val ids = RrpProtocols.displayList()
@@ -32,26 +34,28 @@ internal fun MainActivity.showProtocolPicker() {
         Toast.makeText(this, R.string.proto_unknown, Toast.LENGTH_SHORT).show()
         return
     }
+    // Заявленный протокол ссылки — для решения «менять или нет»;
+    // ОТОБРАЖАЕМЫЙ текущий выбор — из ProtocolState (согласованный).
     val current = when (val res = resolvedConfig()) {
         is ConfigResult.Valid -> res.cfg.proto
-        else -> RrpProtocols.DEFAULT
+        else -> ""
     }
     // v0.9.5: первый пункт — AUTO (ссылка без proto=): сервер сам согласует
     // лучший общий протокол (wireguard → mtproto2 → rrp1).
-    // v1.6.0: в переключателе — ТОЛЬКО технические id протоколов
-    // (rrp1, mtproto2, wg1, torrent1, apimask) без версий/пояснений —
-    // профессиональный вид; версии остаются в строке статуса.
-    // v1.8.0: второй пункт — «Ротация» (взаимоисключающ с AUTO):
-    // автосмена каждые 30 мин, строго по порядку.
+    // v1.8.0: второй пункт — «Ротация» (взаимоисключающ с AUTO).
+    // v1.8.6: пункты — короткие имена протоколов БЕЗ пояснений (канон «как
+    // WS»); после фоллбека сервера пикер честно показывает СОГЛАСОВАННЫЙ
+    // протокол (ProtocolState), а не заявленный в ссылке.
     val rotateOn = prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)
     val options = mutableListOf<String>()
-    options.add(getString(R.string.proto_auto_label))
-    options.add(getString(R.string.proto_rotate_label))
-    options.addAll(ids.map { it })
+    options.add(ProtocolState.AUTO)
+    options.add(ProtocolState.ROTATE)
+    options.addAll(ids.map { ProtocolState.plainName(it) })
     val checked = when {
-        rotateOn -> 1
+        rotateOn && ProtocolState.negotiated.isBlank() -> 1
+        ProtocolState.negotiated.isNotBlank() -> ids.indexOf(ProtocolState.actual()).let { if (it < 0) 0 else it + 2 }
         current.isBlank() -> 0
-        else -> ids.indexOf(current).let { if (it < 0) 0 else it + 2 }
+        else -> ids.indexOf(ProtocolState.actual()).let { if (it < 0) 0 else it + 2 }
     }
     MaterialAlertDialogBuilder(this)
         .setTitle(R.string.proto_switch)
@@ -71,7 +75,7 @@ internal fun MainActivity.showProtocolPicker() {
 }
 
 internal fun MainActivity.requestProtoSwitch(proto: String) {
-    setConnText(getString(R.string.proto_switching, RrpProtocols.labelWithVer(proto)))
+    setConnText(getString(R.string.proto_switching, protoDisplayName(proto)))
     val i = Intent(this, TunnelService::class.java)
         .setAction(TunnelService.ACTION_SWITCH_PROTO)
         .putExtra(TunnelService.EXTRA_PROTO, proto)
@@ -124,6 +128,8 @@ internal fun MainActivity.applyTransport(cfg: RrpUriConfig, transport: String) {
     )
     val canonical = cfg.copy(transport = transport).serialize()
     prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+    // v1.8.6: писатель ссылки обязан синхронизировать единый источник протокола
+    ProtocolState.sync(canonical, prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false))
     syncPrimaryProfileUri(canonical)
     updateLinkValueView(canonical)
     refreshConnLine()
@@ -142,6 +148,7 @@ internal fun MainActivity.applyPastedConfig(content: String, announce: Boolean, 
         is ConfigResult.Valid -> {
             val canonical = res.canonical
             prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+            ProtocolState.sync(canonical, prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false))
             syncPrimaryProfileUri(canonical)
             updateLinkValueView(canonical)
             setLinkStatus(getString(R.string.link_status_ok))
@@ -213,6 +220,7 @@ internal fun MainActivity.showEditLinkDialog() {
             dialog.dismiss()
             if (text.isBlank()) {
                 prefs().edit().remove(TunnelService.KEY_CONFIG).apply()
+                ProtocolState.sync("", false)
                 // v1.5.0: очистка ссылки = очистка профилей (single-server UX как в v1.3.0)
                 try {
                     val store = SessionStore(PrefsBackend(prefs()))
@@ -228,6 +236,7 @@ internal fun MainActivity.showEditLinkDialog() {
                 is ConfigResult.Valid -> {
                     val canonical = res.canonical
                     prefs().edit().putString(TunnelService.KEY_CONFIG, canonical).apply()
+                    ProtocolState.sync(canonical, prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false))
                     syncPrimaryProfileUri(canonical)
                     updateLinkValueView(canonical)
                     setLinkStatus(getString(R.string.link_status_ok))
