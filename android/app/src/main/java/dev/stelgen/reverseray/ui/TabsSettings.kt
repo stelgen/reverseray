@@ -92,6 +92,9 @@ internal fun MainActivity.buildSettingsPage(): View {
     // Язык (v0.8.3): system / русский / english — динамически, всё приложение и логи
     p.addView(buildLangCard())
 
+    // Уровень журнала (v1.8.4): порог trace..panic — что вообще пишем в лог
+    p.addView(buildLogLevelCard())
+
     // О приложении: версии/модули/Рам/диск/трафик за всё время/протокол + константы защиты
     p.addView(sectionTitle(R.string.about_app_title, null))
     appInfoBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -461,5 +464,68 @@ internal fun MainActivity.buildLangCard(): LinearLayout {
     bRu.setOnClickListener { pick(L10nUi.LANG_RU) }
     bEn.setOnClickListener { pick(L10nUi.LANG_EN) }
     paint()
+    return box
+}
+
+
+/**
+ * v1.8.4: карточка «Уровень журнала» — минимальный записываемый уровень
+ * (LogStore.minLevel). Всё «тише» порога в кольцо и на экраны не попадает:
+ * TRACE/DEBUG включаются осознанно (диагностика протокола), по умолчанию INFO.
+ */
+internal fun MainActivity.buildLogLevelCard(): LinearLayout {
+    val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    box.addView(TextView(this).apply {
+        setText(R.string.set_log_level)
+        textSize = 14f
+        setTypeface(typeface, Typeface.BOLD)
+        setPadding(0, dp(12), 0, dp(4))
+    })
+    box.addView(TextView(this).apply {
+        setText(R.string.set_log_level_hint)
+        textSize = 12f
+        setTextColor(0xFF8FA3D9.toInt())
+        setPadding(0, 0, 0, dp(4))
+    })
+    val btn = outlined(R.string.set_log_level)
+    fun labelOf(k: LogKind): Int = when (k) {
+        LogKind.TRACE -> R.string.lvl_trace
+        LogKind.DEBUG -> R.string.lvl_debug
+        LogKind.INFO -> R.string.lvl_info
+        LogKind.NOTICE -> R.string.lvl_notice
+        LogKind.OK -> R.string.lvl_ok
+        LogKind.WARN -> R.string.lvl_warn
+        LogKind.ERROR -> R.string.lvl_error
+        LogKind.PANIC -> R.string.lvl_panic
+    }
+    fun paint() {
+        val cur = LogKind.from(prefs().getString(TunnelService.KEY_LOG_MIN_LEVEL, null)) ?: LogKind.INFO
+        btn.text = getString(labelOf(cur))
+    }
+    paint()
+    btn.setOnClickListener {
+        val levels = LogKind.entries.toTypedArray()
+        val labels = levels.map { getString(labelOf(it)) }.toTypedArray()
+        val cur = LogKind.from(prefs().getString(TunnelService.KEY_LOG_MIN_LEVEL, null)) ?: LogKind.INFO
+        val selected = levels.indexOf(cur)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.set_log_level)
+            .setSingleChoiceItems(labels, selected) { d, which ->
+                val old = cur.name
+                val next = levels[which]
+                if (next != cur) {
+                    prefs().edit().putString(TunnelService.KEY_LOG_MIN_LEVEL, next.name).apply()
+                    LogStore.minLevel = next
+                    TunnelService.logSettingChange(
+                        getString(R.string.set_log_level), old, next.name,
+                    )
+                }
+                d.dismiss()
+                paint()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+    box.addView(btn)
     return box
 }

@@ -27,6 +27,8 @@ import dev.stelgen.reverseray.core.Apimask
 import dev.stelgen.reverseray.core.AutoBalancer
 import dev.stelgen.reverseray.core.ProtoRotator
 import dev.stelgen.reverseray.core.ConnectionManager
+import dev.stelgen.reverseray.core.ConfigResult
+import dev.stelgen.reverseray.core.ConfigSource
 import dev.stelgen.reverseray.core.LogStore
 import dev.stelgen.reverseray.core.SessionStore
 import dev.stelgen.reverseray.core.Msgs
@@ -316,14 +318,14 @@ class TunnelService : Service() {
         private fun sessOf(client: RrpClient): Sess? =
             synchronized(runners) { runners.firstOrNull { it.client === client }?.sess }
 
-        override fun onLog(client: RrpClient, message: String) {
+        override fun onLog(client: RrpClient, message: String, kind: LogKind) {
             Log.d(TAG, "${client.host}:${client.port}: $message")
             val sess = sessOf(client)
             if (sess != null) {
-                manager?.workerLog(sess.id, "${client.host}:${client.port}: $message", LogKind.INFO)
-                    ?: pushLog("[${sess.profile.name}] ${client.host}:${client.port}: $message")
+                manager?.workerLog(sess.id, "${client.host}:${client.port}: $message", kind)
+                    ?: pushLog("[${sess.profile.name}] ${client.host}:${client.port}: $message", kind)
             } else {
-                pushLog("${client.host}:${client.port}: $message")
+                pushLog("${client.host}:${client.port}: $message", kind)
             }
         }
 
@@ -419,6 +421,7 @@ class TunnelService : Service() {
         createChannel()
         ensureStore()
         lifetime = AtomicLong(prefs().getLong(KEY_TRAFFIC_LIFETIME, 0L))
+        applyLogMinLevel(prefs())
     }
 
     /** Ленивая инициализация SessionStore + ОДНОРАЗОВАЯ миграция v1.3→v1.5. */
@@ -485,7 +488,8 @@ class TunnelService : Service() {
                 // пишем в журнал и реконнектим. Никакого молчаливого доверия.
                 ensureStore()
                 val newPin = intent.getStringExtra(EXTRA_REAL_PIN)
-                val link = prefs().getString(KEY_CONFIG, null)
+                // v1.8.4: резолв через единый ConfigSource (профиль → зеркало)
+                val link = (resolvedConfig() as? ConfigResult.Valid)?.cfg?.serialize()
                 val updated = newPin?.let { RrpUri.replacePin(link ?: "", it) }
                 if (updated != null) {
                     // v1.5.0: пин обновляется в URI PRIMARY-профиля + зеркало
@@ -493,7 +497,7 @@ class TunnelService : Service() {
                     pushLog(Msgs.PIN_ACCEPTED.t(newPin ?: ""), LogKind.WARN)
                     startTunnel()
                 } else {
-                    pushLog(Msgs.SEND_FAILED.t("pin update failed"), LogKind.ERR)
+                    pushLog(Msgs.SEND_FAILED.t("pin update failed"), LogKind.ERROR)
                 }
                 return START_STICKY
             }
@@ -565,6 +569,24 @@ class TunnelService : Service() {
         // v0.9.5: возвращаем КАК В ССЫЛКЕ ("" = AUTO) — GUI честно показывает
         // режим AUTO, warning «не исполняется» только для явных протоколов.
         return cfg?.proto?.trim() ?: ""
+    }
+
+    /**
+     * v1.8.4: ЕДИНЫЙ резолв конфига сервиса (активный PRIMARY-профиль →
+     * зеркало KEY_CONFIG) + self-heal зеркала каноном. Раньше switchProtocol
+     * читал только зеркало — после добавления сервера (профиль есть, зеркало
+     * пусто) смены протокола отвечали «Нет конфига», хотя ссылка валидна.
+     */
+    internal fun resolvedConfig(): ConfigResult {
+        ensureStore()
+        val fromProfile = try { sessionStore.active()?.uri } catch (_: Exception) { null }
+        val fromMirror = prefs().getString(KEY_CONFIG, null)
+        val res = ConfigSource.firstValid(fromProfile, fromMirror)
+        val canon = (res as? ConfigResult.Valid)?.canonical
+        if (canon != null && canon != fromMirror) {
+            prefs().edit().putString(KEY_CONFIG, canon).apply()
+        }
+        return res
     }
 
     internal fun startTunnel() {
@@ -726,7 +748,7 @@ class TunnelService : Service() {
                 if (usage.limit > 0 && usage.used >= usage.limit) {
                     // КАНОН «ЛИМИТ — КОРОЛЬ»: ровно ноль байт от нас.
                     updateStatus(STATE_ERROR, getString(R.string.status_limit_reached))
-                    pushLog(getString(R.string.status_limit_reached), LogKind.ERR)
+                    pushLog(getString(R.string.status_limit_reached), LogKind.ERROR)
                     sendBroadcast(
                         Intent(ACTION_STATUS).setPackage(packageName)
                             .putExtra(EXTRA_STATE, STATE_LIMIT_REACHED)
@@ -845,16 +867,27 @@ class TunnelService : Service() {
         val commitProtoId = if (newProto == PROTO_AUTO) "" else newProto
         val validateProto = if (newProto == PROTO_AUTO) RrpProtocols.PREFERRED_AUTO else newProto
         switchingProto = true
+        // v1.8.4: DEBUG — начало смены протокола (от → до) для диагностики свитчей.
+        pushLog(
+            "switch begin: " + (if (oldProto.isBlank()) "-" else RrpProtocols.labelWithVer(oldProto)) +
+                " → " + (if (isAuto) "AUTO" else RrpProtocols.labelWithVer(newProto)),
+            LogKind.DEBUG,
+        )
         // v1.5.0: смена протокола — ОПЕРАЦИЯ НАД PRIMARY (главная кнопка/пикер);
         // другие сессии живут своей жизнью (изоляция).
         val primarySess = sessionStore.activeId()?.let { sessById[it] }
         switchingSessionId = sessionStore.activeId()
         try {
-            val cfg = try {
-                RrpUri.parse(p.getString(KEY_CONFIG, null) ?: "")
-            } catch (e: Exception) {
-                updateStatus(STATE_ERROR, getString(R.string.status_no_config))
-                return
+            val cfg = when (val res = resolvedConfig()) {
+                is ConfigResult.Valid -> res.cfg
+                is ConfigResult.Invalid -> {
+                    updateStatus(STATE_ERROR, getString(R.string.invalid_config, res.reason))
+                    return
+                }
+                ConfigResult.Empty -> {
+                    updateStatus(STATE_ERROR, getString(R.string.status_no_config))
+                    return
+                }
             }
             updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, protoDisplayName(newProto)))
             // v0.9.2 (R1): АТОМАРНОСТЬ ПЕРЕКЛЮЧЕНИЯ — старые коннекты PRIMARY
@@ -1109,7 +1142,7 @@ class TunnelService : Service() {
                 // причины). Останавливаем авто-реконнект честным статусом;
                 // обновление ссылки + кнопка Старт начинают новую серию.
                 lastError = e.message ?: "?"
-                pushLog(getString(R.string.status_auth_failed), LogKind.ERR)
+                pushLog(getString(R.string.status_auth_failed), LogKind.ERROR)
                 updateStatus(STATE_ERROR, getString(R.string.status_auth_failed))
                 r.client = null
                 r.sess?.id?.let { manager?.workerFatal(it, getString(R.string.status_auth_failed)) }
@@ -1349,7 +1382,7 @@ class TunnelService : Service() {
         // цветовая роль по состоянию (канон единого консольного окна v0.8)
         val kind = when (state) {
             STATE_CONNECTED, STATE_PROTO -> LogKind.OK
-            STATE_ERROR, STATE_STOPPED, STATE_LIMIT_REACHED -> LogKind.ERR
+            STATE_ERROR, STATE_STOPPED, STATE_LIMIT_REACHED -> LogKind.ERROR
             STATE_CONNECTING, STATE_RETRY -> LogKind.WARN
             else -> LogKind.INFO
         }
@@ -1425,7 +1458,7 @@ class TunnelService : Service() {
         val cfg = try {
             RrpUri.parse(profile.uri)
         } catch (e: Exception) {
-            pushLog("[${profile.name}] ${e.message}", LogKind.ERR)
+            pushLog("[${profile.name}] ${e.message}", LogKind.ERROR)
             return
         }
         pushLog("[${profile.name}] ${getString(R.string.log_probe_running)}")
@@ -1434,7 +1467,7 @@ class TunnelService : Service() {
             client.connect()
             pushLog("[${profile.name}] ${getString(R.string.log_probe_ok)}", LogKind.OK)
         } catch (e: Exception) {
-            pushLog("[${profile.name}] ${e.message}", LogKind.ERR)
+            pushLog("[${profile.name}] ${e.message}", LogKind.ERROR)
         } finally {
             try { client.close() } catch (_: Exception) {}
         }
@@ -1460,6 +1493,9 @@ class TunnelService : Service() {
         const val KEY_TRAFFIC_USED = "traffic_used"        // израсходовано за период
         const val KEY_USAGE_PERIOD = "usage_period"        // ключ периода ("2026-10-08")
         const val KEY_WIFI_ONLY = "wifi_only"
+
+        /** v1.8.4: минимальный уровень журнала (идентификатор LogKind). */
+        const val KEY_LOG_MIN_LEVEL = "log_min_level"
         const val KEY_PROBE_TARGET = "probe_target"
         const val KEY_AUTO_UPDATE = "auto_update"          // проверка обновлений раз в 24 ч
         const val KEY_THEME = "theme"                      // v0.8.1: auto|dark|light
@@ -1573,6 +1609,15 @@ class TunnelService : Service() {
         }
 
         /**
+         * v1.8.4: применить настройку «Уровень журнала» (prefs → LogStore.minLevel).
+         * Вызывается при старте сервиса и после смены в настройках.
+         */
+        fun applyLogMinLevel(p: android.content.SharedPreferences) {
+            val k = LogKind.from(p.getString(KEY_LOG_MIN_LEVEL, null)) ?: LogKind.INFO
+            LogStore.minLevel = k
+        }
+
+        /**
          * Логирование изменения настройки: вызывается ТОЛЬКО когда значение
          * реально изменилось (проверка на стороне MainActivity). Попадает и в
          * журнал, и в статусную строку главного экрана.
@@ -1580,7 +1625,7 @@ class TunnelService : Service() {
         fun logSettingChange(name: String, from: String, to: String) {
             if (from == to) return // не менялось — не пишем
             val line = Msgs.LOG_SETTING_CHANGE.t(name, from, to) // companion без Context — типизированный каталог core
-            pushLog(line, LogKind.WARN) // важное (тёмно-жёлтое): изменение настроек
+            pushLog(line, LogKind.NOTICE) // v1.8.4: уведомление (бирюза) — важное, но не проблема
             lastStatus = line
         }
 

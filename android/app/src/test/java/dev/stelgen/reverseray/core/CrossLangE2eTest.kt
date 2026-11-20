@@ -34,6 +34,7 @@ class CrossLangE2eTest {
     private fun cryptoActive(client: RrpClient, proto: String): Boolean = when (proto) {
         MtProto.PROTO_ID -> client.mtProtoActive
         Wg.PROTO_ID -> client.wgActive
+        Torrent.PROTO_ID -> client.btActive // v1.8.4: bt раньше попадал в else→true
         else -> true
     }
 
@@ -69,7 +70,7 @@ class CrossLangE2eTest {
             protoId = proto,
             validateProbeTarget = if (validate) "1.1.1.1:443" else null,
             listener = object : RrpClient.Listener {
-                override fun onLog(client: RrpClient, message: String) {
+                override fun onLog(client: RrpClient, message: String, kind: LogKind) {
                     logs.add(message)
                 }
             },
@@ -168,6 +169,71 @@ class CrossLangE2eTest {
             } finally {
                 try { client.close() } catch (_: Exception) {}
             }
+        }
+    }
+
+
+    /**
+     * v1.8.4: БЕСШОВНАЯ СМЕНА (0x2C) из-под крипты — цепочка
+     * rrp1 → wireguard → bittorrent → mtproto2 на живом сервере.
+     * Регресс на клиент-серверный баг: целевой KEY_REQ при активной крипте
+     * игнорировался (клиент) / глотался (сервер) → дедлайн закрывал сессию.
+     * RR_E2E_MIXED задан → после КАЖДОГО свитча гоняем реальный DATA
+     * (socksGet) уже новым конвертом.
+     */
+    @Test
+    fun e2e_seamlessSwitchChainFromUnderCrypto() {
+        assumeNotNull("RR_E2E_LINK не задан — пропуск (локальная сборка без сервера)", link)
+        val chain = listOf(Wg.PROTO_ID, Torrent.PROTO_ID, MtProto.PROTO_ID)
+        val logs = CopyOnWriteArrayList<String>()
+        val client = connectProto(RrpProtocols.DEFAULT, logs, validate = false, allowLan = mixed != null)
+        try {
+            assertEquals("стартовый протокол", RrpProtocols.DEFAULT, client.negotiatedProto)
+            for (target in chain) {
+                assertTrue(
+                    "свитч $target отклонён сервером\n--- лог ---\n${logs.joinToString("\n")}",
+                    client.switchProto(target),
+                )
+                awaitCrypto(client, target, 8000, logs)
+                assertEquals("после свитча negotiated должен быть $target", target, client.negotiatedProto)
+                Thread.sleep(300) // серверный flush/дата-плоскость после коммита
+                val mixedAddr = mixed
+                if (mixedAddr != null) {
+                    // цель DATA-ноги — LAN-заглушка (серверный SSRF-гвард
+                    // loopback закрывает; см. существующий DATA-тест)
+                    val tgt = firstLanAddr18099()
+                    val html = socksGet(mixedAddr, tgt[0], tgt[1].toInt(), "/")
+                    assertTrue(
+                        "DATA после свитча на $target не прошёл новым конвертом html=${html.take(240).replace("\n", "\\n")}\n--- лог ---\n${logs.joinToString("\n")}",
+                        html.contains("HTTP/1."),
+                    )
+                }
+                println("E2E SWITCH OK: → $target crypto=${client.tunnelCryptoActive}")
+            }
+        } finally {
+            try { client.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * v1.8.4: AUTO — ссылка без proto=: клиент просит PREFERRED_AUTO,
+     * сервер согласует; клиент обязан подняться и включить крипту цели.
+     */
+    @Test
+    fun e2e_autoLinkNegotiatesPreferredProtocol() {
+        assumeNotNull("RR_E2E_LINK не задан — пропуск (локальная сборка без сервера)", link)
+        val logs = CopyOnWriteArrayList<String>()
+        val client = connectProto("", logs, validate = false, allowLan = false)
+        try {
+            val negotiated = client.negotiatedProto
+            assertEquals(
+                "AUTO (ссылка без proto=) обязан согласовать PREFERRED_AUTO",
+                RrpProtocols.PREFERRED_AUTO, negotiated,
+            )
+            awaitCrypto(client, negotiated, 8000, logs)
+            println("E2E AUTO OK: negotiated=$negotiated crypto=${client.tunnelCryptoActive}")
+        } finally {
+            try { client.close() } catch (_: Exception) {}
         }
     }
 

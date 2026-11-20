@@ -210,7 +210,7 @@ internal fun MainActivity.syncModulesAsync(force: Boolean) {
                 refreshConnLine()
             }
         } catch (e: Exception) {
-            UpdateLogger.add(getString(R.string.modules_failed, e.message ?: "?"), LogKind.ERR)
+            UpdateLogger.add(getString(R.string.modules_failed, e.message ?: "?"), LogKind.ERROR)
         }
         refreshUpdateConsoleSafe()
     }.apply { isDaemon = true }.start()
@@ -326,7 +326,7 @@ internal fun MainActivity.downloadUpdate(info: UpdateInfo) {
             val verifyErr = checker.verifyApk(dest, sums)
             if (verifyErr != null) {
                 dest.delete()
-                UpdateLogger.add(getString(R.string.upd_verify_fail, verifyErr), LogKind.ERR)
+                UpdateLogger.add(getString(R.string.upd_verify_fail, verifyErr), LogKind.ERROR)
                 runOnUiThread {
                     refreshUpdateConsole()
                     Toast.makeText(this, getString(R.string.update_error, "SHA256 mismatch"), Toast.LENGTH_LONG).show()
@@ -340,7 +340,7 @@ internal fun MainActivity.downloadUpdate(info: UpdateInfo) {
                 installApk(dest)
             }
         } catch (e: Exception) {
-            UpdateLogger.add(getString(R.string.upd_dl_error, e.message ?: "?"), LogKind.ERR)
+            UpdateLogger.add(getString(R.string.upd_dl_error, e.message ?: "?"), LogKind.ERROR)
             runOnUiThread {
                 refreshUpdateConsole()
                 Toast.makeText(this, getString(R.string.update_error, e.message ?: ""), Toast.LENGTH_LONG).show()

@@ -143,4 +143,33 @@ class SessionStoreTest {
         assertEquals(SessionStore.MAX_PROFILES, store.profiles().size)
         assertNull(store.add("rrp://over@over:443/")) // guardrail
     }
+
+    /**
+     * v1.8.4: первый добавленный сервер становится PRIMARY и наполняет
+     * зеркало KEY_CONFIG (главная кнопка/пикеры живы без ручного «основной»).
+     */
+    @Test
+    fun firstAdd_becomesPrimaryAndFillsMirror() {
+        val b = MapBackend()
+        val store = SessionStore(b)
+        store.migrateLegacy(null)
+        val p1 = store.add(link)!!
+        assertEquals(p1.id, store.activeId())
+        assertEquals(RrpUri.parse(link).serialize(), b.map["config"])
+
+        // второй добавленный НЕ перебивает PRIMARY
+        val p2 = store.add(link2)!!
+        assertEquals(p1.id, store.activeId())
+        assertEquals(RrpUri.parse(link).serialize(), b.map["config"])
+
+        // правка PRIMARY синхронизирует зеркало одной точкой (update)
+        val edited = RrpUri.parse(link).copy(proto = "mtproto2").serialize()
+        store.update(p1.copy(uri = edited))
+        assertEquals(edited, b.map["config"])
+
+        // правка НЕ-PRIMARY зеркало НЕ трогает
+        val edited2 = RrpUri.parse(link2).copy(proto = "rrp1").serialize()
+        store.update(p2.copy(uri = edited2))
+        assertEquals(edited, b.map["config"])
+    }
 }

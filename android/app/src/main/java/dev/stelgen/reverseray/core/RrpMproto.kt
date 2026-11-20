@@ -9,7 +9,11 @@ package dev.stelgen.reverseray.core
  * долю, шлём KEY_RESP и включаем MTProto-конверт на DATA/UDP_DATA.
  */
 internal fun RrpClient.handleKeyReq(frame: RrpFrame.KeyReq) {
-    if (mtCrypto != null || wgCrypto != null || btCrypto != null) {
+    // v1.8.4: во время бесшовной смены целевой KEY_REQ приходит ПРИ старой
+    // крипте (сервер держит старый план до Complete) — игнор ломал свитч
+    // из-под крипты: сервер ждал целевой ответ, тайм-аут закрывал сессию.
+    val switching = pendingSwitchTarget != null
+    if (!switching && (mtCrypto != null || wgCrypto != null || btCrypto != null)) {
         log(Msgs.KEY_REQ_IGNORED.t())
         return
     }
@@ -41,11 +45,18 @@ internal fun RrpClient.handleKeyReq(frame: RrpFrame.KeyReq) {
         val gABytes = MtProto.b64urlDecode(frame.gA)
         val authKey = dh.shared(gA)
         val sid = sessionId ?: throw MtProto.MtProtoException(Msgs.NO_SESSION_ID.t())
+        // v1.8.4: атомарная подмена конверта — старые крипты гасим ДО ответа
+        // и снятия паркинга, иначе unpark уйдёт старым конвертом, а сервер
+        // после коммита ждёт новый.
+        wgCrypto = null
+        btCrypto = null
         mtCrypto = MtProto.SessionCrypto(
             authKey,
             MtProto.saltFor(sid, gABytes, gB),
             MtProto.sessionId8(sid),
         )
+        negotiatedProto = MtProto.PROTO_ID // v1.8.4: финал свитча — актуальный протокол
+        pendingSwitchTarget = null
         log(Msgs.MTPROTO_KEYS_OK.t())
         listener?.onState(this, RrpClient.State.READY) // уведомить UI о включении крипто
         // v0.10: при бесшовной смене порядок строгий: КЛЮЧЕВОЙ ОТВЕТ уходит

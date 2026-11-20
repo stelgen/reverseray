@@ -391,4 +391,15 @@
     <string name="home_device_title">Device network</string>
     <string name="sess_bulk_hint">One rrp:// link per line</string>
     <string name="sess_bulk_result">Added: %1$d · unrecognized: %2$d</string>
+    <!-- v1.8.4: log level setting (trace..panic) -->
+    <string name="set_log_level">Log level</string>
+    <string name="set_log_level_hint">Minimum level kept in the log: trace is the most verbose, panic is fatal-only. Home and Updates tabs keep their own channels; the Log tab shows everything</string>
+    <string name="lvl_trace">Trace (all frames)</string>
+    <string name="lvl_debug">Debug (handshakes)</string>
+    <string name="lvl_info">Info (default)</string>
+    <string name="lvl_notice">Notice</string>
+    <string name="lvl_ok">Info + successes</string>
+    <string name="lvl_warn">Warnings and up</string>
+    <string name="lvl_error">Errors and up</string>
+    <string name="lvl_panic">Panic only</string>
 </resources>

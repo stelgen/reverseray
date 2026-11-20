@@ -35,8 +35,14 @@ internal fun RrpClient.finishBtHandshake(frame: RrpFrame.BtResp) {
     }
     try {
         hs.consumeResponse(frame.raw)
+        // v1.8.4: атомарная подмена конверта — старые крипты гасим до снятия
+        // паркинга (см. RrpMproto.handleKeyReq), свитч завершён.
+        mtCrypto = null
+        wgCrypto = null
         btCrypto = hs.transport()
         btHandshake = null
+        negotiatedProto = Torrent.PROTO_ID // v1.8.4: финал свитча — актуальный протокол
+        pendingSwitchTarget = null
         log(Msgs.BT_KEYS_AGREED.t())
         listener?.onState(this, RrpClient.State.READY) // UI: статус крипты
         unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное

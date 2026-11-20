@@ -39,19 +39,28 @@ class StatusConsole @JvmOverloads constructor(
 ) : LinearLayout(context, attrs) {
 
     /** Роль строки: цвет по канону. */
-    enum class Role { INFO, OK, WARN, ERR }
+    /**
+     * v1.8.4: цветовая роль = уровень журнала. TRACE/DEBUG — тусклые
+     * технические тона (не мешают беготне), NOTICE — «инфо с важностью»,
+     * PANIC — фатальный пурпур. Один тон на один уровень на ВСЕХ экранах.
+     */
+    enum class Role { TRACE, DEBUG, INFO, NOTICE, OK, WARN, ERR, PANIC }
 
     companion object {
         /**
-         * Единственная точка маппинга LogKind → цветовая роль (v0.9.7):
-         * OK — зелёный, WARN — тёмно-жёлтый, ERR — красный, INFO — обычная.
-         * Одинаковая на всех экранах (канон централизованного логирования).
+         * Единственная точка маппинга LogKind → цветовая роль (v0.9.7,
+         * ревизия v1.8.4: полный спектр trace..panic). Одинаковая на всех
+         * экранах (канон централизованного логирования).
          */
         fun roleOf(kind: LogKind): Role = when (kind) {
+            LogKind.TRACE -> Role.TRACE
+            LogKind.DEBUG -> Role.DEBUG
+            LogKind.INFO -> Role.INFO
+            LogKind.NOTICE -> Role.NOTICE
             LogKind.OK -> Role.OK
             LogKind.WARN -> Role.WARN
-            LogKind.ERR -> Role.ERR
-            else -> Role.INFO
+            LogKind.ERROR -> Role.ERR
+            LogKind.PANIC -> Role.PANIC
         }
     }
 
@@ -215,10 +224,14 @@ class StatusConsole @JvmOverloads constructor(
                 val start = sb.length
                 sb.append(lines[i].text)
                 val color = when (lines[i].role) {
+                    Role.TRACE -> 0xFF59617A.toInt() // тусклый серо-синий: техшум
+                    Role.DEBUG -> 0xFF7FA8E0.toInt() // приглушённый голубой: детали
+                    Role.INFO -> 0xFFD8DCE6.toInt() // белая «беготня»
+                    Role.NOTICE -> 0xFF4DD0C4.toInt() // бирюза: важное уведомление
                     Role.OK -> 0xFF39D98A.toInt()
                     Role.WARN -> 0xFFC79A2A.toInt() // тёмно-жёлтый: важное, не крикливое
                     Role.ERR -> 0xFFFF6B6B.toInt()
-                    Role.INFO -> 0xFFD8DCE6.toInt() // белая «беготня»
+                    Role.PANIC -> 0xFFFF4D9E.toInt() // пурпур: фатальное
                 }
                 sb.setSpan(
                     ForegroundColorSpan(color),
