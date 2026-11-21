@@ -150,7 +150,10 @@ jobs:
           key: robolectric-m2-4.14.1-v1
       - name: Prefetch Robolectric android-all (retry)
         run: |
-          base="https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented"
+          # Три origin'а Maven Central: основной — стабильное Google-зеркало
+          # (repo1.maven.org в 2026 отдаёт 302→CDN-зеркало, чьи edge-кэши
+          # иногда держат отравленный 404 на большие jar'ы — см. CI v1.9.0).
+          origins="https://maven-central.storage-download.googleapis.com/maven2 https://gcp.mirrors.maven.org/maven2 https://repo1.maven.org/maven2"
           for v in 15-robolectric-12650502-i7 12-robolectric-7732740-i7 5.0.2_r3-robolectric-r0-i7; do
             dir="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$v"
             for f in "$v.jar" "$v.pom"; do
@@ -161,11 +164,15 @@ jobs:
               mkdir -p "$dir"
               ok=0
               for i in 1 2 3 4 5; do
-                if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 \
-                     -o "$out.tmp" "$base/$v/$f"; then
-                  mv "$out.tmp" "$out"; echo "fetched: $f"; ok=1; break
-                fi
-                rm -f "$out.tmp"; echo "retry $i for $f"; sleep 20
+                for origin in $origins; do
+                  if curl -fsSL --connect-timeout 20 \
+                       -o "$out.tmp" "$origin/org/robolectric/android-all-instrumented/$v/$f"; then
+                    mv "$out.tmp" "$out"; echo "fetched: $f <- $origin"; ok=1; break
+                  fi
+                  rm -f "$out.tmp"
+                done
+                [ "$ok" = 1 ] && break
+                echo "retry $i for $f"; sleep 15
               done
               [ "$ok" = 1 ] || { echo "FAILED to fetch $f"; exit 1; }
             done

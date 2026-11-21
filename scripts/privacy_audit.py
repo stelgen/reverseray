@@ -40,6 +40,11 @@ ALLOWED_HOSTS = {
     "stelgen.github.io",
     # XML-неймспейсы Android/aapt (не сетевые обращения)
     "schemas.android.com",
+    # Maven Central: только CI-инфраструктура (префетч Robolectric android-all
+    # в ci.yml), не телеметрия и не обращения из кода
+    "repo1.maven.org",
+    "maven-central.storage-download.googleapis.com",
+    "gcp.mirrors.maven.org",
     "www.w3.org",
     # Доки-стандарты (ссылки в CHANGELOG)
     "keepachangelog.com",
