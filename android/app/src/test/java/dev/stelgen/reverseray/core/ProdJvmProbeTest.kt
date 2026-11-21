@@ -1,8 +1,9 @@
 package dev.stelgen.reverseray.core
 
-// ВРЕМЕННЫЙ диагностический тест (не коммитится): JVM-прогон реального
-// RrpClient против прода. Ссылка приходит через env RR_PROBE_LINK.
+// Диагностический JVM-тест реального RrpClient против прода. Ссылка — только
+// через env RR_PROBE_LINK (без env тесты SKIPPED через Assume — CI-безопасно).
 // Использование: RR_PROBE_LINK="rrp://..." ./gradlew :app:testDebugUnitTest --tests "*ProdJvmProbeTest"
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -10,6 +11,7 @@ import java.util.concurrent.TimeUnit
 class ProdJvmProbeTest {
 
     private fun runOne(proto: String) {
+        assumeTrue("RR_PROBE_LINK env is required — skip", System.getenv("RR_PROBE_LINK") != null)
         val link = System.getenv("RR_PROBE_LINK")
             ?: error("RR_PROBE_LINK env is required")
         val cfg = RrpUri.parse(link)
@@ -57,6 +59,7 @@ class ProdJvmProbeTest {
     @Test fun probeBt() { runOne("bittorrent") }
 
     @Test fun switchChain() {
+        assumeTrue("RR_PROBE_LINK env is required — skip", System.getenv("RR_PROBE_LINK") != null)
         val link = System.getenv("RR_PROBE_LINK") ?: error("RR_PROBE_LINK env is required")
         val cfg = RrpUri.parse(link)
         val client = RrpClient(
