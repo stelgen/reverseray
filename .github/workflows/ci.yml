@@ -280,4 +280,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/dependency-review@v4
+      # Официальное действие — actions/dependency-review-action (репо
+      # actions/dependency-review не существует — раннеры падали
+      # «Unable to resolve action … repository not found» на PR-прогонах).
+      - uses: actions/dependency-review-action@v4
