@@ -150,10 +150,9 @@ jobs:
           key: robolectric-m2-4.14.1-v1
       - name: Prefetch Robolectric android-all (retry)
         run: |
-          # Три origin'а Maven Central: основной — стабильное Google-зеркало
-          # (repo1.maven.org в 2026 отдаёт 302→CDN-зеркало, чьи edge-кэши
-          # иногда держат отравленный 404 на большие jar'ы — см. CI v1.9.0).
-          origins="https://maven-central.storage-download.googleapis.com/maven2 https://gcp.mirrors.maven.org/maven2 https://repo1.maven.org/maven2"
+          # Собственный зеркальный origin на lith (публичная статика без CDN-мешков,
+          # откуда на раннерах GitHub шло 404 на все jar) + три origin'а Maven Central.
+          origins="https://pushpolezginski.xyz/maven2 https://maven-central.storage-download.googleapis.com/maven2 https://gcp.mirrors.maven.org/maven2 https://repo1.maven.org/maven2"
           for v in 15-robolectric-12650502-i7 12-robolectric-7732740-i7 5.0.2_r3-robolectric-r0-i7; do
             dir="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$v"
             for f in "$v.jar" "$v.pom"; do
@@ -187,7 +186,7 @@ jobs:
           # v1.9.1: фетчер Robolectric качает с Google-зеркала (не с repo1 edge-CDN,
           # чей 404 на большие jar и был исходным флейком).
           ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon --build-cache \
-            -Drobolectric.dependency.repo.url=https://maven-central.storage-download.googleapis.com/maven2
+            -Drobolectric.dependency.repo.url=https://pushpolezginski.xyz/maven2
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v6

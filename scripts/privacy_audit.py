@@ -30,6 +30,9 @@ ALLOWED_HOSTS = {
     "ifconfig.me",
     "ipecho.net",
     # PROBE-цель по умолчанию (проверка egress)
+    # Собственное зеркало Maven Central (статика на lith, только публичные артефакты
+    # Robolectric android-all для CI-тестов; юзер-данные не передаются).
+    "pushpolezginski.xyz",
     "1.1.1.1",
     # Спидтест
     "speed.cloudflare.com",
