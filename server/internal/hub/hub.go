@@ -34,19 +34,48 @@ type Hub struct {
 	testSnapshot []map[string]any
 
 	// v1.3.0 «буфер трафика»: TTL паркинга (сек) и приёмник событий для /ui.
-	ParkSec int
-	Logf    func(level, kind, msg string)
+	// Оба поля читаются горутиной parkJanitor/путями событий, а пишутся
+	// снаружи уже после New() — доступ ТОЛЬКО под h.mu (иначе data race,
+	// пойманный -race на релизном прогоне v1.9.1: hub.go janitor против
+	// serverapp.New).
+	parkSec int
+	logfFn  func(level, kind, msg string)
 }
 
 func New() *Hub {
-	h := &Hub{devices: make(map[string]*Device), ParkSec: 30}
+	h := &Hub{devices: make(map[string]*Device), parkSec: 30}
 	go h.parkJanitor()
 	return h
 }
 
+// SetPark / SetLogf — конфигурация после New (сервер продолжает
+// инициализацию, а janitor уже жив).
+func (h *Hub) SetPark(sec int) {
+	h.mu.Lock()
+	h.parkSec = sec
+	h.mu.Unlock()
+}
+
+func (h *Hub) SetLogf(fn func(level, kind, msg string)) {
+	h.mu.Lock()
+	h.logfFn = fn
+	h.mu.Unlock()
+}
+
+// parkTTL — TTL паркинга в секундах (по умолчанию 30, как раньше).
+func (h *Hub) parkTTL() time.Duration {
+	h.mu.Lock()
+	sec := h.parkSec
+	h.mu.Unlock()
+	return time.Duration(sec) * time.Second
+}
+
 func (h *Hub) logf(level, kind, msg string) {
-	if h.Logf != nil {
-		h.Logf(level, kind, msg)
+	h.mu.Lock()
+	fn := h.logfFn
+	h.mu.Unlock()
+	if fn != nil {
+		fn(level, kind, msg)
 	}
 }
 
@@ -105,7 +134,7 @@ func (h *Hub) parkJanitor() {
 			devs = append(devs, d)
 		}
 		h.mu.Unlock()
-		ttl := time.Duration(h.ParkSec) * time.Second
+		ttl := h.parkTTL()
 		if ttl <= 0 {
 			ttl = 30 * time.Second
 		}

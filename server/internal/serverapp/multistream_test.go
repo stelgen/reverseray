@@ -129,47 +129,56 @@ func TestMultiStreamThroughput(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond) // регистрация в хабе
 
-	// Одиночный поток: целостность + базовая скорость (медиана 3 прогонов).
-	var singles []float64
-	for i := range 3 {
-		got, dur := msFetchSHA(t, cfg.Listen.Mixed, bulkHost, bulkPort, 60*time.Second)
-		if sha256.Sum256(got) != wantSum {
-			t.Fatalf("single stream payload corrupted (round %d)", i)
-		}
-		singles = append(singles, float64(msBulkSize)/dur.Seconds())
-	}
-	single := medianF(singles)
-
-	// 8 параллельных потоков в ОДНУ сессию, каждый — со своей SHA-сверкой.
+	// v1.9.1: замер вынесен в замыкание — скоростной гейт получает один
+	// ретрай. Под параллельной загрузкой соседних пакетов (полный ./...
+	// на 2-ядерном раннере) агрегат может просесть ниже гейта из-за CPU
+	// starvation — это не коллапс мультиплексора. SHA-целостность
+	// фейлится сразу, ретрай только для скоростного гейта.
 	const parallelStreams = 8
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
-	var aggBytes int64
-	wall0 := time.Now()
-	for range parallelStreams {
-		wg.Go(func() {
-			got, _ := msFetchSHA(t, cfg.Listen.Mixed, bulkHost, bulkPort, 90*time.Second)
+	perfGate := func() (single, agg float64, wall time.Duration) {
+		// Одиночный поток: целостность + базовая скорость (медиана 3 прогонов).
+		var singles []float64
+		for i := range 3 {
+			got, dur := msFetchSHA(t, cfg.Listen.Mixed, bulkHost, bulkPort, 60*time.Second)
 			if sha256.Sum256(got) != wantSum {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("parallel stream payload corrupted (len=%d)", len(got))
-				}
-				mu.Unlock()
-				return
+				t.Fatalf("single stream payload corrupted (round %d)", i)
 			}
-			mu.Lock()
-			aggBytes += int64(len(got))
-			mu.Unlock()
-		})
-	}
-	wg.Wait()
-	wall := time.Since(wall0)
-	if firstErr != nil {
-		t.Fatalf("parallel streams failed: %v", firstErr)
-	}
-	agg := float64(aggBytes) / wall.Seconds() // честный агрегат: весь объём / стеночное время
+			singles = append(singles, float64(msBulkSize)/dur.Seconds())
+		}
+		single = medianF(singles)
 
+		// Параллельные потоки в ОДНУ сессию, каждый — со своей SHA-сверкой.
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var firstErr error
+		var aggBytes int64
+		wall0 := time.Now()
+		for range parallelStreams {
+			wg.Go(func() {
+				got, _ := msFetchSHA(t, cfg.Listen.Mixed, bulkHost, bulkPort, 90*time.Second)
+				if sha256.Sum256(got) != wantSum {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("parallel stream payload corrupted (len=%d)", len(got))
+					}
+					mu.Unlock()
+					return
+				}
+				mu.Lock()
+				aggBytes += int64(len(got))
+				mu.Unlock()
+			})
+		}
+		wg.Wait()
+		wall = time.Since(wall0)
+		if firstErr != nil {
+			t.Fatalf("parallel streams failed: %v", firstErr)
+		}
+		agg = float64(aggBytes) / wall.Seconds() // честный агрегат: весь объём / стеночное время
+		return single, agg, wall
+	}
+
+	single, agg, wall := perfGate()
 	speedup := agg / single
 	t.Logf("single=%.1f MB/s, %d×4MB parallel: aggregate=%.1f MB/s (wall=%s), speedup=%.2fx",
 		single/(1<<20), parallelStreams, agg/(1<<20), wall.Round(time.Millisecond), speedup)
@@ -177,8 +186,16 @@ func TestMultiStreamThroughput(t *testing.T) {
 	// Гейт-минимум: мультиплексирование не коллапсировало. Полная сериализация
 	// потоков дала бы ровно ~1×; деградация ниже 0.5× = потеря данных/стримов.
 	if agg < 0.5*single {
-		t.Fatalf("multi-channel collapsed: aggregate=%.1f MB/s < 0.5×single=%.1f MB/s",
+		t.Logf("gate miss under load (aggregate=%.1f < 0.5×single=%.1f MB/s) — повторный замер",
 			agg/(1<<20), single/(1<<20))
+		single, agg, wall = perfGate()
+		speedup = agg / single
+		t.Logf("retry: single=%.1f MB/s, %d×4MB parallel: aggregate=%.1f MB/s (wall=%s), speedup=%.2fx",
+			single/(1<<20), parallelStreams, agg/(1<<20), wall.Round(time.Millisecond), speedup)
+		if agg < 0.5*single {
+			t.Fatalf("multi-channel collapsed: aggregate=%.1f MB/s < 0.5×single=%.1f MB/s",
+				agg/(1<<20), single/(1<<20))
+		}
 	}
 }
 

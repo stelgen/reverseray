@@ -189,15 +189,15 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		ev:             NewEventLog(1024),
 	}
 	// v1.3.0 «буфер трафика»: TTL паркинга из конфига; события буфера — в журнал /ui.
-	app.hub.ParkSec = cfg.Limits.StreamParkSec
-	app.hub.Logf = func(level, kind, msg string) {
+	app.hub.SetPark(cfg.Limits.StreamParkSec)
+	app.hub.SetLogf(func(level, kind, msg string) {
 		if level == "warn" {
 			log.Warn("park: " + msg)
 		} else {
 			log.Info("park: " + msg)
 		}
 		app.ev.Add(level, kind, msg)
-	}
+	})
 	app.loadCamouflage() // v0.9.5: перманентные выборы камуфляжа клиентов
 	return app, nil
 }
