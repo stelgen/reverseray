@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# ReverseRay rr.sh — автопилот деплоя (v0.8.3+)
+# ReverseRay rr.sh — автопилот деплоя (v0.8.4+)
+#
+# v0.8.4: определение последнего релиза переживает 403/лимиты api.github.com
+#   (поймано на живом хосте: оба API-запроса 403 → молча деплоился устаревший
+#   дефолт). Новая цепочка: GitHub API → redirect releases/latest (не API,
+#   без лимита) → ghcr.io tags/list (анонимный токен, sort -V). Если всё
+#   упало — СТОП с подсказкой --tag: молчаливый деплой старого тега исключён.
 #
 # Запусти из ЛЮБОГО каталога — рядом появится подпапка reverseray/ со всем
 # нужным (compose, state, .env). Скрипт сам решает: свежая установка,
@@ -23,7 +29,6 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/stelgen/reverseray"
-DEFAULT_TAG="v1.8.9"
 DEST="${REVERSERAY_DIR:-reverseray}"
 DO_RESET=0
 UI_LAN=1 # 1 = открывать веб-морду (/ui) в локальной сети; --no-ui закрывает в localhost
@@ -63,24 +68,35 @@ SUDO=""
 case "$DC" in "sudo "*) SUDO="sudo " ;; esac
 run() { $DC "$@"; }
 
-# --- версия: --tag > env > последний релиз GitHub > DEFAULT_TAG ---
+# --- версия: --tag > env > авто-определение (3 метода, переживает лимиты/403) ---
 if [ -z "$TAG" ]; then
   TAG="${RR_IMAGE_TAG:-}"
 fi
 if [ -z "$TAG" ]; then
+  # Метод 1: официальный API /releases/latest (лимит 60/час на IP)
   TAG=$(curl -fsSL --max-time 10 "https://api.github.com/repos/stelgen/reverseray/releases/latest" \
         | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 2>/dev/null || true)
 fi
 if [ -z "$TAG" ]; then
-  # fallback: последний тег (когда /releases/latest недоступен — rate-limit/прокси)
-  TAG=$(curl -fsSL --max-time 10 "https://api.github.com/repos/stelgen/reverseray/tags" \
-        | grep -o '"name": *"[^"]*"' | head -1 | cut -d'"' -f4 2>/dev/null || true)
+  # Метод 2: redirect github.com/.../releases/latest — НЕ API, без rate-лимита
+  TAG=$(curl -fsSL --max-time 10 -o /dev/null -w '%{url_effective}' \
+        "https://github.com/stelgen/reverseray/releases/latest" 2>/dev/null \
+        | grep -oE '/tag/v[0-9.]+$' | tail -1 | cut -d/ -f3 || true)
 fi
 if [ -z "$TAG" ]; then
-  TAG="$DEFAULT_TAG"
-  log "!! последний релиз не определён через GitHub API — запасной $DEFAULT_TAG (укажите --tag vX.Y.Z для принудительной версии)"
+  # Метод 3: реестр ghcr.io (анонимный токен), последний тег по semver
+  GHR_TOKEN=$(curl -fsSL --max-time 10 'https://ghcr.io/token?service=ghcr.io&scope=repository:stelgen/reverseray:pull' 2>/dev/null \
+        | grep -o '"token": *"[^"]*"' | cut -d'"' -f4 || true)
+  if [ -n "$GHR_TOKEN" ]; then
+    TAG=$(curl -fsSL --max-time 15 -H "Authorization: Bearer $GHR_TOKEN" \
+          https://ghcr.io/v2/stelgen/reverseray/tags/list 2>/dev/null \
+          | grep -o '"v[0-9]*\.[0-9]*\.[0-9]*"' | tr -d '"' | sort -V | tail -1 || true)
+  fi
 fi
-log "Версия: $TAG (последний релиз GitHub)"
+if [ -z "$TAG" ]; then
+  die "не удалось определить последний релиз (нет сети до github.com/ghcr.io?) — укажите версию вручную: sudo bash rr.sh --tag vX.Y.Z"
+fi
+log "Версия: $TAG"
 
 # --- целевой каталог (относительный) + права ---
 mkdir -p "$DEST/state" 2>/dev/null || die "не могу создать каталог $DEST/state (нет прав? запусти с sudo)"
