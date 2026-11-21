@@ -171,16 +171,23 @@ jobs:
                   fi
                   rm -f "$out.tmp"
                 done
-                [ "$ok" = 1 ] && break
+                # v1.9.1: if-форма вместо «[ … ] && break» — при ok=0 старая запись
+                # возвращала 1 и под bash -e убивала весь степ на первой осечке сети.
+                if [ "$ok" = 1 ]; then break; fi
                 echo "retry $i for $f"; sleep 15
               done
-              [ "$ok" = 1 ] || { echo "FAILED to fetch $f"; exit 1; }
+              # v1.9.1: префетч — best-effort: не роняем джобу, фетчер Robolectric
+              # скачает недостающее сам (см. robolectric.dependency.repo.url ниже).
+              if [ "$ok" != 1 ]; then echo "WARN: prefetch failed for $f (продолжаем)"; fi
             done
           done
       - name: Build + unit tests
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon --build-cache
+          # v1.9.1: фетчер Robolectric качает с Google-зеркала (не с repo1 edge-CDN,
+          # чей 404 на большие jar и был исходным флейком).
+          ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon --build-cache \
+            -Drobolectric.dependency.repo.url=https://maven-central.storage-download.googleapis.com/maven2
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v6
