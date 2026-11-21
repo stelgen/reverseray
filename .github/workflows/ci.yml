@@ -139,6 +139,37 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      # Robolectric тянет ~400 МБ android-all jar'ов на КАЖДЫЙ ранн своим фетчером
+      # в ~/.m2 (без ретраев) — транзиентный 404 CDN роняет ВСЕ Robolectric-тесты
+      # разом (реальный случай: CI v1.9.0, 40 фейлов FileNotFoundException).
+      # Гасим: кэш ~/.m2/org.robolectric + предзагрузка с ретраями до тестов.
+      - name: Cache Robolectric android-all jars
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-m2-4.14.1-v1
+      - name: Prefetch Robolectric android-all (retry)
+        run: |
+          base="https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented"
+          for v in 15-robolectric-12650502-i7 12-robolectric-7732740-i7 5.0.2_r3-robolectric-r0-i7; do
+            dir="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$v"
+            for f in "$v.jar" "$v.pom"; do
+              out="$dir/$f"
+              if [ -s "$out" ] && [ "$(stat -c%s "$out")" -gt 1000 ]; then
+                echo "cached: $f"; continue
+              fi
+              mkdir -p "$dir"
+              ok=0
+              for i in 1 2 3 4 5; do
+                if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 \
+                     -o "$out.tmp" "$base/$v/$f"; then
+                  mv "$out.tmp" "$out"; echo "fetched: $f"; ok=1; break
+                fi
+                rm -f "$out.tmp"; echo "retry $i for $f"; sleep 20
+              done
+              [ "$ok" = 1 ] || { echo "FAILED to fetch $f"; exit 1; }
+            done
+          done
       - name: Build + unit tests
         run: |
           chmod +x gradlew
