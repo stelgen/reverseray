@@ -56,15 +56,33 @@ func startTestServer(t *testing.T) (*App, *config.Config, string) {
 		logOut = os.Stderr
 	}
 	log := slog.New(slog.NewJSONHandler(logOut, nil))
+	// v1.9.1: модульный синкер в юнит-тестах выключен — Default тянет
+	// манифест с GitHub и пишет его в StateDir; на CI загрузка могла
+	// приземлиться в момент RemoveAll TempDir → «directory not empty»
+	// (CI cc1fa5e, coverage gate). Юнит-тесты сеть не трогают.
+	cfg.Modules.Auto = false
 	app, err := New(cfg, log)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	go func() { _ = app.Run(context.Background()) }()
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- app.Run(ctx) }()
 	waitTCP(t, cfg.Listen.Tunnels)
 	waitTCP(t, cfg.Listen.Mixed)
 	waitTCP(t, cfg.Listen.AdminTCP)
 	t.Cleanup(func() { app.hub.Kick("phone-1") })
+	// LIFO: этот cleanup выполняется ДО уборки TempDir — глушим
+	// reloadLoop/certRenewLoop/мод-синкер (писатели в StateDir) и
+	// дожидаемся выхода Run, иначе уборка TempDir гоняется с тиками.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(10 * time.Second):
+			t.Errorf("app.Run did not stop within 10s after cancel")
+		}
+	})
 	return app, cfg, token
 }
 
