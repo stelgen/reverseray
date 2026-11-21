@@ -711,6 +711,7 @@ class TunnelService : Service() {
         const val KEY_LOG_MIN_LEVEL = "log_min_level"
         const val KEY_PROBE_TARGET = "probe_target"
         const val KEY_AUTO_UPDATE = "auto_update"          // проверка обновлений раз в 24 ч
+        const val KEY_BATTERY_ASKED = "battery_opt_asked"  // v1.9.7: диалог exemption показывали
         const val KEY_THEME = "theme"                      // v0.8.1: auto|dark|light
         // v0.8:
         /** v0.9.5: сентинел режима AUTO (ссылка без proto=). */

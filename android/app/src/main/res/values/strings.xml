@@ -74,12 +74,13 @@
     <string name="proto_auto_label">AUTO</string>
     <!-- v1.8.0: ROTATE protocol mode (alternative to AUTO, mutually exclusive) -->
     <string name="proto_rotate_label">ROTATE</string>
-    <string name="status_rotate_on">Protocol rotation enabled: switching every %1$d min</string>
-    <string name="status_rotate_off">Protocol rotation off</string>
-    <string name="proto_rotate_toggle">Protocol rotation (round-robin every 30 min)</string>
-    <string name="log_proto_rotation_on">Protocol rotation ON (every %1$d min, strict order)</string>
+    <string name="status_rotate_on">Protocol rotation enabled: interval %1$d min</string>
+    <string name="status_rotate_off">Protocol rotation disabled</string>
+    <string name="proto_rotate_toggle">Protocol rotation (switches round-robin every 30 minutes)</string>
+    <string name="log_proto_rotation_on">Protocol rotation enabled (every %1$d min, round-robin)</string>
     <string name="log_proto_rotation">Rotation: %1$s → %2$s (every %3$d min)</string>
-    <string name="log_proto_rotation_off">Protocol rotation OFF</string>
+    <string name="log_proto_rotation_off">Protocol rotation disabled</string>
+    <string name="log_proto_rotation_resync">Manual switch: rotation timer reset (next switch in %1$d min)</string>
     <string name="modules_camo_on">%1$s: enabled — background chatter resumes</string>
     <string name="modules_camo_off">%1$s: disabled BY YOUR choice (survives offline)</string>
     <string name="modules_camo_applied">Choice sent to server (0x2A) and saved</string>

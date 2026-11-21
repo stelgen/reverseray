@@ -19,8 +19,8 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27.4"
           cache-dependency-path: server/go.sum
@@ -36,8 +36,8 @@ jobs:
           - { goos: linux, goarch: arm64, suffix: arm64 }
           - { goos: linux, goarch: arm, goarm: "7", suffix: armv7 }
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27.4"
           cache-dependency-path: server/go.sum
@@ -52,7 +52,7 @@ jobs:
           CGO_ENABLED=0 go build -trimpath \
             -ldflags="-s -w -X main.version=${V}" \
             -o "../reverseray-linux-${{ matrix.suffix }}" .
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bin-${{ matrix.suffix }}
           path: reverseray-linux-*
@@ -68,16 +68,16 @@ jobs:
       # digest собранного multi-arch образа — уезжает в deploy/digests.yaml (v0.8.3)
       image_digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # QEMU нужен для сборки arm64/armv7-образов на amd64-раннере
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         id: push
         with:
           context: ./server
@@ -96,12 +96,12 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
       - name: Build release APK
         env:
           # подпись: секреты владельца при наличии, иначе репозиторный ключ
@@ -114,7 +114,7 @@ jobs:
           ./gradlew :app:assembleRelease --no-daemon "-PversionName=${GITHUB_REF_NAME#v}"
           # имя артефакта: reverseray-<версия>.apk (не «app-release»)
           mv app/build/outputs/apk/release/app-release.apk              app/build/outputs/apk/release/reverseray-${GITHUB_REF_NAME#v}.apk
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: apk
           path: android/app/build/outputs/apk/release/reverseray-*.apk
@@ -128,17 +128,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # digest-коммит ребейзится на живой main (main уходит за время multi-arch);
           # shallow-клон рвал этот rebase — digest v0.9.7 молча пропал (continue-on-error)
           fetch-depth: 0
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dist
           merge-multiple: true
           pattern: bin-*
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dist
           merge-multiple: true
@@ -146,7 +146,7 @@ jobs:
       - name: Checksums
         run: cd dist && ls -la && sha256sum * > SHA256SUMS
       # ПАБЛИШ ПЕРВЫМ: никакое пост-хозяйство не должно блокировать выкладку релиза
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@40c2ca6ddd77ba2a30bbea8f67409c0f76868d67 # v3
         with:
           files: dist/*
           body_path: CHANGELOG.md
@@ -194,7 +194,7 @@ jobs:
           PY
       - name: Upload digests debug (always)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-digests-debug
           path: release-digests-debug.txt

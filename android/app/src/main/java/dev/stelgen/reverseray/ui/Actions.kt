@@ -21,6 +21,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -137,9 +139,39 @@ internal fun MainActivity.startTunnel() {
         renderServiceLogs()
         return
     }
+    // v1.9.7: battery-optimization exemption — один системный диалог за
+    // жизнь установки (канон VPN-приложений 2026): Doze/OEM-энергоменеджмент —
+    // главная причина «периодически отваливается» в фоне; wake lock спит CPU,
+    // но агрессивные оболочки всё равно гасят сеть/процесс.
+    maybeRequestBatteryExemption()
     val i = Intent(this, TunnelService::class.java).setAction(TunnelService.ACTION_START)
     if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
     setUiState(TunnelService.STATE_CONNECTING)
+}
+
+/**
+ * v1.9.7: запрос исключения из battery-optimizations (Doze) — ровно один
+ * системный диалог: Doze и OEM-энергоменеджменты рвут долгоживущий туннель
+ * в фоне. Показывается только если приложение ещё оптимизируется; старт
+ * туннеля продолжается независимо от ответа пользователя. OEM без диалога —
+ * тихий пропуск (остаётся системная настройка).
+ */
+internal fun MainActivity.maybeRequestBatteryExemption() {
+    val p = prefs()
+    if (p.getBoolean(TunnelService.KEY_BATTERY_ASKED, false)) return
+    p.edit().putBoolean(TunnelService.KEY_BATTERY_ASKED, true).apply()
+    val pm = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+    if (pm.isIgnoringBatteryOptimizations(packageName)) return
+    try {
+        startActivity(
+            Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:$packageName"),
+            ),
+        )
+    } catch (_: Exception) {
+        // диалог недоступен на данной оболочке — не критично
+    }
 }
 
 internal fun MainActivity.stopTunnel() {

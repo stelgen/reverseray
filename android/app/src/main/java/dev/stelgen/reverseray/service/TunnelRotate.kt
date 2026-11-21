@@ -34,11 +34,10 @@ internal fun TunnelService.reconnectSwitchOf(sess: TunnelService.Sess, target: S
 
 /**
  * Ротация-тик: расписание ([ProtoRotator]) → обычный реконнект на следующий
- * протокол + запись причины в журнал. Кандидаты — ROTATABLE (v1.9.4: ЧИСТО
- * ЛОКАЛЬНЫЙ реестр клиента; реестр сервера больше НЕ критерий — без его
- * манифеста ротация молчала и смены юзер не видел); строго следующий после
- * текущего. Провал реконнекта НЕ карается памятью провалов (это не авто) —
- * следующий тик попробует снова по расписанию.
+ * протокол + запись причины в журнал. Кандидаты — ROTATABLE ∩ манифест
+ * сервера (v1.9.7; манифест не пришёл — чисто локальный реестр, v1.9.4);
+ * строго следующий после текущего. Провал реконнекта НЕ карается памятью
+ * провалов (это не авто) — следующий тик попробует снова по расписанию.
  */
 internal fun TunnelService.rotateTick() {
     if (stopping || !rotationEnabled()) return
@@ -48,12 +47,14 @@ internal fun TunnelService.rotateTick() {
         if (s.id == switchingSessionId) continue
         val client = firstClientOf(s) ?: continue
         if (client.state != RrpClient.State.READY) continue
-        // v1.9.4: ротация ЧИСТО ЛОКАЛЬНАЯ — кандидаты только из реестра
-        // клиента (RrpProtocols.ROTATABLE). Реестр сервера НЕ критерий:
-        // без его манифеста ротация молчала, юзер смены не видел. Цель,
-        // недоступная серверу, провалит реконнект — следующий тик возьмёт
-        // следующий по кругу. Ссылка НЕ мутируется.
-        val candidates = RrpProtocols.ROTATABLE
+        // v1.9.7: кандидаты = ROTATABLE ∩ манифест сервера (client.serverProtocols
+        // из HELLO_OK; известен для любого живого клиента). Цель вне манифеста
+        // гарантированно провалила бы реконнект — красная ERROR-строка на
+        // мониторе каждые 30 минут. Манифест не пришёл — локальный реестр
+        // (v1.9.4). Ссылка НЕ мутируется.
+        val known = client.serverProtocols
+        val candidates = if (known.isEmpty()) RrpProtocols.ROTATABLE
+            else RrpProtocols.ROTATABLE.filter { it in known }
         val rot = rotators.computeIfAbsent(s.id) { ProtoRotator() }
         val from = client.negotiatedProto
         val target = rot.onTick(now, from, candidates) ?: continue

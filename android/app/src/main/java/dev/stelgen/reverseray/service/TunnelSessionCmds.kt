@@ -41,7 +41,8 @@ import dev.stelgen.reverseray.core.SessionStore
         // v1.8.0: «Ротация» — отдельный режим выбора (взаимоисключающ с авто):
         // включаем флаг и выходим — смены делает rotateTick (каждые 30 мин,
         // строго по порядку, причины в журнале). Ссылку НЕ меняем: ротация —
-        // режим ПОВЕДЕНИЯ поверх текущего подключения.
+        // режим ПОВЕДЕНИЯ поверх текущего подключения. С v1.9.7 ручная смена
+        // протокола ниже ротацию НЕ выключает — только сбрасывает её таймер.
         if (newProtoRaw == TunnelService.PROTO_ROTATE) {
             prefs().edit().putBoolean(TunnelService.KEY_PROTO_ROTATE, true).apply()
             rotators.clear() // якорь расписания заново (первый тик якорит)
@@ -50,10 +51,15 @@ import dev.stelgen.reverseray.core.SessionStore
             startRotateTick()
             return
         }
-        // обычный выбор (протокол/AUTO) выключает ротацию (взаимоисключение)
+        // v1.9.7: ручная смена НЕ выключает ротацию — обнуляет её таймер:
+        // расписание заякорится заново на ближайшем тике, смена — через
+        // ROTATE_INTERVAL_MS после ручного выбора. Ссылка коммитится как обычно.
         if (prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)) {
-            prefs().edit().putBoolean(TunnelService.KEY_PROTO_ROTATE, false).apply()
-            TunnelService.pushLog(getString(R.string.log_proto_rotation_off), LogKind.INFO)
+            rotators.clear()
+            TunnelService.pushLog(
+                getString(R.string.log_proto_rotation_resync, TunnelService.ROTATE_INTERVAL_MS / 60_000),
+                LogKind.INFO,
+            )
         }
         // v1.9.3: сносим хвосты ротации/авто-свитча — цель жила в protoOverride.
         sessById.values.forEach { it.protoOverride = null }

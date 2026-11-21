@@ -74,12 +74,13 @@
     <string name="proto_auto_label">AUTO</string>
     <!-- v1.8.0: режим «Ротация» (альтернатива AUTO, взаимоисключающие) -->
     <string name="proto_rotate_label">РОТАЦИЯ</string>
-    <string name="status_rotate_on">Ротация протоколов включена: смена каждые %1$d мин</string>
+    <string name="status_rotate_on">Ротация протоколов включена: интервал %1$d мин</string>
     <string name="status_rotate_off">Ротация протоколов выключена</string>
-    <string name="proto_rotate_toggle">Ротация протоколов (по кругу каждые 30 мин)</string>
-    <string name="log_proto_rotation_on">Ротация протоколов ВКЛ (каждые %1$d мин, строго по порядку)</string>
+    <string name="proto_rotate_toggle">Ротация протоколов (смена по кругу каждые 30 минут)</string>
+    <string name="log_proto_rotation_on">Ротация протоколов включена (каждые %1$d мин, по кругу)</string>
     <string name="log_proto_rotation">Ротация: %1$s → %2$s (каждые %3$d мин)</string>
-    <string name="log_proto_rotation_off">Ротация протоколов ВЫКЛ</string>
+    <string name="log_proto_rotation_off">Ротация протоколов выключена</string>
+    <string name="log_proto_rotation_resync">Ручная смена: таймер ротации сброшен (следующая через %1$d мин)</string>
     <string name="modules_camo_on">%1$s: включён — фоновый обмен возобновлён</string>
     <string name="modules_camo_off">%1$s: выключен ВАШИМ выбором (переживает офлайн)</string>
     <string name="modules_camo_applied">Выбор отправлен серверу (0x2A) и сохранён</string>
