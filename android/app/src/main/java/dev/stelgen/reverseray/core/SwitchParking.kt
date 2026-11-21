@@ -25,10 +25,34 @@ internal class SwitchParking(private val max: Int) {
     /** Паркинг активен (кадры копятся в очередь). */
     fun isParked(): Boolean = parked
 
-    /** Включить паркинг (после ok от сервера; до перехендшейка). */
+    /** Включить паркинг (после ok от сервера; до перехендшейка).
+     *  v1.8.8+: атомарно с unpark — повторный park после unpark невозможен. */
     fun park() {
         mutex.lock()
         try { parked = true } finally { mutex.unlock() }
+    }
+
+    /**
+     * v1.9.0: включить паркинг ТОЛЬКО если ре-кей ещё в полёте (predicate
+     * вычисляется ПОД мьютексом — тем же, что держит unpark). Лечит гонку
+     * switchProto×ре-кей: вызватель видит ack в цикле poll(50мс), а читатель
+     * к этому моменту мог уже завершить обмен ключами и снять паркинг
+     * (unparkAndFlush в finishBtHandshake/handleKeyReq/finishWgHandshake).
+     * Старый безусловный park() после такого unpark запирал все последующие
+     * DATA/UDP_DATA в очереди навсегда («чёрная дыра» payload'ов — регресс
+     * «кроме wg никакой протокол не работает»). Теперь: если ре-кей уже
+     * завершился — паркинг не включается вовсе; если нет — включится до
+     * чтения следующего кадра, и его снимет тот же unpark из finish-хендлера.
+     * @return true — паркинг включён; false — свитч уже завершён/сессия мертва.
+     */
+    fun parkIf(rekeyInFlight: () -> Boolean): Boolean {
+        mutex.lock()
+        try {
+            if (closed) return false
+            if (!rekeyInFlight()) return false // ре-кей завершён — обычный путь
+            parked = true
+            return true
+        } finally { mutex.unlock() }
     }
 
     /**

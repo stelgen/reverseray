@@ -2,6 +2,17 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.9.0] — 2026-11-21
+
+### Исправлено
+- **Регресс «кроме wg никакой протокол не работает»**: во время фонового ре-кея (`pendingSwitchTarget != null`) входящие стримы/UDP теперь паркуются под мьютексом паркинга (`SwitchParking.parkIf`, обёртки в `RrpClientSwitch.kt`), а не роняются/мигают таймаутами; после коммита новой крипты паркинг отпускается. Локально и на проде проверено: mtproto2/bittorrent OK при ре-кее, ноль read-timeout.
+
+### Изменено
+- **Дробление сетевого стека, транш-2 (pure refactor)**: `service/TunnelService.kt` 1604→869 (+`TunnelConfig.kt`, `TunnelSessionCmds.kt`); `core/RrpClient.kt` 1423→1075 (+`RrpClientStreams.kt`, `RrpClientUdp.kt`); `core/RrpFrame.kt` 881→749 (+`RrpFrameCodec.kt`, sealed-канон не тронут); сервер: `internal/rrp/session.go` 662→449 (+`session_lifecycle.go`, до-слив зон в `session_switch.go`/`session_stream.go`), `internal/inbound/mixed.go` 525→156 (+`mixed_socks5.go`, `mixed_http.go`, `mixed_relay.go`). Карта зон обновлена — `docs/NET-STACK-MAP.md`.
+
+### Качество
+- Полные гейты зелёные: `go test -race ./...` (все пакеты ok) + `:app:testDebugUnitTest`; gofmt/go vet чисто.
+
 ## [1.8.10] — 2026-11-21
 
 ### Исправлено

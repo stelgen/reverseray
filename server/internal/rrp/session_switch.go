@@ -181,3 +181,43 @@ func (s *Session) handleCamCtl(f *Frame) {
 	}
 	s.logf("rrp: camouflage %s by client (persisted)", map[bool]string{true: "enabled", false: "disabled"}[enabled])
 }
+
+// ---- обмен ключами протокола (v0.9.2, внутри сессии) ----
+
+// handleKeyResp: KEY_RESP от телефона → Complete → крипто включена.
+// Вызывается из Run (единственный читатель) — гонок нет.
+func (s *Session) handleKeyResp(f *Frame) {
+	s.mu.Lock()
+	// Внутри бесшовной смены протокола (pendingProto != "") целевой обмен
+	// ключами приходит ПРИ ещё живой старой крипте — KEY_RESP и есть коммит.
+	if (s.crypto != nil && s.pendingProto == "") || s.keyPlan == nil {
+		s.mu.Unlock()
+		return // повторный/неожиданный KEY_RESP вне смены — игнор (анти-мусор)
+	}
+	crypto, err := s.keyPlan.Complete(f.Payload)
+	if err != nil {
+		s.mu.Unlock()
+		s.logf("rrp: key exchange failed: %v", err)
+		s.shutdown(fmt.Errorf("key exchange: %w", err))
+		return
+	}
+	s.mu.Unlock()
+	s.commitCrypto(crypto)
+	s.logf("rrp: payload crypto engaged (session %s, proto %s)", s.ID, s.Proto)
+}
+
+// startKeyDeadline: жёсткий дедлайн обмена ключами (битый клиент не висит
+// сессией вечно — idle-таймаут слишком долгий для рукопожатия).
+func (s *Session) startKeyDeadline() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keyTimer = time.AfterFunc(KeyExchangeTimeout, func() {
+		s.mu.Lock()
+		crypto := s.crypto
+		s.mu.Unlock()
+		if crypto == nil {
+			s.logf("rrp: key exchange timeout (%s) — closing", s.ID)
+			s.shutdown(fmt.Errorf("key exchange timeout"))
+		}
+	})
+}

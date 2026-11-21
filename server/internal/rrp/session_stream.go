@@ -2,7 +2,9 @@ package rrp
 
 import (
 	"container/list"
+	"context"
 	crand "crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -288,3 +290,90 @@ func listPush(l *list.List, v Stats) *list.List {
 	}
 	return l
 }
+
+// Open asks the phone to connect to dst and returns the stream.
+func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
+	return s.openStream(ctx, d, TypeOpen, EncodeOpen(d.ATYP, d.Addr, d.Port))
+}
+
+// OpenResume (v1.3.0 «буфер трафика») просит телефон привязать запаркованный
+// сокет (телефон НЕ закрыл его при потере связи) к НОВОМУ стриму. Ответ —
+// обычный OPEN_OK: 0 = привязано, 5 = сокет уже не дожил (TTL телефона) —
+// тогда браузерную сторону закрываем штатно.
+func (s *Session) OpenResume(ctx context.Context, token [16]byte, d DialRequest) (net.Conn, error) {
+	return s.openStream(ctx, d, TypeOpenResume, append([]byte(nil), token[:]...))
+}
+
+func (s *Session) openStream(ctx context.Context, d DialRequest, ft uint8, payload []byte) (net.Conn, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
+	}
+	if len(s.streams) >= s.cfg.MaxStreams {
+		s.mu.Unlock()
+		return nil, errors.New("rrp: too many streams")
+	}
+	if s.outstand >= s.cfg.Budget {
+		s.mu.Unlock()
+		// v1.2.0: чек снова работает — учёт outstand починен (раньше счётчик
+		// уезжал в минус и бюджет не защищал память).
+		return nil, errors.New("rrp: device window budget exhausted")
+	}
+	if d.Port == 53 {
+		s.dnsHits++ // v0.9.5: счётчик DNS для дашборда
+	}
+	id := s.nextID
+	s.nextID += 2 // odd ids are server-originated
+	if s.nextID < 2 {
+		s.nextID = 1
+	}
+	w := &openWait{ch: make(chan error, 1)}
+	s.pending[id] = w
+	st := newStream(s, id, d)
+	s.streams[id] = st
+	s.mu.Unlock()
+
+	errc := make(chan error, 1)
+	s.outq <- outItem{frame: &Frame{Type: ft, StreamID: id, Payload: payload}, err: errc}
+	if err := <-errc; err != nil {
+		s.dropStream(id)
+		return nil, err
+	}
+
+	select {
+	case err := <-w.ch:
+		if err != nil {
+			s.dropStream(id)
+			return nil, err
+		}
+		// v1.3.0: токен резюме уходит сразу после успешного диала — телефон
+		// привязывает его к своему сокету таргета (кадр только для новых клиентов).
+		if ft == TypeOpen && st.hasToken {
+			s.writeAsync(&Frame{Type: TypeResumeToken, StreamID: id, Payload: append([]byte(nil), st.token[:]...)})
+		}
+		return st, nil
+	case <-ctx.Done():
+		s.dropStream(id)
+		s.writeAsync(&Frame{Type: TypeClose, StreamID: id, Payload: EncodeClose(3)})
+		return nil, ctx.Err()
+	case <-s.done:
+		return nil, ErrClosed
+	}
+}
+
+func (s *Session) dropStream(id uint32) {
+	s.mu.Lock()
+	delete(s.pending, id)
+	delete(s.streams, id)
+	s.mu.Unlock()
+}
+
+func (s *Session) getStream(id uint32) *stream {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streams[id]
+}
+
+// Err — причина закрытия сессии (nil, если ещё жива). Для наблюдаемости:
+// сервер обязан логировать, ПОЧЕМУ туннель умер (v1.8.4).

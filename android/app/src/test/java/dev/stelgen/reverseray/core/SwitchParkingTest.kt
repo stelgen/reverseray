@@ -134,4 +134,38 @@ class SwitchParkingTest {
         val resolved = RrpClient.resolveParkedFramesMax()
         assertTrue(resolved in 16..4096)
     }
+
+    // v1.9.0: регресс «чёрная дыра payload'ов» — вызватель паркует после того,
+    // как читатель уже снял паркинг (ре-кей завершился раньше poll(50мс)).
+    @Test
+    fun `parkIf skips parking when rekey already finished`() {
+        val p = SwitchParking(4)
+        // ре-кей завершён: predicate = false → паркинг НЕ включается
+        assertFalse(p.parkIf { false })
+        assertFalse(p.isParked())
+        // кадр уходит обычным путём, в очереди пусто
+        assertFalse(p.offer(data(1L)) { true })
+        assertTrue(p.unpark().isEmpty())
+    }
+
+    @Test
+    fun `parkIf parks when rekey in flight and unpark drains`() {
+        val p = SwitchParking(4)
+        assertTrue(p.parkIf { true })
+        assertTrue(p.isParked())
+        assertTrue(p.offer(data(7L)) { true })
+        val queued = p.unpark()
+        assertEquals(1, queued.size)
+        assertEquals(7L, (queued[0] as RrpFrame.Data).streamId)
+        // повторный parkIf с завершённым ре-кеем не паркует снова
+        assertFalse(p.parkIf { false })
+        assertFalse(p.isParked())
+    }
+
+    @Test
+    fun `parkIf after close returns false`() {
+        val p = SwitchParking(4)
+        p.close()
+        assertFalse(p.parkIf { true })
+    }
 }

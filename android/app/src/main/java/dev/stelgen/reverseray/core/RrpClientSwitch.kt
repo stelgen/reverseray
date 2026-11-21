@@ -58,9 +58,15 @@ internal fun RrpClient.handleProtoSwitchAck(frame: RrpFrame.ProtoSwitch) {
     }
 }
 
-/** Паркинг payload-кадров на время перехендшейка (контрольные — свободно). */
+/** Паркинг payload-кадров на время перехендшейка (контрольные — свободно).
+ * v1.9.0: вызывается из switchProto после появления ack — но читатель мог уже
+ * завершить ре-кей (и снять паркинг) пока вызватель спал в poll(50мс).
+ * parkIf проверяет pendingSwitchTarget под мьютексом паркинга: если ре-кей
+ * завершился — паркинг не ставится вовсе; иначе ставится до чтения следующего
+ * кадра и снимется штатным unparkAndFlush из finish-хендлера. Повторный park
+ * после unpark больше невозможен — чёрная дыра payload'ов устранена. */
 internal fun RrpClient.parkForSwitch() {
-    switchParking.park()
+    switchParking.parkIf { pendingSwitchTarget != null }
 }
 
 /** Снятие паркинга + отправка накопленных payload-кадров (уже новым конвертом).

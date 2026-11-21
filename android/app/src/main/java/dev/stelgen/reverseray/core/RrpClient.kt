@@ -102,7 +102,7 @@ class RrpClient(
     internal val token: String,
     internal val pin: String? = null,
     private val agentName: String = DEFAULT_AGENT,
-    private val allowLan: Boolean = false,
+    internal val allowLan: Boolean = false,
     internal val listener: Listener? = null,
     /** Имя устройства (поле device в HELLO; сервер требует непустое ≤64). */
     private val deviceName: String = "phone-1",
@@ -169,7 +169,7 @@ class RrpClient(
 
     internal val rnd = SecureRandom() // internal — зоны-extensions
     internal val running = AtomicBoolean(false) // internal — зоны-extensions
-    private val sendLock = Any()
+    internal val sendLock = Any()
 
     @Volatile private var socket: Socket? = null
     @Volatile private var tls: TlsClientProtocol? = null
@@ -180,19 +180,19 @@ class RrpClient(
     @Volatile private var wireWs: WsStream? = null
 
     /** Счётчики трафика (байты payload'ов DATA/UDP_DATA) для графика в UI. */
-    private val txBytes = AtomicLong(0)
-    private val rxBytes = AtomicLong(0)
+    internal val txBytes = AtomicLong(0)
+    internal val rxBytes = AtomicLong(0)
 
     /** v0.7.4: счётчики ПАКЕТОВ (кадров DATA/UDP_DATA) и последний размер —
      *  для строки «стрелки» на главном экране (тип, размер, пакеты туда/сюда). */
-    private val packetsTx = AtomicLong(0)
-    private val packetsRx = AtomicLong(0)
-    private val lastPacketTxSize = AtomicLong(0)
-    private val lastPacketRxSize = AtomicLong(0)
+    internal val packetsTx = AtomicLong(0)
+    internal val packetsRx = AtomicLong(0)
+    internal val lastPacketTxSize = AtomicLong(0)
+    internal val lastPacketRxSize = AtomicLong(0)
 
     /** Тип последнего пакета: "TCP" (DATA) или "UDP" (UDP_DATA). */
     @Volatile var lastPacketKind: String = ""
-        private set
+        internal set
 
     /** [txCount, rxCount, lastTxSize, lastRxSize] — снимок для UI. */
     fun packetsSnapshot(): LongArray = longArrayOf(
@@ -209,7 +209,7 @@ class RrpClient(
         internal set
 
     /** UDP-ассоциации: stream_id → локальный relay (DatagramSocket). */
-    private val udpAssocs = ConcurrentHashMap<Long, UdpAssoc>()
+    internal val udpAssocs = ConcurrentHashMap<Long, UdpAssoc>()
 
     @Volatile var state: State = State.DISCONNECTED
         private set
@@ -295,7 +295,7 @@ class RrpClient(
      * v0.9.5: начальный выбор камуфляжа для этого устройства (кадр 0x2A после
      * READY). true/false — отправить; null — не отправлять (клиент молчит).
      */
-    @Volatile private var pendingCamCtl: Boolean? = initialCamCtl
+    @Volatile internal var pendingCamCtl: Boolean? = initialCamCtl
 
     @Volatile var tunnelWindow: Long = DEFAULT_TUNNEL_WINDOW
         private set
@@ -309,7 +309,7 @@ class RrpClient(
     @Volatile private var readyFrame: RrpFrame.Ready? = null
     @Volatile private var handshakeError: IOException? = null
 
-    private val pendingOpens = ConcurrentHashMap<Long, OpenFuture>()
+    internal val pendingOpens = ConcurrentHashMap<Long, OpenFuture>()
     internal val streams = ConcurrentHashMap<Long, Stream>()
     internal val nextStreamId = AtomicLong(1)
     private val lastPongMs = AtomicLong(0)
@@ -337,9 +337,9 @@ class RrpClient(
         Executors.newCachedThreadPool { r -> Thread(r, "rrp-relay").apply { isDaemon = true } }
     // v1.3.0 «буфер трафика»: паркинг сокетов таргетов при потере транспорта.
     // Отдельный daemon-пул: переживает close() клиента (TTL-рипер).
-    private val parkExecutor: ScheduledExecutorService =
+    internal val parkExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-park").apply { isDaemon = true } }
-    private val parkedSockets = java.util.concurrent.ConcurrentHashMap<String, ParkedSock>()
+    internal val parkedSockets = java.util.concurrent.ConcurrentHashMap<String, ParkedSock>()
 
     /** Припаркованный сокет таргета: живёт до реконнекта (OPEN_RESUME) или TTL. */
     class ParkedSock(val socket: Socket, val parkedAt: Long)
@@ -642,17 +642,16 @@ class RrpClient(
 
     // ------------------------------------------------------------------ MTProto/2 (v0.8)
 
-
     /** Расшифровка DATA-конверта (в обычном режиме — без изменений). */
     /** Активный конверт: wireguard (v0.9.5) имеет приоритет, затем mtproto2. */
-    private fun activeMaxPlainData(): Int? = when {
+    internal fun activeMaxPlainData(): Int? = when {
         wgCrypto != null -> Wg.MAX_PLAIN_DATA
         btCrypto != null -> Torrent.MAX_PLAIN_DATA
         mtCrypto != null -> MtProto.SessionCrypto.MAX_PLAIN_DATA
         else -> null
     }
 
-    private fun encryptDown(bytes: ByteArray): ByteArray {
+    internal fun encryptDown(bytes: ByteArray): ByteArray {
         wgCrypto?.let { return it.seal(bytes) }
         btCrypto?.let { return it.seal(bytes) }
         mtCrypto?.let { return it.encryptDown(bytes) }
@@ -666,7 +665,7 @@ class RrpClient(
         return payload
     }
 
-    private fun decryptPayload(frame: RrpFrame.Data): RrpFrame.Data? {
+    internal fun decryptPayload(frame: RrpFrame.Data): RrpFrame.Data? {
         if (mtCrypto == null && wgCrypto == null && btCrypto == null) return frame
         return try {
             RrpFrame.Data(frame.streamId, frame.flags, decryptUpEnvelope(frame.bytes))
@@ -678,7 +677,7 @@ class RrpClient(
     }
 
     /** Расшифровка UDP_DATA-конверта. */
-    private fun decryptUdpPayload(frame: RrpFrame.UdpData): RrpFrame.UdpData? {
+    internal fun decryptUdpPayload(frame: RrpFrame.UdpData): RrpFrame.UdpData? {
         if (mtCrypto == null && wgCrypto == null && btCrypto == null) return frame
         return try {
             RrpFrame.UdpData(frame.streamId, frame.atyp, frame.addr, frame.port, decryptUpEnvelope(frame.bytes))
@@ -697,347 +696,10 @@ class RrpClient(
         }
     }
 
-    private fun flushPendingCamCtl() {
-        val want = pendingCamCtl ?: return
-        pendingCamCtl = null
-        if (state == State.READY) {
-            debug(Msgs.CAM_CTL_SENT.t(if (want) "on" else "off"))
-            try {
-                sendFrame(RrpFrame.CamCtl(want))
-            } catch (e: IOException) {
-                log(Msgs.CAM_CTL_FAILED.t(e.message ?: "?"), LogKind.WARN)
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ OPEN
-
-    /**
-     * Исходящий OPEN (по ТЗ): отправить кадр и дождаться OPEN_OK.
-     * Возвращает err_code (ERR_OK = 0); без отправки — ERR_NOT_READY /
-     * ERR_SSRF_BLOCKED / ERR_BAD_ADDRESS. Отменяется таймаутом OPEN_TIMEOUT_MS → ERR_TIMEOUT.
-     */
-    fun sendOpen(addr: String, port: Int, onStreamId: ((Long) -> Unit)? = null): OpenFuture {
-        // v1.8.1: onStreamId вызывается ДО отправки OPEN — подписчик успевает
-        // зарегистрировать стрим (E2E-пробник: socketpair), входящие DATA
-        // попадают по адресу. Id — ЧЁТНЫЙ (см. phoneStreamId).
-        val future = OpenFuture()
-        if (state != State.READY) {
-            future.complete(ERR_NOT_READY)
-            return future
-        }
-        if (SsrfGuard.isBlocked(addr, allowLan)) {
-            log(Msgs.SEND_OPEN_SSRF.t(addr), LogKind.WARN)
-            future.complete(ERR_SSRF_BLOCKED)
-            return future
-        }
-        val encoded = try {
-            RrpAddress.encodeAddr(addr)
-        } catch (e: Exception) {
-            future.complete(ERR_BAD_ADDRESS)
-            return future
-        }
-        val streamId = phoneStreamId(nextStreamId.getAndIncrement())
-        onStreamId?.invoke(streamId)
-        pendingOpens[streamId] = future
-        try {
-            sendFrame(RrpFrame.Open(streamId, encoded.atyp, encoded.bytes, port))
-        } catch (e: IOException) {
-            pendingOpens.remove(streamId)
-            future.complete(ERR_CONNECT_FAILED)
-            return future
-        }
-        try {
-            pingExecutor.schedule({
-                pendingOpens.remove(streamId)?.complete(ERR_TIMEOUT)
-            }, OPEN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        } catch (_: RejectedExecutionException) {
-            // клиент уже закрыт — future завершён в close()
-        }
-        return future
-    }
-
-    /** S→C OPEN: сервер просит телефон диалить цель. Ответ — OPEN_OK c err_code. */
-    private fun handleIncomingOpen(frame: RrpFrame.Open) {
-        val streamId = frame.streamId
-        val targetHost = try {
-            RrpAddress.decodeAddr(frame.atyp, frame.addr)
-        } catch (e: Exception) {
-            sendOpenOk(streamId, ERR_BAD_ADDRESS)
-            return
-        }
-        if (SsrfGuard.isBlocked(targetHost, allowLan)) {
-            log(Msgs.OPEN_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
-            sendOpenOk(streamId, ERR_SSRF_BLOCKED)
-            return
-        }
-        if (streams.size >= maxStreams) {
-            sendOpenOk(streamId, ERR_TOO_MANY_STREAMS)
-            return
-        }
-        // DNS-resolve выполняем сами и проверяем КАЖДЫЙ адрес по байтам:
-        // hostname может резолвиться в приватный IP (DNS-rebinding bypass строки-гварда)
-        val allowedAddr = try {
-            java.net.InetAddress.getAllByName(targetHost)
-                .firstOrNull { !SsrfGuard.isBlockedAddress(it, allowLan) }
-        } catch (e: Exception) {
-            sendOpenOk(streamId, ERR_BAD_ADDRESS)
-            return
-        }
-        if (allowedAddr == null) {
-            log(Msgs.OPEN_RESOLVES_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
-            sendOpenOk(streamId, ERR_SSRF_BLOCKED)
-            return
-        }
-        try {
-            relayExecutor.execute {
-                var sock: Socket? = null
-                try {
-                    val s = Socket()
-                    // коннект на уже проверенный адрес — без повторного DNS-резолва
-                    s.connect(InetSocketAddress(allowedAddr, frame.port), CONNECT_TIMEOUT_MS)
-                    s.tcpNoDelay = true
-                    sock = s
-                    val st = registerStream(streamId, s)
-                    sendOpenOk(streamId, ERR_OK)
-                    pumpOutgoing(st) // цель → DATA → сервер; блокируется до закрытия стрима
-                } catch (e: Exception) {
-                    closeQuietly(sock)
-                    sendOpenOk(streamId, ERR_CONNECT_FAILED)
-                }
-            }
-        } catch (_: RejectedExecutionException) {
-            sendOpenOk(streamId, ERR_GENERAL)
-        }
-    }
-
-    private fun registerStream(id: Long, sock: Socket): Stream {
-        val window = tunnelWindow.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
-        val st = Stream(id, sock, Semaphore(window))
-        streams[id] = st
-        return st
-    }
-
-    // ------------------------------------------------------------------ PARK / RESUME (v1.3.0)
-
-    private fun tokenKey(tok: ByteArray): String =
-        tok.joinToString("") { ((it.toInt() and 0xFF)).toString(16).padStart(2, '0') }
-
-    /** Паркинг сокета при смерти транспорта: TCP-сессия с сайтом сохраняется. */
-    private fun parkSocket(st: Stream) {
-        val tok = st.resumeToken ?: return // старый сервер — закрываем как раньше
-        val key = tokenKey(tok)
-        parkedSockets[key] = ParkedSock(st.socket, System.currentTimeMillis())
-        try {
-            parkExecutor.schedule({ closeParked(key) }, STREAM_PARK_MS, TimeUnit.MILLISECONDS)
-        } catch (_: RejectedExecutionException) {}
-        debug(Msgs.SOCKET_PARKED.t(st.id))
-    }
-
-    private fun closeParked(key: String) {
-        parkedSockets.remove(key)?.let {
-            try { it.socket.close() } catch (_: Exception) {}
-            debug(Msgs.PARK_EXPIRED.t())
-        }
-    }
-
-    /** OPEN_RESUME: сервер просит привязать запаркованный сокет к новому стриму. */
-    private fun handleOpenResume(frame: RrpFrame.OpenResume) {
-        val sock = parkedSockets.remove(tokenKey(frame.token))
-        if (sock == null) {
-            debug(Msgs.RESUME_NO_SOCKET.t())
-            sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_NO_PARKED))
-            return
-        }
-        if (streams[frame.streamId] != null) {
-            sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_GENERAL))
-            return
-        }
-        try { sock.socket.soTimeout = 0 } catch (_: Exception) {}
-        val st = registerStream(frame.streamId, sock.socket)
-        st.resumeToken = frame.token
-        relayExecutor.execute { pumpOutgoing(st) }
-        sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, ERR_OK))
-        debug(Msgs.RESUME_ATTACHED.t(frame.streamId))
-    }
-
-    /** Поток: сокет цели → DATA кадры (с учётом окна flow-control).
-     *  acquire с таймаутом: если сервер умер и не наращивает окно — поток не висит вечно. */
-    private fun pumpOutgoing(st: Stream) {
-        val buf = ByteArray(16 * 1024)
-        try {
-            val input = st.socket.getInputStream()
-            while (running.get() && !st.closed.get() && !st.parked.get()) {
-                // Такт чтения: pump обязан просыпаться и проверять parked —
-                // при паркинге он выходит БЕЗ закрытия сокета (второй читатель
-                // на резюмированном сокете недопустим).
-                try { st.socket.soTimeout = PUMP_POLL_MS } catch (_: Exception) {}
-                val n = try {
-                    input.read(buf)
-                } catch (e: java.net.SocketTimeoutException) {
-                    continue
-                }
-                if (n < 0) break
-                if (n == 0) continue
-                if (!st.sendWindow.tryAcquire(n, WINDOW_ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    debug(Msgs.WINDOW_NOT_GROWN.t(st.id, WINDOW_ACQUIRE_TIMEOUT_MS))
-                    sendFrameQuiet(RrpFrame.Close(st.id, ERR_TIMEOUT))
-                    break
-                }
-                sendFrame(RrpFrame.Data(st.id, 0, buf.copyOf(n)))
-            }
-            if (!st.closed.get() && !st.parked.get()) sendFrameQuiet(RrpFrame.Close(st.id, ERR_OK))
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        } catch (e: Exception) {
-            sendFrameQuiet(RrpFrame.Close(st.id, ERR_GENERAL))
-        } finally {
-            // Паркинг: сокет продолжает жить (TTL-рипер/OPEN_RESUME).
-            if (!st.parked.get()) closeStreamInternal(st)
-        }
-    }
-
-    // ------------------------------------------------------------------ DATA / WINDOW
-
-    private fun handleData(frame: RrpFrame.Data) {
-        val st = streams[frame.streamId]
-        if (st == null) {
-            sendFrameQuiet(RrpFrame.Close(frame.streamId, ERR_NO_STREAM))
-            return
-        }
-        try {
-            val out = st.socket.getOutputStream()
-            out.write(frame.bytes)
-            out.flush()
-            val consumed = st.remoteConsumed + frame.bytes.size
-            val threshold = (tunnelWindow / 2).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
-            if (consumed >= threshold) {
-                st.remoteConsumed = 0
-                sendFrameQuiet(RrpFrame.Window(st.id, consumed.toLong()))
-            } else {
-                st.remoteConsumed = consumed
-            }
-        } catch (e: IOException) {
-            closeStream(frame.streamId, notify = true)
-        }
-    }
-
-    private fun closeStream(id: Long, errCode: Int = ERR_GENERAL, notify: Boolean) {
-        val st = streams.remove(id) ?: return
-        st.closed.set(true)
-        closeQuietly(st.socket)
-        if (notify) sendFrameQuiet(RrpFrame.Close(id, errCode))
-    }
-
-    private fun closeStreamInternal(st: Stream) {
-        streams.remove(st.id)?.let {
-            it.closed.set(true)
-            closeQuietly(it.socket)
-        }
-    }
-
-    private fun sendOpenOk(streamId: Long, errCode: Int) {
-        sendFrameQuiet(RrpFrame.OpenOk(streamId, errCode))
-    }
-
-    // ------------------------------------------------------------------ UDP (v0.7)
-
-    /** v1.0.0: гейт UDP-релея (галочка владельца в APK; живая сессия тоже). */
     @Volatile var udpEnabled: Boolean = true
 
     /** S→C UDP_ASSOC: сервер просит поднять UDP-релей. Ответ — OPEN_OK c err_code. */
-    private fun handleIncomingUdpAssoc(frame: RrpFrame.UdpAssoc) {
-        val id = frame.streamId
-        if (!udpEnabled) {
-            // v1.0.0: UDP-модуль выключен галочкой владельца — ровно ноль дейтаграмм
-            sendOpenOk(id, ERR_CONNECT_FAILED)
-            log(Msgs.UDP_DISABLED.t())
-            return
-        }
-        if (udpAssocs.size >= maxStreams) {
-            sendOpenOk(id, ERR_TOO_MANY_STREAMS)
-            return
-        }
-        val assoc = try {
-            UdpAssoc(id)
-        } catch (e: Exception) {
-            log(Msgs.UDP_ASSOC_FAILED.t(e.message), LogKind.WARN)
-            sendOpenOk(id, ERR_CONNECT_FAILED)
-            return
-        }
-        udpAssocs[id] = assoc
-        sendOpenOk(id, ERR_OK)
-        Thread({ udpReceiveLoop(assoc) }, "rrp-udp-$id").apply { isDaemon = true }.start()
-    }
-
-    /** Приём дейтаграмм из интернета → UDP_DATA C→S (источник = фактический отправитель). */
-    private fun udpReceiveLoop(assoc: UdpAssoc) {
-        val buf = ByteArray(UDP_RECV_BUFFER)
-        while (running.get() && !assoc.closed.get()) {
-            val pkt = DatagramPacket(buf, buf.size)
-            try {
-                assoc.socket.receive(pkt)
-            } catch (_: Exception) {
-                break
-            }
-            if (pkt.length <= 0) continue
-            val src = pkt.address
-            val atyp = if (src.address.size == 4) RrpAddress.ATYP_IPV4 else RrpAddress.ATYP_IPV6
-            sendFrameQuiet(RrpFrame.UdpData(assoc.id, atyp, src.address, pkt.port, buf.copyOf(pkt.length)))
-        }
-    }
-
-    /** S→C UDP_DATA: дейтаграмма на адрес назначения (с SSRF-guard; порт 53 = DNS+ разрешён). */
-    private fun handleUdpData(frame: RrpFrame.UdpData) {
-        val assoc = udpAssocs[frame.streamId]
-        if (assoc == null || assoc.closed.get()) return
-        val targetHost = try {
-            RrpAddress.decodeAddr(frame.atyp, frame.addr)
-        } catch (e: Exception) {
-            return
-        }
-        // Порт 53 разрешён даже в приватные сети: это DNS-релей телефона,
-        // тот же резолвер, которым телефон пользуется сам (документировано в protocol.md).
-        val allow = allowLan || frame.port == 53
-        if (SsrfGuard.isBlocked(targetHost, allow)) {
-            log(Msgs.UDP_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
-            return
-        }
-        val dst: java.net.InetAddress = when (frame.atyp) {
-            RrpAddress.ATYP_IPV4, RrpAddress.ATYP_IPV6 -> try {
-                java.net.InetAddress.getByAddress(frame.addr)
-            } catch (e: Exception) {
-                return
-            }
-            else -> {
-                // домен: резолвим сами и проверяем каждый адрес (DNS-rebinding)
-                val resolved = try {
-                    java.net.InetAddress.getAllByName(targetHost)
-                        .firstOrNull { !SsrfGuard.isBlockedAddress(it, allow) }
-                } catch (e: Exception) {
-                    null
-                }
-                if (resolved == null) {
-                    log(Msgs.UDP_RESOLVE_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
-                    return
-                }
-                resolved
-            }
-        }
-        if (SsrfGuard.isBlockedAddress(dst, allow)) {
-            log(Msgs.UDP_ADDR_SSRF.t("$targetHost:${frame.port}"), LogKind.WARN)
-            return
-        }
-        if (frame.bytes.isEmpty()) return
-        try {
-            assoc.socket.send(DatagramPacket(frame.bytes, frame.bytes.size, dst, frame.port))
-        } catch (e: Exception) {
-            log("udp send failed: ${e.message}", LogKind.WARN)
-        }
-    }
-
-    /** Локальная UDP-ассоциация: DatagramSocket + поток приёма. */
-    private inner class UdpAssoc(val id: Long) {
+    internal class UdpAssoc(val id: Long) {
         val socket: java.net.DatagramSocket = java.net.DatagramSocket()
         val closed = AtomicBoolean(false)
 
@@ -1064,7 +726,6 @@ class RrpClient(
         override fun flush() {}
         override fun close() = ws.closeFrame()
     }
-
 
     // ------------------------------------------------------------------ frame IO
 
@@ -1256,13 +917,6 @@ class RrpClient(
     /** Протокольная трассировка (кадр за кадром) — видна при minLevel TRACE. */
     internal fun trace(message: String) = log(message, LogKind.TRACE)
 
-    /** Hex-дамп первых 64 байт (для анализа raw-данных в журнале приложения). */
-    private fun RrpFrame.rawHex(): String {
-        val p = try { encode().copyOfRange(RrpFrame.HEADER_SIZE, encode().size) } catch (e: Exception) { ByteArray(0) }
-        val n = minOf(64, p.size)
-        return p.take(n).joinToString(" ") { String.format(Locale.ROOT, "%02x", it) } + if (p.size > n) "…" else ""
-    }
-
     internal fun closeQuietly(c: Socket?) {
         try { c?.close() } catch (_: Exception) {}
     }
@@ -1272,8 +926,6 @@ class RrpClient(
         mac.init(SecretKeySpec(key, "HmacSHA256"))
         return mac.doFinal(data)
     }
-
-
 
     companion object {
         const val DEFAULT_AGENT = "ReverseRay-Android/0.8.2"

@@ -106,28 +106,28 @@ class TunnelService : Service() {
         super.attachBaseContext(L10nUi.wrap(base))
     }
 
-    private class Target(val host: String, val port: Int)
+    internal class Target(val host: String, val port: Int)
 
-    @Volatile private var lifetime: AtomicLong = AtomicLong(0)
+    @Volatile internal var lifetime: AtomicLong = AtomicLong(0)
 
-    private inner class Runner(val target: Target) {
+    internal inner class Runner(val target: Target) {
         /** Сессия (профиль), к которой принадлежит раннер (v1.5.0). */
-        var sess: Sess? = null
-        @Volatile var kick = false
+        internal var sess: Sess? = null
+        @Volatile internal var kick = false
         /** v0.9.2: раннер выведен из эксплуатации (смена протокола) — поток
          * runLoop обязан завершиться, а не пересоздать коннект (иначе
          * двойные коннекты: старый+новый набор на один порт). */
-        @Volatile var retired = false
+        @Volatile internal var retired = false
         /** активный клиент — для форс-закрытия при stopTunnel (иначе стоп ждёт handshake-таймаут до 20с) */
-        @Volatile var client: RrpClient? = null
+        @Volatile internal var client: RrpClient? = null
     }
 
-    private val runners = mutableListOf<Runner>()
+    internal val runners = mutableListOf<Runner>()
 
     // ---------- v1.5.0 «Multi-Server Core»: профили/сессии ----------
 
     /** Хранилище профилей (миграция v1.3→v1.5 — в onCreate). */
-    private lateinit var sessionStore: SessionStore
+    internal lateinit var sessionStore: SessionStore
 
     /** Менеджер N сессий (живёт пока туннель поднят). */
     @Volatile internal var manager: ConnectionManager? = null
@@ -138,16 +138,16 @@ class TunnelService : Service() {
     internal val sessById = java.util.concurrent.ConcurrentHashMap<String, Sess>()
 
     /** Сессия, занятая валидационной сменой протокола (gate только для неё). */
-    @Volatile private var switchingSessionId: String? = null
+    @Volatile internal var switchingSessionId: String? = null
 
     // v1.0.2 (мультипоточность): состояние каждого раннера (ключ = sessId|порт)
-    private val sessionStates = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val runnerStateKey = ThreadLocal<String>()
-    private val rnd = Random()
+    internal val sessionStates = java.util.concurrent.ConcurrentHashMap<String, String>()
+    internal val runnerStateKey = ThreadLocal<String>()
+    internal val rnd = Random()
     internal val lastNetKick = AtomicLong(0)
-    @Volatile private var statsThread: Thread? = null
-    private var lastTx = 0L
-    private var lastRx = 0L
+    @Volatile internal var statsThread: Thread? = null
+    internal var lastTx = 0L
+    internal var lastRx = 0L
 
     @Volatile internal var stopping = true
     internal var wakeLock: PowerManager.WakeLock? = null
@@ -157,7 +157,7 @@ class TunnelService : Service() {
     internal var legacyReceiver: BroadcastReceiver? = null
 
     /** Идёт ли сейчас валидационная смена протокола. */
-    @Volatile private var switchingProto = false
+    @Volatile internal var switchingProto = false
 
     // ---------- v1.8.0: режим «Ротация» (альтернатива авто-режиму) ----------
     /** Пер-сессионные ротаторы (расписание у каждого своё). */
@@ -167,7 +167,6 @@ class TunnelService : Service() {
             Thread(r, "rrp-rotate").apply { isDaemon = true }
         }
     internal var rotateTask: java.util.concurrent.ScheduledFuture<*>? = null
-
 
     // ---------- v1.5.0: балансер пер-сессионный (в ConnectionManager);
     // решение балансера исполняет sessionOwner.onBalancerSwitch (ниже).
@@ -193,26 +192,6 @@ class TunnelService : Service() {
             }
         }
         return all
-    }
-
-    /** Первый живой клиент сессии (для healthSample/proto снапшотов). */
-    internal fun firstClientOf(sess: Sess): RrpClient? =
-        synchronized(runners) { runners.firstOrNull { it.sess === sess }?.client }
-
-    private fun runnersOf(sess: Sess): List<Runner> =
-        synchronized(runners) { runners.filter { it.sess === sess } }
-
-    private fun killRunnersOf(sess: Sess) {
-        val active = synchronized(runners) {
-            val list = runners.filter { it.sess === sess }
-            runners.removeAll { it.sess === sess }
-            list
-        }
-        active.forEach {
-            it.kick = true
-            it.retired = true
-            try { it.client?.close() } catch (_: Exception) {}
-        }
     }
 
     /** Сессия-владелец для менеджера: создаёт воркеры, принимает события. */
@@ -327,7 +306,7 @@ class TunnelService : Service() {
     /** Ждун сброса лимита для авто-переподключения. */
     @Volatile internal var limitWaitThread: Thread? = null
 
-    private val clientListener = object : RrpClient.Listener {
+    internal val clientListener = object : RrpClient.Listener {
         /** Сессия, владеющая клиентом (v1.5.0: тегирование логов per-сессия). */
         private fun sessOf(client: RrpClient): Sess? =
             synchronized(runners) { runners.firstOrNull { it.client === client }?.sess }
@@ -427,7 +406,7 @@ class TunnelService : Service() {
     }
 
     // v0.8.3: единицы из ресурсов (динамический язык) — общий Formats (дубль удалён)
-    private fun fmtBytes(b: Long): String = Formats.bytes(this, b)
+    internal fun fmtBytes(b: Long): String = Formats.bytes(this, b)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -440,7 +419,7 @@ class TunnelService : Service() {
     }
 
     /** Ленивая инициализация SessionStore + ОДНОРАЗОВАЯ миграция v1.3→v1.5. */
-    private fun ensureStore() {
+    internal fun ensureStore() {
         if (!::sessionStore.isInitialized) {
             sessionStore = SessionStore(PrefsBackend(prefs()))
             val migrated = sessionStore.migrateLegacy(prefs().getString(KEY_CONFIG, null))
@@ -451,7 +430,7 @@ class TunnelService : Service() {
     }
 
     /** Профиль по id (или null). */
-    private fun profileById(id: String?): SessionStore.Profile? =
+    internal fun profileById(id: String?): SessionStore.Profile? =
         if (::sessionStore.isInitialized) sessionStore.byId(id) else null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -535,72 +514,6 @@ class TunnelService : Service() {
 
     // ---------- туннель ----------
 
-    /**
-     * v0.9.2 (R2): ЕДИНЫЙ источник правды протокола — ССЫЛКА (proto=).
-     * Раньше протокол читался из отдельного KEY_PROTO, который перекрывал
-     * вставленную ссылку: после смены протокола новая ссылка с proto=rrp1
-     * продолжала подключаться mtproto2. Теперь proto всегда из ссылки;
-     * KEY_PROTO выведен из употребления (не читается).
-     */
-    /** Протокол ИЗ URI профиля (исполняемая нормализация) — v1.5.0. */
-    internal fun protoOf(uri: String): String = try {
-        RrpProtocols.normalizeExecutable(RrpUri.parse(uri).proto)
-    } catch (_: Exception) {
-        RrpProtocols.PREFERRED_AUTO
-    }
-
-    /** Заявленный протокол ИЗ URI профиля ("" = AUTO) — v1.5.0. */
-    internal fun claimedOf(uri: String): String = try {
-        RrpUri.parse(uri).proto.trim()
-    } catch (_: Exception) {
-        ""
-    }
-
-
-    internal fun currentProto(): String {
-        val cfg = try {
-            RrpUri.parse(prefs().getString(KEY_CONFIG, null) ?: "")
-        } catch (_: Exception) {
-            null
-        }
-        return RrpProtocols.normalizeExecutable(cfg?.proto)
-    }
-
-    /**
-     * Заявленный (отображаемый) протокол из ссылки: новый протокол модуля
-     * честно виден в GUI, даже если эта сборка ещё не умеет его исполнять
-     * (тогда коннект идёт на rrp1 — см. RrpProtocols.normalizeExecutable).
-     */
-    internal fun claimedProto(): String {
-        val cfg = try {
-            RrpUri.parse(prefs().getString(KEY_CONFIG, null) ?: "")
-        } catch (_: Exception) {
-            null
-        }
-        // v0.9.5: возвращаем КАК В ССЫЛКЕ ("" = AUTO) — GUI честно показывает
-        // режим AUTO, warning «не исполняется» только для явных протоколов.
-        return cfg?.proto?.trim() ?: ""
-    }
-
-    /**
-     * v1.8.4: ЕДИНЫЙ резолв конфига сервиса (активный PRIMARY-профиль →
-     * зеркало KEY_CONFIG) + self-heal зеркала каноном. Раньше switchProtocol
-     * читал только зеркало — после добавления сервера (профиль есть, зеркало
-     * пусто) смены протокола отвечали «Нет конфига», хотя ссылка валидна.
-     */
-    internal fun resolvedConfig(): ConfigResult {
-        ensureStore()
-        val fromProfile = try { sessionStore.active()?.uri } catch (_: Exception) { null }
-        val fromMirror = prefs().getString(KEY_CONFIG, null)
-        val res = ConfigSource.firstValid(fromProfile, fromMirror)
-        val canon = (res as? ConfigResult.Valid)?.canonical
-        if (canon != null && canon != fromMirror) {
-            prefs().edit().putString(KEY_CONFIG, canon).apply()
-            syncProtoState()
-        }
-        return res
-    }
-
     internal fun startTunnel() {
         ensureStore()
         startRotateTick() // v1.8.0: тик ротации живёт всё время работы туннеля
@@ -649,45 +562,6 @@ class TunnelService : Service() {
         updateStatus(STATE_CONNECTING, getString(R.string.status_connecting, pHost))
     }
 
-    /** Старт одной сессии (изолированно: неудача не роняет другие). */
-    private fun startSession(p: SessionStore.Profile) {
-        manager?.start(p)
-    }
-
-    /** Все сессии из реестра (для kickAll-поднятия после Wi-Fi). */
-    internal fun startAllSessions() {
-        for (p in sessionStore.profiles()) {
-            if (p.enabled || p.id == sessionStore.activeId()) {
-                if (sessById.containsKey(p.id)) continue
-                if (sessById.size >= ConnectionManager.MAX_SESSIONS) break
-                startSession(p)
-            }
-        }
-    }
-
-    /** Раннеры ОДНОЙ сессии (по портам профиля) — v1.5.0. */
-    private fun spawnRunnersFor(sess: Sess) {
-        val cfg = try {
-            RrpUri.parse(sess.profile.uri)
-        } catch (_: Exception) {
-            return
-        }
-        for (port in cfg.ports) {
-            val r = Runner(Target(cfg.host, port))
-            r.sess = sess
-            synchronized(runners) { runners.add(r) }
-            val stateKey = "${sess.id}|$port"
-            Thread({
-                runnerStateKey.set(stateKey)
-                try {
-                    runLoop(r)
-                } finally {
-                    sessionStates.remove(stateKey)
-                }
-            }, "rrp-conn-${sess.id.take(4)}-$port").start()
-        }
-    }
-
     /** Информация об устройстве — в журнал простым текстом (одна строка на старт). */
     private fun logDevicePreamble(cfg: RrpUriConfig) {
         try {
@@ -700,555 +574,9 @@ class TunnelService : Service() {
         } catch (_: Exception) {}
     }
 
-    /** Реалтайм-статистика трафика: раз в 500 мс шлёт ACTION_STATS (байт/с). */
-    private fun startStatsLoop() {
-        if (statsThread?.isAlive == true) return
-        lastTx = 0
-        lastRx = 0
-        val t = Thread({
-            var persistTick = 0
-            while (!stopping) {
-                try {
-                    Thread.sleep(STATS_INTERVAL_MS)
-                } catch (_: InterruptedException) {
-                    return@Thread
-                }
-                var tx = 0L
-                var rx = 0L
-                var pk = longArrayOf(0, 0, 0, 0)
-                var kind = ""
-                synchronized(runners) {
-                    runners.forEach { r ->
-                        r.client?.bytesSnapshot()?.let { (a, b) -> tx += a; rx += b }
-                        r.client?.packetsSnapshot()?.let { p ->
-                            pk[0] += p[0]; pk[1] += p[1]; pk[2] = p[2]; pk[3] = p[3]
-                        }
-                        if (r.client?.lastPacketKind?.isNotEmpty() == true) kind = r.client!!.lastPacketKind
-                    }
-                }
-                val dtx = tx - lastTx
-                val drx = rx - lastRx
-                lastTx = tx
-                lastRx = rx
-                // v1.5.0: per-сессионный снапшот для дашборда (JSON в extra)
-                val sessionsJson = sessionsJson()
-                // v0.9.2 (R4): история графика живёт в сервисе — переживает recreate
-
-                // v0.8: счётчик за всё время (канон: RAM, запись на диск пореже)
-                prefs().edit()
-                    .putLong(KEY_TRAFFIC_LIFETIME, lifetime.addAndGet(drx + dtx)).apply()
-                // v0.7.4/v0.8: учёт лимита трафика (сумма вход+выход за период)
-                val usage = accountTraffic(drx + dtx)
-
-                sendBroadcast(
-                    Intent(ACTION_STATS)
-                        .setPackage(packageName)
-                        .putExtra(EXTRA_TX_RATE, dtx * 1000L / STATS_INTERVAL_MS)
-                        .putExtra(EXTRA_RX_RATE, drx * 1000L / STATS_INTERVAL_MS)
-                        .putExtra(EXTRA_TX_TOTAL, tx)
-                        .putExtra(EXTRA_RX_TOTAL, rx)
-                        .putExtra(EXTRA_SESSIONS, sessionsJson)
-                        .putExtra(EXTRA_PKT_TX_COUNT, pk[0])
-                        .putExtra(EXTRA_PKT_RX_COUNT, pk[1])
-                        .putExtra(EXTRA_PKT_TX_SIZE, pk[2])
-                        .putExtra(EXTRA_PKT_RX_SIZE, pk[3])
-                        .putExtra(EXTRA_PKT_KIND, kind)
-                        .putExtra(EXTRA_USAGE_BYTES, usage.used)
-                        .putExtra(EXTRA_USAGE_LIMIT, usage.limit)
-                )
-                if (usage.limit > 0 && usage.used >= usage.limit) {
-                    // КАНОН «ЛИМИТ — КОРОЛЬ»: ровно ноль байт от нас.
-                    updateStatus(STATE_ERROR, getString(R.string.status_limit_reached))
-                    pushLog(getString(R.string.status_limit_reached), LogKind.ERROR)
-                    sendBroadcast(
-                        Intent(ACTION_STATUS).setPackage(packageName)
-                            .putExtra(EXTRA_STATE, STATE_LIMIT_REACHED)
-                            .putExtra(EXTRA_STATUS, getString(R.string.status_limit_reached))
-                            .putExtra(EXTRA_USAGE_BYTES, usage.used)
-                            .putExtra(EXTRA_USAGE_LIMIT, usage.limit)
-                    )
-                    stopTunnel() // туннель и все коннекты умирают — ноль байт
-                    maybeWaitLimitReset()
-                    return@Thread
-                }
-                // персистим счётчик РАЗ В МИНУТУ (дисциплина SSD/памяти, v0.8)
-                if (++persistTick >= PERSIST_EVERY_TICKS) {
-                    persistTick = 0
-                    persistUsage()
-                }
-            }
-        }, "rrp-stats").apply { isDaemon = true; start() }
-        statsThread = t
-    }
-
-    /**
-     * v1.5.0: JSON-снапшот всех сессий для дашборда (EXTRA_SESSIONS):
-     * state/rates/totals/proto/rtt/реконнекты/ошибки/аптайм — по сессии.
-     */
-    private fun sessionsJson(): String {
-        val mgr = manager ?: return "[]"
-        val now = System.currentTimeMillis()
-        val arr = org.json.JSONArray()
-        for (s in mgr.all()) {
-            val proto = try { s.worker.negotiatedProto() } catch (_: Exception) { "" }
-            arr.put(
-                org.json.JSONObject()
-                    .put("id", s.id)
-                    .put("name", s.profile.name)
-                    .put("state", s.state)
-                    .put("rx_rate", s.rxRate)
-                    .put("tx_rate", s.txRate)
-                    .put("rx_total", s.rxTotal)
-                    .put("tx_total", s.txTotal)
-                    .put("proto", proto)
-                    .put("rtt_ms", s.lastRttMs)
-                    .put("reconnects", s.reconnects.get())
-                    .put("errors", s.errors.get())
-                    .put("switches", s.protoSwitches.get())
-                    .put("uptime_ms", if (s.startedAtMs.get() > 0) now - s.startedAtMs.get() else 0)
-                    .put("primary", s.id == sessionStore.activeId()),
-            )
-        }
-        return arr.toString()
-    }
-
-    /**
-     * Обновить URI PRIMARY-профиля + зеркало KEY_CONFIG (единая точка для
-     * всех legacy-писателей конфига: accept-pin, вставка ссылки в UI).
-     */
-    private fun commitPrimaryUri(canonical: String) {
-        ensureStore()
-        prefs().edit().putString(KEY_CONFIG, canonical).apply()
-        syncProtoState()
-        val active = sessionStore.active() ?: return
-        sessionStore.update(active.copy(uri = canonical))
-    }
-
-
     // ---------- смена протокола (валидация → коммит, иначе откат) ----------
 
-    /**
-     * Валидационная смена протокола:
-     * 1) provisional-коннект с новым протоколом + PROBE реального хоста;
-     * 2) успех → коммит: сохраняем протокол и обновляем ссылку в конфиге;
-     * 3) неудача (3 ретрая) → мгновенный откат UI на текущий протокол,
-     *    ссылка НЕ меняется; cooldown, чтобы не молотить по rate-limit.
-     */
-    private fun switchProtocol(newProtoRaw: String) {
-        // v1.8.0: «Ротация» — отдельный режим выбора (взаимоисключающ с авто):
-        // включаем флаг и выходим — смены делает rotateTick (каждые 30 мин,
-        // строго по порядку, причины в журнале). Ссылку НЕ меняем: ротация —
-        // режим ПОВЕДЕНИЯ поверх текущего подключения.
-        if (newProtoRaw == PROTO_ROTATE) {
-            prefs().edit().putBoolean(KEY_PROTO_ROTATE, true).apply()
-            rotators.clear() // якорь расписания заново (первый тик якорит)
-            pushLog(getString(R.string.log_proto_rotation_on, ROTATE_INTERVAL_MS / 60_000), LogKind.INFO)
-            updateStatus(STATE_INFO, getString(R.string.status_rotate_on, ROTATE_INTERVAL_MS / 60_000))
-            startRotateTick()
-            return
-        }
-        // обычный выбор (протокол/AUTO) выключает ротацию (взаимоисключение)
-        if (prefs().getBoolean(KEY_PROTO_ROTATE, false)) {
-            prefs().edit().putBoolean(KEY_PROTO_ROTATE, false).apply()
-            pushLog(getString(R.string.log_proto_rotation_off), LogKind.INFO)
-        }
-        // v0.9.5: "auto" — явный режим «лучший общий протокол» (ссылка без proto=).
-        val isAuto = newProtoRaw == PROTO_AUTO
-        val newProto = if (isAuto) PROTO_AUTO else RrpProtocols.normalize(newProtoRaw)
-        val oldProto = currentProto()
-        val p = prefs()
-        if (isAuto && claimedProto().isBlank()) {
-            updateStatus(STATE_INFO, getString(R.string.status_switch_same, protoDisplayName(PROTO_AUTO)))
-            return
-        }
-        if (switchingProto) {
-            updateStatus(STATE_INFO, getString(R.string.status_switch_busy))
-            return
-        }
-        val now = System.currentTimeMillis()
-        if (now < nextSwitchAllowedAt) {
-            updateStatus(STATE_INFO, getString(R.string.status_switch_cooldown, (nextSwitchAllowedAt - now) / 1000))
-            return
-        }
-        if (!isAuto && newProto == oldProto) {
-            updateStatus(STATE_INFO, getString(R.string.status_switch_same, RrpProtocols.labelWithVer(newProto)))
-            return
-        }
-        // v0.9.5: "auto" — режим без proto= в ссылке; валидируем предпочтительным,
-        // в ссылку AUTO не пишем (proto= не появляется).
-        val commitProtoId = if (newProto == PROTO_AUTO) "" else newProto
-        val validateProto = if (newProto == PROTO_AUTO) RrpProtocols.PREFERRED_AUTO else newProto
-        switchingProto = true
-        // v1.8.4: DEBUG — начало смены протокола (от → до) для диагностики свитчей.
-        pushLog(
-            "switch begin: " + (if (oldProto.isBlank()) "-" else RrpProtocols.labelWithVer(oldProto)) +
-                " → " + (if (isAuto) "AUTO" else RrpProtocols.labelWithVer(newProto)),
-            LogKind.DEBUG,
-        )
-        // v1.5.0: смена протокола — ОПЕРАЦИЯ НАД PRIMARY (главная кнопка/пикер);
-        // другие сессии живут своей жизнью (изоляция).
-        val primarySess = sessionStore.activeId()?.let { sessById[it] }
-        switchingSessionId = sessionStore.activeId()
-        try {
-            val cfg = when (val res = resolvedConfig()) {
-                is ConfigResult.Valid -> res.cfg
-                is ConfigResult.Invalid -> {
-                    updateStatus(STATE_ERROR, getString(R.string.invalid_config, res.reason))
-                    return
-                }
-                ConfigResult.Empty -> {
-                    updateStatus(STATE_ERROR, getString(R.string.status_no_config))
-                    return
-                }
-            }
-            updateStatus(STATE_CONNECTING, getString(R.string.status_switch_trying, protoDisplayName(newProto)))
-            // v0.9.2 (R1): АТОМАРНОСТЬ ПЕРЕКЛЮЧЕНИЯ — старые коннекты PRIMARY
-            // гарантированно закрыты ДО provisional-коннекта с новым протоколом.
-            // Теперь: kill → validate → commit → spawn (только PRIMARY-сессия).
-            primarySess?.let { killRunnersOf(it) }
-            var lastErr = ""
-            for (attempt in 1..SWITCH_RETRIES) {
-                val client = buildClient(cfg, validateProto, validate = true)
-                try {
-                    client.connect()
-                    // валидация (PROBE) уже прошла внутри connect() — коммитим.
-                    // v1.8.6: коммитим СОГЛАСОВАННЫЙ протокол (не запрошенный):
-                    // сервер мог согласовать вниз (просили bittorrent — получил
-                    // wireguard), тогда ссылка и весь UI обязаны показывать
-                    // фактический протокол — канон единого источника правды.
-                    val agreed = client.negotiatedProto
-                    commitProto(if (isAuto) "" else agreed, cfg, primarySess)
-                    if (!isAuto && agreed != commitProtoId) {
-                        pushLog(
-                            getString(R.string.log_proto_agreed, RrpProtocols.labelWithVer(agreed), RrpProtocols.labelWithVer(commitProtoId)),
-                            LogKind.INFO,
-                        )
-                    }
-                    updateStatus(STATE_CONNECTED, getString(R.string.status_switch_done, protoDisplayName(agreed)))
-                    try { client.close() } catch (_: Exception) {}
-                    primarySess?.let { spawnRunnersFor(it) }
-                    return
-                } catch (e: Exception) {
-                    lastErr = e.message ?: "?"
-                    pushLog(getString(R.string.log_proto_attempt, attempt, SWITCH_RETRIES, lastErr))
-                    updateStatus(STATE_ERROR, getString(R.string.status_switch_fail, protoDisplayName(newProto), lastErr))
-                } finally {
-                    try { client.close() } catch (_: Exception) {}
-                }
-                if (attempt < SWITCH_RETRIES) {
-                    try { Thread.sleep(SWITCH_RETRY_PAUSE_MS) } catch (_: InterruptedException) { break }
-                }
-            }
-            // откат: UI вернёт выбор на старый протокол сразу, не дожидаясь реконнекта
-            nextSwitchAllowedAt = System.currentTimeMillis() + SWITCH_COOLDOWN_MS
-            updateStatus(STATE_ERROR, getString(R.string.status_switch_rolled_back, protoDisplayName(newProto), RrpProtocols.labelWithVer(oldProto), lastErr))
-            sendBroadcast(
-                Intent(ACTION_STATUS).setPackage(packageName)
-                    .putExtra(EXTRA_STATE, STATE_PROTO_ROLLBACK)
-                    .putExtra(EXTRA_STATUS, getString(R.string.status_switch_rolled_back, newProto, oldProto, lastErr))
-                    .putExtra(EXTRA_PROTO, oldProto)
-            )
-            // v0.9.2 (R1): откат — рабочие коннекты старого протокола возрождаются
-            if (!stopping) primarySess?.let { spawnRunnersFor(it) }
-        } finally {
-            switchingProto = false
-            switchingSessionId = null
-        }
-    }
-
-    /**
-     * Коммит ПОСЛЕ успешной валидации: протокол отражается в ссылке
-     * (v0.9.2: единый источник — ссылка, KEY_PROTO больше не пишется).
-     */
-    /**
-     * Коммит ПОСЛЕ успешной валидации: протокол отражается в URI профиля
-     * (v1.5.0: профиль — источник правды; зеркало KEY_CONFIG — для PRIMARY).
-     */
-    private fun commitProto(proto: String, cfg: RrpUriConfig, sess: Sess?) {
-        val updated = cfg.copy(proto = proto).serialize()
-        if (sess != null) {
-            sessionStore.update(sess.profile.copy(uri = updated))
-            if (sess.id == sessionStore.activeId()) {
-                prefs().edit().putString(KEY_CONFIG, updated).apply()
-            }
-        } else {
-            prefs().edit().putString(KEY_CONFIG, updated).apply()
-        }
-        pushLog(getString(R.string.log_proto_applied, proto))
-        syncProtoState()
-    }
-
-    /** Перезапуск рабочих коннектов с новым протоколом (без смены статуса). */
-    private fun buildClient(cfg: RrpUriConfig, proto: String, validate: Boolean): RrpClient {
-        // v1.0.0: гейт UDP-релея — единая точка для боевого и валидационного клиентов
-        val client = RrpClient(
-            host = cfg.host,
-            port = cfg.ports.firstOrNull() ?: 4433,
-            token = cfg.token,
-            pin = cfg.pin,
-            allowLan = allowLan(),
-            listener = clientListener,
-            deviceName = cfg.name?.takeIf { it.isNotBlank() } ?: "phone-1",
-            transport = cfg.transport,
-            agentName = "ReverseRay-Android/" + appVersion(),
-            noisePolicy = buildNoisePolicy(),
-            protoId = proto,
-            validateProbeTarget = if (validate) prefs().getString(KEY_PROBE_TARGET, DEFAULT_PROBE_TARGET) else null,
-            initialCamCtl = camCtlFlag(),
-        )
-        client.udpEnabled = prefs().getBoolean(KEY_UDP_ENABLED, true)
-        return client
-    }
-
-    /**
-     * v0.8.2: политика шума камуфляжа «API Mask» из ОБЩЕГО манифеста
-     * (включён манифестом + подтверждён сервером в READY). Шаблоны строк
-     * лога — на языке приложения (ресурсы), честно: сколько байт, бюджет.
-     */
-    private fun buildNoisePolicy(): Apimask.NoisePolicy? {
-        // v1.7.0 КАНОН: API Mask — ТОЛЬКО протокол (proto=apimask), не модуль.
-        // Шум живёт исключительно в сессиях, согласованных как apimask;
-        // модульная секция манифеста больше не управляет шумом.
-        if (claimedProto() != Apimask.FEATURE) return null
-        val cfg = RrpProtocols.camouflageConfig().takeIf { it.enabled } ?: Apimask.Config(
-            Apimask.FEATURE, "API Mask", "1", true, 300, 900, 256 * 1024,
-        )
-        val engine = Apimask.Engine(cfg)
-        val label = RrpProtocols.camouflageLabel()
-        return Apimask.NoisePolicy(engine) { bytes, used, budget ->
-            if (bytes > 0) {
-                getString(R.string.apimask_beat, label, bytes, fmtBytes(used), fmtBytes(budget.toLong()))
-            } else {
-                getString(R.string.apimask_budget_done, label, fmtBytes(used), fmtBytes(budget.toLong()))
-            }
-        }
-    }
-
-    /**
-     * v0.9.5: начальный кадр 0x2A при подключении: отправляем ТОЛЬКО когда
-     * локальный выбор существует (contains). Выбор персистентен на сервере:
-     * переживает офлайн клиента, применяется будущим сессиям.
-     */
-    private fun camCtlFlag(): Boolean? =
-        // v1.7.0: 0x2A — только для proto=apimask (включить серверный шум).
-        if (claimedProto() == Apimask.FEATURE) true else null
-
-    /** v1.6.0: дефолтная политика шума для proto=apimask (без манифеста). */
-    /**
-     * Управление камуфляжем из GUI (v0.9.5): сохранить выбор + честный лог +
-     * немедленный кадр 0x2A живой сессии (если есть); иначе применится при
-     * следующем подключении. GUI показывает итог тостом.
-     */
-    private fun applyCamouflage(enabled: Boolean, done: (String) -> Unit) {
-        prefs().edit().putBoolean(KEY_CAMO_OFF, !enabled).apply()
-        val label = RrpProtocols.camouflageLabel()
-        val what = getString(if (enabled) R.string.modules_camo_on else R.string.modules_camo_off, label)
-        pushLog(what, if (enabled) LogKind.INFO else LogKind.WARN)
-        var sent = false
-        synchronized(runners) {
-            runners.forEach { r ->
-                val c = r.client
-                if (c != null && c.state == RrpClient.State.READY) {
-                    try {
-                        c.sendCamCtl(enabled)
-                        sent = true
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-        }
-        done(if (sent) getString(R.string.modules_camo_applied) else getString(R.string.modules_camo_deferred))
-    }
-
-    private fun appVersion(): String = try {
-        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
-    } catch (_: Exception) {
-        "?"
-    }
-
-    private fun runLoop(r: Runner) {
-        var lastError = "?"
-        // v0.8.1: подряд идущие неудачи на ТЕКУЩЕМ протоколе (для фоллбека)
-        var failStreak = 0
-        // v0.9.7: дедуп уведомления о согласовании — одна и та же пара
-        // «просили → дали» не спамит при каждом реконнекте
-        var lastNegotiationNotice: String? = null
-        while (!stopping) {
-            // v1.5.0: конфиг сессии — ИЗ ПРОФИЛЯ (не из зеркала KEY_CONFIG;
-            // зеркало держим синхронным только для legacy-кода).
-            val profile = r.sess?.profile ?: return
-            val cfg = try {
-                RrpUri.parse(profile.uri)
-            } catch (_: Exception) {
-                return
-            }
-            // v0.9.2 (R1): ГЕЙТ смены протокола — во время валидационного
-            // provisional-коннекта СЕССИИ-СВИТЧА реконнект-луп не молотит свои
-            // попытки (атомарность: kill → validate → commit → spawn);
-            // другие сессии живут своей жизнью (изоляция v1.5.0).
-            while (switchingProto && r.sess?.id == switchingSessionId && !stopping) {
-                try { Thread.sleep(200) } catch (_: InterruptedException) { return }
-            }
-            if (stopping || r.retired) return
-            // протокол перечитываем КАЖДУЮ итерацию: так подхватывается
-            // и смена протокола, и фоллбек, и заморозка обновлений (без пересоздания)
-            val useProto = protoOf(profile.uri)
-            val claimed = claimedOf(profile.uri)
-            // v0.9.2 (R9): честный лог — протокол заявлен модулем/ссылкой,
-            // но эта сборка его ещё не исполняет → коннект на rrp1.
-            if (claimed.isNotBlank() && claimed != useProto) {
-                pushLog(
-                    getString(R.string.log_proto_not_executable, RrpProtocols.labelWithVer(claimed), RrpProtocols.labelWithVer(useProto)),
-                    LogKind.WARN,
-                )
-            }
-            val client = RrpClient(
-                host = r.target.host,
-                port = r.target.port,
-                token = cfg.token,
-                pin = cfg.pin,
-                allowLan = allowLan(),
-                listener = clientListener,
-                deviceName = (cfg.name?.takeIf { it.isNotBlank() } ?: profile.name).ifBlank { "phone-1" },
-                transport = cfg.transport,
-                agentName = "ReverseRay-Android/" + appVersion(),
-                noisePolicy = buildNoisePolicy(),
-                protoId = useProto,
-                initialCamCtl = camCtlFlag(),
-            )
-            r.client = client
-            try {
-                client.connect()
-                // v1.5.0: успех коннекта — сброс пер-сессионного backoff
-                r.sess?.id?.let { manager?.workerConnected(it) }
-                // v0.9.7 (канон «явные статусы согласования»): сервер ответил
-                // ДРУГИМ протоколом, чем запрошен (AUTO-предпочтение или явный
-                // proto=) — честный WARN вместо молчаливого даунгрейда.
-                Negotiation.notice(useProto, client.negotiatedProto, claimed)?.let { notice ->
-                    if (notice != lastNegotiationNotice) {
-                        lastNegotiationNotice = notice
-                        pushLog(notice, LogKind.WARN)
-                    }
-                }
-                failStreak = 0
-                updateStatus(STATE_CONNECTED, getString(R.string.status_connected, r.target.port))
-                while (!stopping && !switchingProto && client.state == RrpClient.State.READY) {
-                    try {
-                        Thread.sleep(500)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
-                }
-            } catch (e: RrpAuthException) {
-                // v0.9.4 КАНОН: auth failed — токен/ссылка устарели, это НЕ сетевой
-                // сбой. Ретраи бессмысленны и зарабатывают IP-локаут на сервере
-                // (5 неудач → клиент видит «TLS handshake_failure(40)» вместо
-                // причины). Останавливаем авто-реконнект честным статусом;
-                // обновление ссылки + кнопка Старт начинают новую серию.
-                lastError = e.message ?: "?"
-                pushLog(getString(R.string.status_auth_failed), LogKind.ERROR)
-                updateStatus(STATE_ERROR, getString(R.string.status_auth_failed))
-                r.client = null
-                r.sess?.id?.let { manager?.workerFatal(it, getString(R.string.status_auth_failed)) }
-                return
-            } catch (e: Exception) {
-                lastError = e.message ?: "?"
-                failStreak++
-                // v1.5.1 FIX: счётчик/backoff ведёт ТОЛЬКО workerFailed ниже
-                // (после цикла) — двойной инкремент задваивал errors и
-                // разгонял backoff вдвое быстрее (выглядело как «не подключается»).
-                updateStatus(STATE_ERROR, getString(R.string.status_error, r.target.port, lastError))
-                // v0.8.1 КАНОН ФОЛЛБЕКА: новый модуль протокола сломал клиент →
-                // откатываемся на предыдущий рабочий (rrp1). Сервер НЕ откатываем
-                // (анти-цикл: обновления рассинхронизированы, авто-обновление
-                // может быть отключено — модули заморожены, это не должно ломать).
-                // v0.9.2 (R1): во время смены протокола фоллбек не срабатывает —
-                // откат сделает switchProtocol после валидации.
-                if (r.sess?.id != switchingSessionId && ProtoFallback.shouldFallback(useProto, failStreak)) {
-                    pushLog(ProtoFallback.fallbackReason(useProto), LogKind.WARN)
-                    applyProtoFallback(r.sess, useProto)
-                    return
-                }
-            } finally {
-                try { client.close() } catch (_: Exception) {}
-            }
-            r.client = null
-            if (stopping || r.retired) return
-            if (r.sess?.id == switchingSessionId) {
-                // переход занят валидацией: попытка не считается, backoff сбросится
-                failStreak = 0
-                continue
-            }
-            // v1.5.0: пер-сессионный backoff ведёт ConnectionManager
-            val delay = r.sess?.let { manager?.workerFailed(it.id, lastError) }
-                ?: RrpClient.backoffDelayMs(0, rnd)
-            // ERROR держится на экране минимум HOLD_ERROR_MS, чтобы юзер
-            // успел прочитать причину, а не мигал «реконнект».
-            try { Thread.sleep(ERROR_HOLD_MS) } catch (_: InterruptedException) {}
-            if (stopping) break
-            updateStatus(STATE_RETRY, getString(R.string.status_retry_last, r.target.port, delay / 1000, lastError))
-            sleepWithKick(r, delay)
-        }
-    }
-
-    /**
-     * v0.8.1: клиентский фоллбек на фундамент (rrp1) — сохраняем протокол и
-     * ссылку (proto= отражает реально работающий), перезапускаем коннекты.
-     * UI получает STATE_PROTO_ROLLBACK и обновляет строку протокола.
-     */
-    /**
-     * v0.8.1: клиентский фоллбек на фундамент (rrp1) — SCOPE ОДНОЙ СЕССИИ
-     * (v1.5.0): протокол отражается в URI профиля (и в зеркале — если сессия
-     * PRIMARY), перезапускаются только раннеры этой сессии.
-     */
-    private fun applyProtoFallback(sess: Sess?, brokenProto: String) {
-        // v0.9.2 (R2): протокол живёт только в ссылке
-        try {
-            val cfg = RrpUri.parse(sess?.profile?.uri ?: "")
-            if (cfg.proto != RrpProtocols.DEFAULT) {
-                val updated = cfg.copy(proto = RrpProtocols.DEFAULT).serialize()
-                if (sess != null) {
-                    sessionStore.update(sess.profile.copy(uri = updated))
-                    if (sess.id == sessionStore.activeId()) {
-                        prefs().edit().putString(KEY_CONFIG, updated).apply()
-                        syncProtoState()
-                    }
-                }
-            }
-        } catch (_: Exception) {
-        }
-        syncProtoState()
-        sendBroadcast(
-            Intent(ACTION_STATUS).setPackage(packageName)
-                .putExtra(EXTRA_STATE, STATE_PROTO_ROLLBACK)
-                .putExtra(EXTRA_STATUS, ProtoFallback.fallbackReason(brokenProto))
-                .putExtra(EXTRA_PROTO, RrpProtocols.DEFAULT)
-        )
-        if (!stopping && sess != null) {
-            killRunnersOf(sess)
-            spawnRunnersFor(sess)
-        }
-    }
-
-    /** Сон с прерыванием по kick (мгновенный retry после появления сети). */
-    private fun sleepWithKick(r: Runner, ms: Long) {
-        val deadline = System.currentTimeMillis() + ms
-        while (!stopping) {
-            if (r.kick) {
-                r.kick = false
-                return
-            }
-            val now = System.currentTimeMillis()
-            if (now >= deadline) return
-            try {
-                Thread.sleep(minOf(250L, deadline - now))
-            } catch (_: InterruptedException) {
-                return
-            }
-        }
-    }
-
-    private fun stopTunnel() {
+    internal fun stopTunnel() {
         stopping = true
         stopRotateTick() // v1.8.0: ротация не переживает остановку туннеля
         // v1.5.0: все сессии через менеджер (каждая — изолированный stop)
@@ -1302,7 +630,7 @@ class TunnelService : Service() {
      * протокол» для всех вкладок/логов. Вызывается на каждом статусе и после
      * каждой записи ссылки; UI и логи только читают (никакой разношерсти).
      */
-    private fun syncProtoState() {
+    internal fun syncProtoState() {
         ProtocolState.sync(prefs().getString(KEY_CONFIG, "") ?: "", prefs().getBoolean(KEY_PROTO_ROTATE, false))
         ProtocolState.update(negotiated = lastNegotiatedProto)
     }
@@ -1360,74 +688,9 @@ class TunnelService : Service() {
         }
     }
 
-    /**
-     * v1.5.0: команды дашборда по сессии: connect/disconnect/reconnect/probe/
-     * primary. Изолированно — затрагивается только одна сессия.
-     */
-    private fun handleSessionCommand(id: String, cmd: String) {
-        val profile = profileById(id) ?: return
-        val mgr = manager
-        when (cmd) {
-            "connect" -> {
-                if (mgr == null || !sessById.containsKey(id)) {
-                    if (mgr != null && mgr.count() >= ConnectionManager.MAX_SESSIONS) {
-                        pushLog(getString(R.string.dash_sessions_limit, ConnectionManager.MAX_SESSIONS), LogKind.WARN)
-                        return
-                    }
-                    sessionStore.setEnabled(id, true)
-                    if (mgr != null) mgr.start(sessionStore.byId(id) ?: return)
-                    else startTunnel()
-                }
-            }
-            "disconnect" -> {
-                sessionStore.setEnabled(id, false)
-                mgr?.stop(id)
-                sessById.remove(id)
-            }
-            "reconnect" -> {
-                sessionStore.setEnabled(id, true)
-                mgr?.stop(id)
-                sessById.remove(id)
-                if (mgr == null) startTunnel() else mgr.start(sessionStore.byId(id) ?: return)
-            }
-            "probe" -> probeProfile(sessionStore.byId(id) ?: return)
-            "primary" -> {
-                sessionStore.setActive(id)
-                pushLog(getString(R.string.sess_primary_set, profile.name), LogKind.WARN)
-                sendBroadcast(
-                    Intent(ACTION_STATUS).setPackage(packageName)
-                        .putExtra(EXTRA_STATE, STATE_INFO)
-                        .putExtra(EXTRA_STATUS, getString(R.string.sess_primary_set, profile.name))
-                        .putExtra(EXTRA_SESSION_ID, id)
-                        .putExtra(EXTRA_PROFILE_NAME, profile.name),
-                )
-            }
-        }
-    }
-
-    /** Валидационный прогон профиля (TCP+TLS+пин+HELLO+PROBE) без подъёма сессии. */
-    private fun probeProfile(profile: SessionStore.Profile) {
-        val cfg = try {
-            RrpUri.parse(profile.uri)
-        } catch (e: Exception) {
-            pushLog("[${profile.name}] ${e.message}", LogKind.ERROR)
-            return
-        }
-        pushLog("[${profile.name}] ${getString(R.string.log_probe_running)}")
-        val client = buildClient(cfg, RrpProtocols.PREFERRED_AUTO, validate = true)
-        try {
-            client.connect()
-            pushLog("[${profile.name}] ${getString(R.string.log_probe_ok)}", LogKind.OK)
-        } catch (e: Exception) {
-            pushLog("[${profile.name}] ${e.message}", LogKind.ERROR)
-        } finally {
-            try { client.close() } catch (_: Exception) {}
-        }
-    }
-
     internal fun prefs(): SharedPreferences = getSharedPreferences(PREFS, MODE_PRIVATE)
 
-    private fun allowLan(): Boolean = prefs().getBoolean(KEY_ALLOW_LAN, false)
+    internal fun allowLan(): Boolean = prefs().getBoolean(KEY_ALLOW_LAN, false)
 
     companion object {
         internal const val TAG = "ReverseRay"
@@ -1519,9 +782,9 @@ class TunnelService : Service() {
         const val EXTRA_SESSIONS = "sessions" // JSON-снапшот всех сессий (дашборд)
         const val ACTION_SESSION = "dev.stelgen.reverseray.action.SESSION"
         const val EXTRA_SESSION_CMD = "session_cmd" // connect|disconnect|reconnect|probe|primary
-        private const val STATS_INTERVAL_MS = 500L
-        private const val ERROR_HOLD_MS = 1_500L
-        private const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
+        internal const val STATS_INTERVAL_MS = 500L
+        internal const val ERROR_HOLD_MS = 1_500L
+        internal const val PERSIST_EVERY_TICKS = 120 // ~60 c — дисциплина SSD/памяти (v0.8)
         internal const val LIMIT_POLL_MS = 60_000L // проверка сброса лимита раз в минуту
 
         internal const val CHANNEL_ID = "tunnel"
@@ -1529,10 +792,10 @@ class TunnelService : Service() {
         internal const val NET_RETRY_COOLDOWN_MS = 3_000L
 
         // смена протокола: ретраи/паузы/cooldown — защита от rate-limit циклов
-        private const val SWITCH_RETRIES = 3
-        private const val SWITCH_RETRY_PAUSE_MS = 5_000L
-        private const val SWITCH_COOLDOWN_MS = 60_000L
-        @Volatile private var nextSwitchAllowedAt = 0L
+        internal const val SWITCH_RETRIES = 3
+        internal const val SWITCH_RETRY_PAUSE_MS = 5_000L
+        internal const val SWITCH_COOLDOWN_MS = 60_000L
+        @Volatile internal var nextSwitchAllowedAt = 0L
 
         @Volatile var lastStatus: String = ""
         /** v0.9.2 (R3): последнее состояние/протокол — для мгновенной
