@@ -255,7 +255,12 @@ func (st *stream) Read(p []byte) (int, error) {
 		st.mu.Lock()
 		st.delivered += uint64(n)
 		st.ackUnsent += n
-		fire := st.ackUnsent >= ackBatchMin
+		// Канон delayed-ACK (CI-урок): ACK при осушении очереди приёма — граница
+		// кумулятивного ACK всегда равна ВЕСЬМА доставленному (дробление read'ов
+		// 16384+4 не оставляет неподтверждённого хвоста); при непрерывном потоке
+		// (очередь не осушается) — принудительно каждые 2×порога, иначе LEDGER
+		// телефона рос бы бесконечно.
+		fire := (st.inLen == 0 && st.ackUnsent > 0) || st.ackUnsent >= 2*ackBatchMin
 		off := st.delivered
 		if fire {
 			st.ackUnsent = 0

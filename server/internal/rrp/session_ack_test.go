@@ -115,13 +115,18 @@ func TestAckEmissionAfterBatch(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	select {
-	case off := <-acks:
-		if off != uint64(len(big)+4) {
-			t.Fatalf("ack offset: want %d, got %d", len(big)+4, off)
+	sel := time.NewTimer(5 * time.Second)
+	defer sel.Stop()
+	for last := uint64(0); ; {
+		select {
+		case off := <-acks:
+			last = off
+			if off == uint64(len(big)+4) {
+				return // полная кумулятивная граница пришла — ок
+			}
+		case <-sel.C:
+			t.Fatalf("ack boundary %d: want %d (последний off=%d)", len(big)+4, len(big)+4, last)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no TypeAck after batch threshold")
 	}
 }
 
