@@ -10,16 +10,33 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/stelgen/reverseray/server/internal/buf"
 )
 
+// ResumeSnapshot — данные паркинга Buffer/2: LEDGER-снимок (неподтверждённый
+// c→p хвост с базой) и delivered (кумулятивно доставлено браузеру p→c).
+type ResumeSnapshot struct {
+	Base      uint64
+	Chunks    [][]byte
+	Delivered uint64
+}
+
 // ResumeInfo (v1.3.0 «буфер трафика») — токен/цель/устройство для паркинга.
-func (st *stream) ResumeInfo() (token [16]byte, dst DialRequest, device string, ok bool) {
+// v1.9.8 Buffer/2: плюс снимок LEDGER и delivered — уходят в park.Parked для
+// досылки при RESUME. Снимок-копия: обе горутины релея могут звать параллельно,
+// уникальность токена гарантирует ровно одну победу.
+func (st *stream) ResumeInfo() (token [16]byte, dst DialRequest, device string, snap ResumeSnapshot, ok bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if !st.hasToken {
-		return token, dst, "", false
+		return token, dst, "", snap, false
 	}
-	return st.token, st.dst, st.sess.Device, true
+	if st.ledger != nil {
+		snap.Base, snap.Chunks = st.ledger.Snapshot()
+	}
+	snap.Delivered = st.delivered
+	return st.token, st.dst, st.sess.Device, snap, true
 }
 
 type stream struct {
@@ -44,6 +61,22 @@ type stream struct {
 	// v1.3.0 «буфер трафика»: токен резюме — привязка телефонного сокета.
 	token    [16]byte
 	hasToken bool
+
+	// v1.9.8 Buffer/2 (docs/spec/ack.md):
+	// ledger — send-side реестр неподтверждённого c→p (только ack-режим);
+	// resumeK/hasK — K из расширенного OPEN_OK (нумерация продолжается);
+	// baseIn — кумулятивно доставлено браузеру до смерти (дубль-база);
+	// delivered — кумулятивный счёт доставки p→c (источник ACK);
+	// ackOut — сумма WINDOW-инкрементов телефона (источник EvictTo);
+	// ackUnsent — байт с последнего TypeAck (батчинг 16 КиБ).
+	ledger    *buf.Ledger
+	resumed   bool
+	resumeK   uint64
+	hasK      bool
+	baseIn    uint64
+	delivered uint64
+	ackOut    uint64
+	ackUnsent int
 }
 
 type errOpen uint8
@@ -83,12 +116,21 @@ func newStream(s *Session, id uint32, d DialRequest) *stream {
 		_, _ = crand.Read(st.token[:])
 		st.hasToken = true
 	}
+	if s.cfg.AckCapable {
+		st.ledger = buf.NewLedger()
+	}
 	st.cond = sync.NewCond(&st.mu)
 	for i := uint32(0); i < s.cfg.StreamWindow/1024; i++ {
 		st.tokens <- struct{}{}
 	}
 	return st
 }
+
+// ackBatchMin — порог кумулятивного TypeAck (доставлено браузеру).
+const ackBatchMin = 16 * 1024
+
+// ackDataMax — чанк DATA в ack-режиме: payload включает 8-байтный префикс.
+const ackDataMax = MaxDataPayload - 8
 
 func (st *stream) pushIn(b []byte) {
 	st.mu.Lock()
@@ -206,6 +248,23 @@ func (st *stream) Read(p []byte) (int, error) {
 	if n > 0 || grow > 0 {
 		st.sess.writeAsync(&Frame{Type: TypeWindow, StreamID: st.id, Payload: EncodeWindow(uint32(int64(n) + grow))})
 	}
+	// v1.9.8 Buffer/2: ACK = кумулятивно доставлено браузеру (p→c). Телефон
+	// выкидывает из своего LEDGER всё до этой границы; неподтверждённое
+	// досылается при RESUME — ноль потерь, ноль дублей.
+	if n > 0 {
+		st.mu.Lock()
+		st.delivered += uint64(n)
+		st.ackUnsent += n
+		fire := st.ackUnsent >= ackBatchMin
+		off := st.delivered
+		if fire {
+			st.ackUnsent = 0
+		}
+		st.mu.Unlock()
+		if fire {
+			st.sess.writeAsync(&Frame{Type: TypeAck, StreamID: st.id, Payload: EncodeACK(off)})
+		}
+	}
 	return n, nil
 }
 
@@ -226,16 +285,32 @@ func (st *stream) Write(p []byte) (int, error) {
 			return total, &StreamError{Code: code}
 		}
 		chunk := p[total:]
-		if len(chunk) > MaxDataPayload {
+		// v1.9.8 Buffer/2: чанк копируется в LEDGER ДО отправки (консервативно:
+		// «не подтверждено = потеряно»), оффсет назначает LEDGER — нумерация
+		// c→p продолжается и после resume (base = K из OPEN_OK).
+		var off uint64
+		if st.ledger != nil {
+			if len(chunk) > ackDataMax {
+				chunk = chunk[:ackDataMax]
+			}
+			off = st.ledger.Append(chunk)
+		} else if len(chunk) > MaxDataPayload {
 			chunk = chunk[:MaxDataPayload]
+		}
+		payload := append([]byte(nil), chunk...)
+		if st.ledger != nil {
+			payload = EncodeDataOffset(off, chunk)
 		}
 		errc := make(chan error, 1)
 		st.sess.outq <- outItem{
-			frame: &Frame{Type: TypeData, StreamID: st.id, Payload: append([]byte(nil), chunk...)},
+			frame: &Frame{Type: TypeData, StreamID: st.id, Payload: payload},
 			err:   errc,
 		}
 		if err := <-errc; err != nil {
-			return total, err
+			// Buffer/2: чанк УЖЕ в LEDGER — досылка при RESUME, поэтому failed
+			// chunk считаем обработанным (total += len) — релей НЕ дублирует
+			// его в буфер паркинга.
+			return total + len(chunk), err
 		}
 		st.sess.mu.Lock()
 		st.sess.outstand += int64(len(chunk))
@@ -244,6 +319,21 @@ func (st *stream) Write(p []byte) (int, error) {
 		total += len(chunk)
 	}
 	return total, nil
+}
+
+// ResumeK — K из расширенного OPEN_OK (Buffer/2): телефон потребил K байт
+// c→p до смерти; досыл LEDGER стартует с этой границы.
+func (st *stream) ResumeK() (uint64, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.resumeK, st.hasK
+}
+
+// Delivered — кумулятивно доставлено браузеру p→c (паркинг).
+func (st *stream) Delivered() uint64 {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.delivered
 }
 
 func (st *stream) Close() error {
@@ -285,18 +375,21 @@ func listPush(l *list.List, v Stats) *list.List {
 
 // Open asks the phone to connect to dst and returns the stream.
 func (s *Session) Open(ctx context.Context, d DialRequest) (net.Conn, error) {
-	return s.openStream(ctx, d, TypeOpen, EncodeOpen(d.ATYP, d.Addr, d.Port))
+	return s.openStream(ctx, d, TypeOpen, EncodeOpen(d.ATYP, d.Addr, d.Port), 0)
 }
 
 // OpenResume (v1.3.0 «буфер трафика») просит телефон привязать запаркованный
 // сокет (телефон НЕ закрыл его при потере связи) к НОВОМУ стриму. Ответ —
 // обычный OPEN_OK: 0 = привязано, 5 = сокет уже не дожил (TTL телефона) —
 // тогда браузерную сторону закрываем штатно.
-func (s *Session) OpenResume(ctx context.Context, token [16]byte, d DialRequest) (net.Conn, error) {
-	return s.openStream(ctx, d, TypeOpenResume, append([]byte(nil), token[:]...))
+// v1.9.8 Buffer/2: baseIn — кумулятивно доставлено браузеру до смерти
+// (park.Parked.delivered): сервер сразу шлёт TypeAck(baseIn), телефон досылает
+// p→c хвост ровно с этой границы; дубль-чанки с концом ≤ baseIn дропаются.
+func (s *Session) OpenResume(ctx context.Context, token [16]byte, d DialRequest, baseIn uint64) (net.Conn, error) {
+	return s.openStream(ctx, d, TypeOpenResume, append([]byte(nil), token[:]...), baseIn)
 }
 
-func (s *Session) openStream(ctx context.Context, d DialRequest, ft uint8, payload []byte) (net.Conn, error) {
+func (s *Session) openStream(ctx context.Context, d DialRequest, ft uint8, payload []byte, baseIn uint64) (net.Conn, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -320,9 +413,14 @@ func (s *Session) openStream(ctx context.Context, d DialRequest, ft uint8, paylo
 	if s.nextID < 2 {
 		s.nextID = 1
 	}
-	w := &openWait{ch: make(chan error, 1)}
+	w := &openWait{ch: make(chan error, 1), resume: ft == TypeOpenResume}
 	s.pending[id] = w
 	st := newStream(s, id, d)
+	if ft == TypeOpenResume {
+		st.resumed = true
+		st.baseIn = baseIn
+		st.delivered = baseIn // ACK phone-start отсчитывает от доставленного до смерти
+	}
 	s.streams[id] = st
 	s.mu.Unlock()
 
@@ -343,6 +441,11 @@ func (s *Session) openStream(ctx context.Context, d DialRequest, ft uint8, paylo
 		// привязывает его к своему сокету таргета (кадр только для новых клиентов).
 		if ft == TypeOpen && st.hasToken {
 			s.writeAsync(&Frame{Type: TypeResumeToken, StreamID: id, Payload: append([]byte(nil), st.token[:]...)})
+		}
+		// v1.9.8 Buffer/2: resume-стриму телефон сразу знает, что сервер уже
+		// доставил до baseIn, — досылает p→c хвост ровно с этой границы.
+		if ft == TypeOpenResume && s.ackMode {
+			s.writeAsync(&Frame{Type: TypeAck, StreamID: id, Payload: EncodeACK(baseIn)})
 		}
 		return st, nil
 	case <-ctx.Done():

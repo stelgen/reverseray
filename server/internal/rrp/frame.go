@@ -92,6 +92,12 @@ const (
 	// Оба кадра уходят ТОЛЬКО клиентам с HELLO caps «stream-resume».
 	TypeOpenResume  = 0x2D
 	TypeResumeToken = 0x2E
+
+	// v1.9.8 Buffer/2 (docs/spec/ack.md) — кумулятивный ACK доставки p→c:
+	// payload [u64be offset]. Уходит ТОЛЬКО клиентам с caps+features
+	// «stream-ack» (сервер-отправитель ведёт LEDGER по WINDOW от телефона,
+	// телефон-отправитель — по этому ACK). C→S TypeAck — нарушение протокола.
+	TypeAck = 0x2F
 )
 
 const (
@@ -123,6 +129,8 @@ func MaxPayloadFor(t uint8) int {
 		return MaxDataPayload
 	case TypeOpenResume, TypeResumeToken:
 		return 16 // ровно токен
+	case TypeAck:
+		return 8 // ровно u64
 	case TypeWgInit:
 		return 256 // wg msg1 = 148 Б (запас на будущие WG-форматы)
 	case TypeWgResp:
@@ -315,6 +323,57 @@ func DecodeWindow(payload []byte) (uint32, error) {
 		return 0, errors.New("rrp: WINDOW payload must be 4 bytes")
 	}
 	return binary.BigEndian.Uint32(payload), nil
+}
+
+// ---- Buffer/2 (v1.9.8, docs/spec/ack.md) ----
+
+// EncodeACK — payload TypeAck: кумулятивный offset доставки p→c.
+func EncodeACK(offset uint64) []byte {
+	p := make([]byte, 8)
+	binary.BigEndian.PutUint64(p, offset)
+	return p
+}
+
+// DecodeACK разбирает payload TypeAck.
+func DecodeACK(payload []byte) (uint64, error) {
+	if len(payload) != 8 {
+		return 0, errors.New("rrp: ACK payload must be 8 bytes")
+	}
+	return binary.BigEndian.Uint64(payload), nil
+}
+
+// EncodeDataOffset — payload DATA в ack-режиме: [u64be offset][chunk].
+// Префикс живёт ВНУТРИ крипто-конверта. Лимит: chunk ≤ MaxDataPayload-8.
+func EncodeDataOffset(offset uint64, chunk []byte) []byte {
+	p := make([]byte, 8+len(chunk))
+	binary.BigEndian.PutUint64(p, offset)
+	copy(p[8:], chunk)
+	return p
+}
+
+// SplitDataOffset разбирает payload DATA в ack-режиме.
+func SplitDataOffset(payload []byte) (uint64, []byte, error) {
+	if len(payload) < 8 {
+		return 0, nil, errors.New("rrp: DATA payload shorter than offset prefix")
+	}
+	return binary.BigEndian.Uint64(payload), payload[8:], nil
+}
+
+// EncodeResumedOpenOK — payload OPEN_OK resume-стрима в ack-режиме:
+// [u8 err_code=0][u64be K] — K = потреблено телефоном из старого стрима (c→p).
+func EncodeResumedOpenOK(errCode uint8, consumed uint64) []byte {
+	p := make([]byte, 9)
+	p[0] = errCode
+	binary.BigEndian.PutUint64(p[1:], consumed)
+	return p
+}
+
+// DecodeResumedOpenOK разбирает расширенный OPEN_OK (ack-режим, resume).
+func DecodeResumedOpenOK(payload []byte) (uint8, uint64, error) {
+	if len(payload) != 9 {
+		return 0, 0, errors.New("rrp: resumed OPEN_OK payload must be 9 bytes")
+	}
+	return payload[0], binary.BigEndian.Uint64(payload[1:]), nil
 }
 
 func EncodeError(code uint16, msg string) []byte {

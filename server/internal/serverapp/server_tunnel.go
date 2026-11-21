@@ -13,6 +13,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/stelgen/reverseray/server/internal/bt"
@@ -41,11 +42,42 @@ func (a *App) acceptTunnels(ln net.Listener) {
 // tuneTCP (v0.9.6, скорость rrp1): TCP_NODELAY (мелкие кадры DATA/PING не
 // ждут Nagle — до 40мс задержки на кадр в WAN) и увеличенные сокет-буферы
 // (throughput на LRTT-линках). Ошибки тихо: это best-effort тюнинг.
+// v1.9.8 Buffer/2: linux-константы TCP-опций (именованных в net нет; TCP_KEEP*
+// есть в syscall, но задаём сырыми значениями для единообразия).
+const (
+	tcpOptKeepIdle     = 0x4  // TCP_KEEPIDLE
+	tcpOptKeepIntvl    = 0x5  // TCP_KEEPINTVL
+	tcpOptKeepCnt      = 0x6  // TCP_KEEPCNT
+	tcpOptUserTimeout  = 0x12 // TCP_USER_TIMEOUT
+	tcpOptNotsentLowat = 0x19 // TCP_NOTSENT_LOWAT
+)
+
+// tuneTCP — тюнинг сокетов туннеля против ТСПУ-разрывов (v1.9.8):
+//   - keepalive 15/5/6: длинные «паузы» (ТСПУ режет поток на минуты) не дают
+//     NAT/middlebox-ам посчитать поток мёртвым;
+//   - TCP_USER_TIMEOUT 45с: зависшие ретрансмиссии рвём сами, а не через ~16 мин
+//     дефолта — разрыв успевает превратиться в честный паркинг+резюм;
+//   - TCP_NOTSENT_LOWAT 128КиБ: не копим мегабайты в send-buffer, приоритет
+//     ACK- driven прогресса, меньше «старых» данных в полёте.
+//
+// Всё best-effort: не-Linux/старые ядра просто пропускают опцию.
 func tuneTCP(conn net.Conn) {
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 		_ = tc.SetReadBuffer(512 * 1024)
 		_ = tc.SetWriteBuffer(512 * 1024)
+		_ = tc.SetKeepAlive(true)
+		if rc, err := tc.SyscallConn(); err == nil {
+			_ = rc.Control(func(fd uintptr) {
+				// keepalive 15/5/6
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpOptKeepIdle, 15)
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpOptKeepIntvl, 5)
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpOptKeepCnt, 6)
+				// рвём зависшие ретрансмиссии за 45с; not-sent lowat 128КиБ
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpOptUserTimeout, 45000)
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpOptNotsentLowat, 128*1024)
+			})
+		}
 	}
 }
 
@@ -261,6 +293,11 @@ func (a *App) handleTunnel(conn net.Conn) {
 			if proto == rrp.ProtocolAPIMask.ID && len(f) == 0 {
 				f = []string{rrp.ProtocolAPIMask.ID}
 			}
+			// v1.9.8 Buffer/2: echo cap'а stream-ack клиенту (READY.features) —
+			// так телефон знает, что сервер включил ACK-режим.
+			if slices.Contains(hello.Caps, "stream-ack") {
+				f = append(slices.Clone(f), "stream-ack")
+			}
 			return f
 		}(),
 	}); err != nil {
@@ -286,6 +323,11 @@ func (a *App) handleTunnel(conn net.Conn) {
 	// v1.3.0 «буфер трафика»: клиент объявил cap stream-resume в HELLO.
 	if slices.Contains(hello.Caps, "stream-resume") {
 		scfg.ResumeCapable = true
+	}
+	// v1.9.8 Buffer/2: клиент просил c→s ACK-режим (ledger, досылка при RESUME,
+	// фильтр дублей). Без cap всё работает как раньше — полный даунгрейд.
+	if slices.Contains(hello.Caps, "stream-ack") {
+		scfg.AckCapable = true
 	}
 	// v0.9.2: честный лог даунгрейда — клиент попросил протокол, заявленный
 	// в реестре, но не исполняемый этой сборкой (модуль прилетел раньше кода).

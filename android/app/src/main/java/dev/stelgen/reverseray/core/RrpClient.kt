@@ -168,10 +168,21 @@ class RrpClient(
         /** v1.9.6 канон Buffer/1: in-flight p→c — прочитанный-но-неотправленный
          *  чанк живёт здесь (MODE_FAIL), OPEN_RESUME досылает первым (FIFO). */
         internal val outBuf = RrpStreamBuffer()
+        /** v1.9.8 Buffer/2 (ack-режим): LEDGER отправителя p→c; переживает
+         *  паркинг через ParkedSock (ноль потерь отправленного-не-ACKнутого). */
+        internal var ledger: RrpAckLedger? = null
+        /** v1.9.8: последний кумулятивный ACK сервера (p→c), для досыла. */
+        @Volatile internal var ackedOffset: Long = 0
+        /** v1.9.8: суммарно потреблено телефоном в c→p (абсолют; переживает
+         *  resume через ParkedSock — база дедупликации и K в расширенном OPEN_OK). */
+        @Volatile internal var consumedTotal: Long = 0
     }
 
     internal val rnd = SecureRandom() // internal — зоны-extensions
     internal val running = AtomicBoolean(false) // internal — зоны-extensions
+    /** v1.9.8 Buffer/2: сервер подтвердил фичу stream-ack в READY → ack-режим
+     *  стримов (DATA с оффсетом, ACK 0x2F, расширенный OPEN_OK при resume). */
+    @Volatile internal var ackCapable = false
     internal val sendLock = Any()
 
     @Volatile private var socket: Socket? = null
@@ -330,8 +341,15 @@ class RrpClient(
         Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rrp-park").apply { isDaemon = true } }
     internal val parkedSockets = java.util.concurrent.ConcurrentHashMap<String, ParkedSock>()
 
-    /** Припаркованный сокет таргета: живёт до реконнекта (OPEN_RESUME) или TTL. */
-    class ParkedSock(val socket: Socket, val parkedAt: Long)
+    /** Припаркованный сокет таргета: живёт до реконнекта (OPEN_RESUME) или TTL.
+     *  v1.9.8 Buffer/2: тащим consumedTotal (c→p база дедупа + K) и LEDGER p→c
+     *  (неподтверждённый хвост досылается при resume — ноль потерь). */
+    internal class ParkedSock(
+        val socket: Socket,
+        val parkedAt: Long,
+        val consumedTotal: Long = 0,
+        val ledger: RrpAckLedger? = null,
+    )
 
     // ------------------------------------------------------------------ connect
 
@@ -408,7 +426,7 @@ class RrpClient(
             agent = agentName,
             protocolVersion = RrpFrame.VERSION,
             device = deviceName,
-            caps = listOf("chacha20", "alpn", "stream-resume"),
+            caps = listOf("chacha20", "alpn", "stream-resume", "stream-ack"),
             maxStreams = MAX_STREAMS_REQUEST,
             proto = helloProto,
             protocols = RrpProtocols.displayList(),
@@ -538,6 +556,9 @@ class RrpClient(
             }
             is RrpFrame.Ready -> {
                 readyFrame = frame
+                // v1.9.8 Buffer/2: фича активна только при взаимном согласовании
+                // (клиент cap stream-ack + сервер feature stream-ack).
+                ackCapable = frame.features.contains("stream-ack")
                 readyLatch.countDown()
             }
             is RrpFrame.Auth -> debug(Msgs.AUTH_UNEXPECTED.t())
@@ -563,6 +584,12 @@ class RrpClient(
             }
             is RrpFrame.ResumeToken -> streams[frame.streamId]?.let { it.resumeToken = frame.token }
             is RrpFrame.OpenResume -> handleOpenResume(frame)
+            // v1.9.8 Buffer/2: сервер подтвердил доставку p→c до k — вытесняем
+            // из LEDGER (дальше досыл только неподтверждённого хвоста).
+            is RrpFrame.Ack -> streams[frame.streamId]?.let { st ->
+                st.ackedOffset = maxOf(st.ackedOffset, frame.k)
+                st.ledger?.evictTo(frame.k)
+            }
             is RrpFrame.Close -> closeStream(frame.streamId, notify = false)
             is RrpFrame.Window -> streams[frame.streamId]?.sendWindow
                 ?.release(frame.increment.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())

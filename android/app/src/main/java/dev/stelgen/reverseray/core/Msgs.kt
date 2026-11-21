@@ -253,6 +253,10 @@ object Msgs {
     val OPEN_OK_SIZE = Msg("OPEN_OK: expected 1 byte, got %s", "OPEN_OK: ожидался 1 байт, получено %s")
     val CLOSE_SIZE = Msg("CLOSE: expected 1 byte, got %s", "CLOSE: ожидался 1 байт, получено %s")
     val WINDOW_SIZE = Msg("WINDOW: expected 4 bytes, got %s", "WINDOW: ожидалось 4 байта, получено %s")
+    // v1.9.8 Buffer/2
+    val ACK_SIZE = Msg("ACK: expected 8 bytes, got %s", "ACK: ожидалось 8 байт, получено %s")
+    val DATA_OFFSET_GAP = Msg("DATA offset gap dropped: off=%s", "DATA: гэп оффсета, чанк дропнут: off=%s")
+    val DATA_OFFSET_DUP = Msg("DATA duplicate skipped: off<=k=%s", "DATA: дубль скипнут: off<=k=%s")
     val RESUME_BAD_TOKEN = Msg("RESUME: expected a 16-byte token, got %s", "RESUME: ожидался 16-байтовый токен, получено %s")
     val RESUME_NO_SOCKET = Msg("RESUME: no parked socket for token", "RESUME: припаркованный сокет для токена не найден")
     val RESUME_ATTACHED = Msg("RESUME: parked socket re-attached to stream %s", "RESUME: припаркованный сокет привязан к стриму %s")

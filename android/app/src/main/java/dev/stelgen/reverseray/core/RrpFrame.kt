@@ -222,12 +222,21 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
-    /** 0x17 C→S: [u8 err_code] */
+    /**
+     * 0x17 C→S: [u8 err_code]; v1.9.8 Buffer/2 — при ответе на OPEN_RESUME
+     * в ack-режиме расширенный payload [u8 err_code=0][u64be K] (K = суммарно
+     * потреблено телефоном в c→p, переживает resume через ParkedSock).
+     * Приём (S→C для исходящего OPEN) остаётся 1-байтовым.
+     */
     class OpenOk(
         override val streamId: Long,
         val errCode: Int,
+        /** K для расширенной формы; null = классическая 1-байтовая. */
+        val k: Long? = null,
     ) : RrpFrame(TYPE_OPEN_OK) {
-        override fun buildPayload(): ByteArray = byteArrayOf(errCode.toByte())
+        override fun buildPayload(): ByteArray =
+            if (k == null) byteArrayOf(errCode.toByte())
+            else ByteArray(9).also { it[0] = errCode.toByte(); putU64(it, 1, k) }
 
         companion object {
             internal fun fromPayload(streamId: Long, p: ByteArray): OpenOk {
@@ -244,6 +253,24 @@ sealed class RrpFrame(val type: Int) {
         val bytes: ByteArray,
     ) : RrpFrame(TYPE_DATA) {
         override fun buildPayload(): ByteArray = bytes
+    }
+
+    /** 0x2F S→C (v1.9.8 Buffer/2): [u64be offset] — кумулятивно доставлено
+     *  браузеру в направлении p→c (stream.Read); телефон выкидывает всё < k
+     *  из своего LEDGER (docs/spec/ack.md, зеркала buf/ledger.go). */
+    class Ack(
+        override val streamId: Long,
+        val k: Long,
+    ) : RrpFrame(TYPE_ACK) {
+        override fun buildPayload(): ByteArray =
+            ByteArray(8).also { putU64(it, 0, k) }
+
+        companion object {
+            internal fun fromPayload(streamId: Long, p: ByteArray): Ack {
+                if (p.size != 8) throw RrpFrameException(Msgs.ACK_SIZE.t(p.size))
+                return Ack(streamId, getU64(p, 0))
+            }
+        }
     }
 
     /** 0x12: [u8 err] */
@@ -634,6 +661,8 @@ sealed class RrpFrame(val type: Int) {
         // для клиентов с HELLO caps «stream-resume»).
         const val TYPE_OPEN_RESUME = 0x2D
         const val TYPE_RESUME_TOKEN = 0x2E
+        // v1.9.8 Buffer/2 (docs/spec/ack.md): кумулятивный ACK p→c.
+        const val TYPE_ACK = 0x2F
         const val TYPE_ERROR = 0x7F
 
         const val MAX_DATA_PAYLOAD = 65535
@@ -641,6 +670,7 @@ sealed class RrpFrame(val type: Int) {
 
         fun maxPayloadFor(type: Int): Int = when (type) {
             TYPE_DATA, TYPE_UDP_DATA -> MAX_DATA_PAYLOAD
+            TYPE_ACK -> 8 // ровно u64 (parity с Go MaxPayloadFor)
             TYPE_WG_INIT, TYPE_WG_RESP -> 256 // wg msg1=148 Б / msg2=92 Б (запас)
             TYPE_BT_INIT -> 1280 // MSE packet1(96+512) + packet3(40+8+4+2+512+2)
             TYPE_BT_RESP -> 640 // MSE packet4 = RC4(8+4+2+512)
@@ -694,6 +724,7 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_BT_INIT -> BtInit(payload)
                 TYPE_BT_RESP -> BtResp(payload)
                 TYPE_OPEN_RESUME -> OpenResume.fromPayload(payload)
+                TYPE_ACK -> Ack.fromPayload(streamId, payload)
                 TYPE_RESUME_TOKEN -> ResumeToken.fromPayload(payload)
                 TYPE_CAM_CTL -> CamCtl.fromPayload(payload)
                 TYPE_STATS -> Stats.fromPayload(payload)

@@ -25,6 +25,28 @@ internal fun getU32(src: ByteArray, off: Int): Long =
     ((src[off].toLong() and 0xFF) shl 24) or ((src[off + 1].toLong() and 0xFF) shl 16) or
         ((src[off + 2].toLong() and 0xFF) shl 8) or (src[off + 3].toLong() and 0xFF)
 
+internal fun putU64(dst: ByteArray, off: Int, v: Long) {
+    for (i in 0 until 8) {
+        dst[off + i] = ((v ushr (8 * (7 - i))) and 0xFFL).toByte()
+    }
+}
+
+internal fun getU64(src: ByteArray, off: Int): Long {
+    var v = 0L
+    for (i in 0 until 8) v = (v shl 8) or (src[off + i].toLong() and 0xFF)
+    return v
+}
+
+/**
+ * v1.9.8 Buffer/2: DATA в ack-режиме несёт префикс [u64be offset] ВНУТРИ
+ * payload (шифруется как данные). Зеркало Go-канона SplitDataOffset.
+ * Ожидает len ≥ 8; меньший payload — ошибка кодека (вызывает RrpFrameException).
+ */
+internal fun splitDataOffset(p: ByteArray): Pair<Long, ByteArray> {
+    if (p.size < 8) throw RrpFrameException(Msgs.ACK_SIZE.t(p.size))
+    return getU64(p, 0) to p.copyOfRange(8, p.size)
+}
+
 /**
  * Кадр RRP/1: 12 байт BE-заголовка [u8 ver=1][u8 type][u16 flags][u32 stream_id][u32 payload_len].
  *

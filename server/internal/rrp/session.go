@@ -27,8 +27,11 @@ type SessionConfig struct {
 	// v1.3.0 «буфер трафика»: клиент объявил HELLO caps «stream-resume» —
 	// сервер выдаёт RESUME_TOKEN и умеет OPEN_RESUME после реконнекта.
 	ResumeCapable bool
-	IdleTimeout   time.Duration // no frames -> close
-	PingInterval  time.Duration // server-side keepalive
+	// v1.9.8 Buffer/2 (docs/spec/ack.md): согласованы caps+features
+	// «stream-ack» — DATA с оффсетами, кумулятивный TypeAck, LEDGER-досыл.
+	AckCapable   bool
+	IdleTimeout  time.Duration // no frames -> close
+	PingInterval time.Duration // server-side keepalive
 	// Protocol — согласованный id протокола сессии (см. protocol.go).
 	Protocol string
 	// ProbeDialer — исходящий диал для PROBE-валидации (реальный трафик до
@@ -108,6 +111,8 @@ type Session struct {
 	Proto  string
 
 	cfg SessionConfig
+	// ackMode — Buffer/2 активен (cfg.AckCapable, снимок при создании).
+	ackMode bool
 
 	wc   io.ReadWriteCloser
 	outq chan outItem
@@ -165,6 +170,9 @@ type outItem struct {
 
 type openWait struct {
 	ch chan error
+	// resume — это ожидание OPEN_OK для OPEN_RESUME (Buffer/2: расширенный
+	// payload с K). Читается в handle() — записывается в openStream ДО outq.
+	resume bool
 }
 
 // ErrClosed is returned by ops after the session ends.
@@ -184,6 +192,7 @@ func NewSession(id, device string, conn io.ReadWriteCloser, cfg SessionConfig) *
 		Device:   device,
 		Proto:    cfg.Protocol,
 		cfg:      cfg,
+		ackMode:  cfg.AckCapable,
 		keyPlan:  cfg.KeyPlan,
 		wc:       conn,
 		outq:     make(chan outItem, 256),
@@ -263,9 +272,28 @@ func (s *Session) handle(f *Frame) error {
 			return nil
 		}
 		if len(f.Payload) > 0 {
-			st.pushIn(f.Payload)
+			data := f.Payload
+			// v1.9.8 Buffer/2: ack-режим — DATA несёт [u64 offset][chunk].
+			// Дубль-фильтр resume-стрима: конец ≤ baseIn — байт уже у браузера.
+			if s.ackMode {
+				off, chunk, serr := SplitDataOffset(data)
+				if serr != nil {
+					return serr
+				}
+				end := off + uint64(len(chunk))
+				if end <= st.baseIn {
+					return nil // целиком доставлено до смерти — дубль
+				}
+				if off < st.baseIn {
+					// чанк straddles границу доставки — отдаём только хвост
+					chunk = chunk[st.baseIn-off:]
+				}
+				st.baseIn = end // граница доставки уехала вперёд — следующий дубль уйдёт в скип
+				data = chunk
+			}
+			st.pushIn(data)
 			s.mu.Lock()
-			s.rIn += uint64(len(f.Payload))
+			s.rIn += uint64(len(data))
 			s.mu.Unlock()
 		}
 		return nil
@@ -275,6 +303,26 @@ func (s *Session) handle(f *Frame) error {
 		code := uint8(0)
 		if len(f.Payload) == 1 {
 			code = f.Payload[0]
+		}
+		// v1.9.8 Buffer/2: OPEN_OK resume-стрима в ack-режиме несёт K —
+		// кумулятивно потреблено телефоном из старого стрима (c→p). LEDGER
+		// нового стрима продолжает нумерацию с K; hub досылает replay с K.
+		if s.ackMode && w != nil && w.resume && len(f.Payload) == 9 {
+			c2, k, derr := DecodeResumedOpenOK(f.Payload)
+			if derr != nil {
+				s.mu.Unlock()
+				return derr
+			}
+			code = c2
+			if c2 == 0 {
+				if st := s.streams[f.StreamID]; st != nil && st.ledger != nil {
+					st.mu.Lock()
+					st.resumeK = k
+					st.hasK = true
+					st.ledger.SetBase(k)
+					st.mu.Unlock()
+				}
+			}
 		}
 		if w != nil {
 			delete(s.pending, f.StreamID)
@@ -323,6 +371,14 @@ func (s *Session) handle(f *Frame) error {
 		s.mu.Unlock()
 		if st != nil {
 			st.refill(inc)
+			// v1.9.8 Buffer/2: WINDOW от телефона = честное потребление c→p —
+			// ведём LEDGER-вытеснение (нумерация LEDGER продолжается с resumeK).
+			st.mu.Lock()
+			if st.ledger != nil {
+				st.ackOut += uint64(inc)
+				st.ledger.EvictTo(st.resumeK + st.ackOut)
+			}
+			st.mu.Unlock()
 		}
 		return nil
 	case TypeUdpData:
@@ -387,6 +443,10 @@ func (s *Session) handle(f *Frame) error {
 		// нагрузки). До этого — ErrProtocolOrder (регрессия v1.8.0: клиент с
 		// E2E-пробником рвал сессию каждые ~5 с).
 		return s.handlePhoneOpen(f)
+	case TypeAck:
+		// v1.9.8 Buffer/2: ACK уходит только S→C (доставка p→c). Телефон
+		// подтверждает c→p через WINDOW — C→S TypeAck в протоколе не существует.
+		return ErrProtocolOrder
 	case TypeHello, TypeAuth, TypeHelloOK, TypeReady, TypeUdpAssoc:
 		// UDP_ASSOC всегда инициирует сервер (S→C); от телефона — нарушение порядка.
 		return ErrProtocolOrder

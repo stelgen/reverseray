@@ -130,6 +130,7 @@ import java.util.concurrent.TimeUnit
     internal fun RrpClient.registerStream(id: Long, sock: Socket): RrpClient.Stream {
         val window = tunnelWindow.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
         val st = RrpClient.Stream(id, sock, Semaphore(window))
+        if (ackCapable) st.ledger = RrpAckLedger() // v1.9.8 Buffer/2
         streams[id] = st
         return st
     }
@@ -143,7 +144,11 @@ import java.util.concurrent.TimeUnit
     internal fun RrpClient.parkSocket(st: RrpClient.Stream) {
         val tok = st.resumeToken ?: return // старый сервер — закрываем как раньше
         val key = tokenKey(tok)
-        parkedSockets[key] = RrpClient.ParkedSock(st.socket, System.currentTimeMillis())
+        // v1.9.8 Buffer/2: LEDGER p→c и consumedTotal (c→p) переживают смерть
+        // транспорта — досыл/дедуп при OPEN_RESUME.
+        parkedSockets[key] = RrpClient.ParkedSock(
+            st.socket, System.currentTimeMillis(), st.consumedTotal, st.ledger,
+        )
         try {
             parkExecutor.schedule({ closeParked(key) }, RrpClient.STREAM_PARK_MS, TimeUnit.MILLISECONDS)
         } catch (_: RejectedExecutionException) {}
@@ -172,8 +177,17 @@ import java.util.concurrent.TimeUnit
         try { sock.socket.soTimeout = 0 } catch (_: Exception) {}
         val st = registerStream(frame.streamId, sock.socket)
         st.resumeToken = frame.token
+        // v1.9.8 Buffer/2: продолжаем нумерацию старого стрима — LEDGER с
+        // неподтверждённым хвостом и абсолют consumedTotal (база дедупа c→p).
+        st.consumedTotal = sock.consumedTotal
+        st.ledger = sock.ledger
         relayExecutor.execute { pumpOutgoing(st) }
-        sendFrameQuiet(RrpFrame.OpenOk(frame.streamId, RrpClient.ERR_OK))
+        // ack-режим: расширенный OPEN_OK [err][u64be K] — сервер продолжает
+        // свою c→p LEDGER-нумерацию с K (его досыл отфильтрует всё ≤ K).
+        sendFrameQuiet(
+            if (ackCapable) RrpFrame.OpenOk(frame.streamId, RrpClient.ERR_OK, k = st.consumedTotal)
+            else RrpFrame.OpenOk(frame.streamId, RrpClient.ERR_OK),
+        )
         debug(Msgs.RESUME_ATTACHED.t(frame.streamId))
     }
 
@@ -183,15 +197,33 @@ import java.util.concurrent.TimeUnit
         val buf = ByteArray(16 * 1024)
         var sendFailed = false // v1.9.6: ошибка отправки → Close(ERR_GENERAL), не ERR_OK
         try {
-            // v1.9.6 канон Buffer/1: досыл in-flight p→c ДО новых чтений
-            // (FIFO); при повторной смерти чанк возвращается в голову.
-            while (true) {
-                val chunk = st.outBuf.poll() ?: break
-                try {
-                    sendFrame(RrpFrame.Data(st.id, 0, chunk))
-                } catch (_: Exception) {
-                    st.outBuf.pushFront(chunk)
-                    break
+            // v1.9.8 Buffer/2 (ack-режим, отправитель p→c): (1) досыл LEDGER —
+            // отправленное-но-не-ACKнутое с теми же оффсетами (сервер-читатель
+            // дропает всё ≤ baseIn — дубли безопасны); (2) живое чтение: оффсет
+            // назначает LEDGER (append ПЕРЕД отправкой — неуспешный чанк остаётся
+            // в LEDGER и переживает паркинг). ACK(0x2F) от сервера вытесняет.
+            val ledger = st.ledger
+            if (ledger != null) {
+                val acked = st.ackedOffset
+                for (c in ledger.replayFrom(acked)) { // floor=max(k,base): подтверждённое отсекает сам LEDGER
+                    try {
+                        sendFrame(RrpFrame.Data(st.id, 0, withOffset(c.offset, c.bytes)))
+                    } catch (_: Exception) {
+                        // чанк уже в LEDGER — досыл при следующем resume
+                        break
+                    }
+                }
+            } else {
+                // v1.9.6 канон Buffer/1: досыл in-flight p→c ДО новых чтений
+                // (FIFO); при повторной смерти чанк возвращается в голову.
+                while (true) {
+                    val chunk = st.outBuf.poll() ?: break
+                    try {
+                        sendFrame(RrpFrame.Data(st.id, 0, chunk))
+                    } catch (_: Exception) {
+                        st.outBuf.pushFront(chunk)
+                        break
+                    }
                 }
             }
             val input = st.socket.getInputStream()
@@ -212,14 +244,26 @@ import java.util.concurrent.TimeUnit
                     sendFrameQuiet(RrpFrame.Close(st.id, RrpClient.ERR_TIMEOUT))
                     break
                 }
-                try {
-                    sendFrame(RrpFrame.Data(st.id, 0, buf.copyOf(n)))
-                } catch (_: Exception) {
-                    // v1.9.6 канон Buffer/1 (MODE_FAIL): прочитанный чанк НЕ
-                    // теряется — в буфер стрима; OPEN_RESUME досылает первым.
-                    st.outBuf.push(buf.copyOf(n))
-                    sendFailed = true
-                    break
+                // Копия чанка до отправки: LEDGER должен владеть своими байтами.
+                val chunk = buf.copyOf(n)
+                if (ledger != null) {
+                    val off = ledger.append(chunk)
+                    try {
+                        sendFrame(RrpFrame.Data(st.id, 0, withOffset(off, chunk)))
+                    } catch (_: Exception) {
+                        // Buffer/2 MODE_FAIL: чанк в LEDGER — досыл при resume
+                        break
+                    }
+                } else {
+                    try {
+                        sendFrame(RrpFrame.Data(st.id, 0, chunk))
+                    } catch (_: Exception) {
+                        // v1.9.6 канон Buffer/1 (MODE_FAIL): прочитанный чанк НЕ
+                        // теряется — в буфер стрима; OPEN_RESUME досылает первым.
+                        st.outBuf.push(chunk)
+                        sendFailed = true
+                        break
+                    }
                 }
             }
             if (sendFailed) {
@@ -237,6 +281,13 @@ import java.util.concurrent.TimeUnit
         }
     }
 
+    /** v1.9.8 Buffer/2: DATA-payload ack-режима = [u64be offset][байты]. */
+    private fun withOffset(off: Long, bytes: ByteArray): ByteArray =
+        ByteArray(8 + bytes.size).also {
+            putU64(it, 0, off)
+            bytes.copyInto(it, 8)
+        }
+
     // ------------------------------------------------------------------ DATA / WINDOW
 
     internal fun RrpClient.handleData(frame: RrpFrame.Data) {
@@ -247,9 +298,33 @@ import java.util.concurrent.TimeUnit
         }
         try {
             val out = st.socket.getOutputStream()
-            out.write(frame.bytes)
+            // v1.9.8 Buffer/2 (ack-режим, c→p приёмник): DATA = [u64be off][байты].
+            // Дубль (off+len ≤ consumedTotal) — скип; гэп — дроп с журналом
+            // (порядок in-order, гэп возможен только в гонке при resume).
+            val off: Long; var payload: ByteArray
+            if (ackCapable) {
+                val split = splitDataOffset(frame.bytes)
+                off = split.first
+                payload = split.second
+                val end = off + payload.size
+                if (end <= st.consumedTotal) {
+                    debug(Msgs.DATA_OFFSET_DUP.t(off))
+                    return
+                }
+                if (off > st.consumedTotal) {
+                    debug(Msgs.DATA_OFFSET_GAP.t(off))
+                    return
+                }
+                if (off < st.consumedTotal) { // straddle — пишем только хвост
+                    payload = payload.copyOfRange((st.consumedTotal - off).toInt(), payload.size)
+                }
+            } else {
+                off = 0; payload = frame.bytes
+            }
+            out.write(payload)
             out.flush()
-            val consumed = st.remoteConsumed + frame.bytes.size
+            st.consumedTotal = maxOf(st.consumedTotal, off + payload.size)
+            val consumed = st.remoteConsumed + payload.size
             val threshold = (tunnelWindow / 2).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
             if (consumed >= threshold) {
                 st.remoteConsumed = 0

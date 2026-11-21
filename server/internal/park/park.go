@@ -37,21 +37,39 @@ type Parked struct {
 	ParkedAt  time.Time
 	Transport string // proto сессии, в которой жил стрим (для телеметрии)
 
+	// v1.9.8 Buffer/2 (docs/spec/ack.md): LEDGER-снимок старого стрима.
+	// replay — неподтверждённый c→p хвост (оффсеты от replayBase); при RESUME
+	// телефон присылает K (потреблено), лишняя голова срезается, остаток
+	// дозылается в НОВЫЙ стрим через stream.Write (LEDGER продолжается).
+	// delivered — кумулятивно доставлено браузеру p→c: база стартового
+	// TypeAck resumed-стрима (телефон досылает p→c ровно с неё).
+	replayBase uint64
+	replay     [][]byte
+	delivered  uint64
+
 	Done chan struct{} // закрыт при окончательном закрытии паркинга
 }
 
-func New(device string, token [16]byte, dst rrp.DialRequest, conn net.Conn, transport string) *Parked {
+// New паркует стрим. v1.9.8 Buffer/2: snap — LEDGER-снимок старого стрима
+// (rrp.ResumeSnapshot; нулевой — старое поведение без ack-режима).
+func New(device string, token [16]byte, dst rrp.DialRequest, conn net.Conn, transport string, snap rrp.ResumeSnapshot) *Parked {
 	return &Parked{
-		Device:    device,
-		Token:     token,
-		Dst:       dst,
-		Conn:      conn,
-		buf:       buf.New(),
-		Transport: transport,
-		ParkedAt:  time.Now(),
-		Done:      make(chan struct{}),
+		Device:     device,
+		Token:      token,
+		Dst:        dst,
+		Conn:       conn,
+		buf:        buf.New(),
+		Transport:  transport,
+		ParkedAt:   time.Now(),
+		Done:       make(chan struct{}),
+		replayBase: snap.Base,
+		replay:     snap.Chunks,
+		delivered:  snap.Delivered,
 	}
 }
+
+// Delivered — кумулятивно доставлено браузеру p→c до смерти (база стартового ACK).
+func (p *Parked) Delivered() uint64 { return p.delivered }
 
 // Feed добавляет байты c→p в буфер (bounded, MODE_BLOCK). Блокируется при
 // переполнении — так TCP-давление доходит до браузера и ни один байт не
@@ -61,16 +79,39 @@ func (p *Parked) Feed(b []byte) bool {
 	return p.buf.Push(b)
 }
 
-// Resume подключает новый rrp-стрим: досылает буфер (FIFO), переключает
-// режим на живой путь; downstream: io.Copy стрим → браузер. Upstream
-// продолжает вести pump-горутина релея (Feed при resume пишет напрямую в
-// стрим) — второй читатель Conn здесь недопустим (иначе данные расщепляются
-// между двумя читателями).
+// Resume подключает новый rrp-стрим: досылает LEDGER-хвост (Buffer/2), затем
+// буфер (FIFO Buffer/1), переключает режим на живой путь; downstream:
+// io.Copy стрим → браузер. Upstream продолжает вести pump-горутина релея
+// (Feed при resume пишет напрямую в стрим) — второй читатель Conn здесь
+// недопустим (иначе данные расщепляются между двумя читателями).
 func (p *Parked) Resume(st net.Conn) error {
 	if p.buf.Closed() {
 		return errors.New("park: closed")
 	}
-	if err := p.buf.Attach(st); err != nil {
+	// v1.9.8 Buffer/2: досыл LEDGER старого стрима ДО буфера (порядок!).
+	// K — телефонное потребление c→p (расширенный OPEN_OK); подтверждённая
+	// голова replay срезается, остаток уходит через stream.Write — LEDGER
+	// нового стрима продолжает нумерацию с K, телефонное окно и ACK работают
+	// дальше как для живого трафика.
+	if len(p.replay) > 0 {
+		k := uint64(0)
+		if rk, ok := st.(interface{ ResumeK() (uint64, bool) }); ok {
+			if kk, ok2 := rk.ResumeK(); ok2 {
+				k = kk
+			}
+		}
+		for _, c := range buf.ReplayFilter(p.replayBase, k, p.replay) {
+			if _, err := st.Write(c); err != nil {
+				_ = st.Close()
+				p.Close()
+				return errors.New("park: ledger replay: " + err.Error())
+			}
+		}
+	}
+	// FIFO+live идут через streamLedgerWriter: stream.Write назначает оффсеты
+	// LEDGER (продолжение нумерации) — досыл и новый трафик одинаково
+	// подтверждаемы. Ошибка записи (снова смерть транспорта) закрывает буфер.
+	if err := p.buf.Attach(streamLedgerWriter{st: st}); err != nil {
 		_ = st.Close()
 		p.Close()
 		return err
@@ -84,6 +125,12 @@ func (p *Parked) Resume(st net.Conn) error {
 	}()
 	return nil
 }
+
+// streamLedgerWriter — маршрутизирует FIFO/live c→p через stream.Write:
+// LEDGER-нумерация продолжается, байты подтверждаемы WINDOW'ами телефона.
+type streamLedgerWriter struct{ st net.Conn }
+
+func (w streamLedgerWriter) Write(b []byte) (int, error) { return w.st.Write(b) }
 
 // PendingLen — байтов в буфере c→p (диагностика/телеметрия).
 func (p *Parked) PendingLen() int {

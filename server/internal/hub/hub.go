@@ -175,7 +175,9 @@ func (h *Hub) resumeParked(device string, s *rrp.Session, list []*park.Parked) {
 		default:
 		}
 		dctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		st, err := s.OpenResume(dctx, p.Token, p.Dst)
+		// v1.9.8 Buffer/2: baseIn = доставлено браузеру до смерти — телефон
+		// досылает p→c ровно с этой границы (дубли дропаются на сервере).
+		st, err := s.OpenResume(dctx, p.Token, p.Dst, p.Delivered())
 		cancel()
 		if err != nil {
 			h.logf("warn", "park", "устройство "+device+": резюме не удалось ("+err.Error()+") — соединение закрыто штатно")

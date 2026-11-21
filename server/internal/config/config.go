@@ -103,7 +103,10 @@ func Default() *Config {
 	c.Limits.DeviceBudget = 32 * 1024 * 1024 // v1.2.0: было 16МБ — 4МБ окна × параллельные стримы браузера
 	c.Limits.MaxTunnelsPerDevice = 8
 	c.Limits.IdleTimeoutSec = 180
-	c.Limits.PingIntervalSec = 60
+	// v1.9.8 Buffer/2 (анти-ТСПУ): паузы могут длиться минуты — паркинг держим
+	// 2 минуты, пинг 15с не даёт NAT/ТСПУ посчитать туннель мёртвым.
+	c.Limits.StreamParkSec = 120
+	c.Limits.PingIntervalSec = 15
 	c.Limits.DialTimeoutSec = 10
 	// v0.7: смягчённый rate-limit рукопожатий. Лимит 60/min рвал легитимные
 	// реконнекты при нестабильной мобильной сети (реконнект ≈ 1/с уже упирался
@@ -175,6 +178,8 @@ func (c *Config) applyEnv() {
 	setInt(&c.Limits.MaxTunnelsPerDevice, "RR_LIMITS_MAX_TUNNELS")
 	setInt(&c.Limits.IdleTimeoutSec, "RR_LIMITS_IDLE_TIMEOUT")
 	setInt(&c.Limits.DialTimeoutSec, "RR_LIMITS_DIAL_TIMEOUT")
+	setInt(&c.Limits.StreamParkSec, "RR_LIMITS_STREAM_PARK_SEC")
+	setInt(&c.Limits.PingIntervalSec, "RR_LIMITS_PING_INTERVAL_SEC")
 	setInt(&c.Limits.HandshakesPerMin, "RR_LIMITS_HANDSHAKES_PER_MIN")
 	// v1.2.0: окна flow-control и бюджет устройства — оперативно настраиваются
 	// без пересборки (BDP-автотюнинг потолка скорости).

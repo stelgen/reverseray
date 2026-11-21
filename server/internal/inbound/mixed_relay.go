@@ -33,7 +33,7 @@ func relayHalf(a, b net.Conn) error {
 
 // resumeInfoer — доступ к токену резюме rrp-стрима (v1.3.0).
 type resumeInfoer interface {
-	ResumeInfo() (token [16]byte, dst rrp.DialRequest, device string, ok bool)
+	ResumeInfo() (token [16]byte, dst rrp.DialRequest, device string, snap rrp.ResumeSnapshot, ok bool)
 }
 
 // relayStream — релей CONNECT-пути с «буфером трафика» (v1.3.0):
@@ -53,8 +53,8 @@ func (in *Inbound) relayStream(c, dst net.Conn) bool {
 			var se *rrp.StreamError
 			if errors.As(err, &se) && se.Code == 1 && in.Parker != nil {
 				if ri, ok := dst.(resumeInfoer); ok {
-					if token, d, device, ok2 := ri.ResumeInfo(); ok2 {
-						p := park.New(device, token, d, c, "")
+					if token, d, device, snap, ok2 := ri.ResumeInfo(); ok2 {
+						p := park.New(device, token, d, c, "", snap)
 						if in.Parker.Park(p) {
 							ps.Store(p)
 							done <- nil // владение c передано буферу — не закрываем
@@ -92,8 +92,8 @@ func (in *Inbound) relayStream(c, dst net.Conn) bool {
 					return
 				}
 				if ri, ok := dst.(resumeInfoer); ok {
-					if token, d, device, ok2 := ri.ResumeInfo(); ok2 {
-						np := park.New(device, token, d, c, "")
+					if token, d, device, snap, ok2 := ri.ResumeInfo(); ok2 {
+						np := park.New(device, token, d, c, "", snap)
 						if in.Parker.Park(np) {
 							ps.Store(np)
 							p = np
