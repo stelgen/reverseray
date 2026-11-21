@@ -113,7 +113,7 @@ jobs:
           sudo rm -rf state
       - name: Upload compose smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: compose-smoke-diagnostics
           path: diag/
@@ -144,7 +144,7 @@ jobs:
       # разом (реальный случай: CI v1.9.0, 40 фейлов FileNotFoundException).
       # Гасим: кэш ~/.m2/org.robolectric + предзагрузка с ретраями до тестов.
       - name: Cache Robolectric android-all jars
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.m2/repository/org/robolectric
           key: robolectric-m2-4.14.1-v1
@@ -189,7 +189,7 @@ jobs:
             -Drobolectric.dependency.repo.url=https://pushpolezginski.xyz/maven2
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: android-test-reports
           path: android/app/build/test-results/
@@ -255,7 +255,7 @@ jobs:
           [ "$ok" = "1" ] || { echo "::error::govulncheck упал 3 раза — см. артефакт govulncheck-log"; exit 1; }
       - name: Upload govulncheck log
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: govulncheck-log
           path: server/govulncheck.log
