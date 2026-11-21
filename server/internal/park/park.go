@@ -6,6 +6,10 @@
 // (bounded, без дропа: при переполнении — TCP backpressure) и досылаются
 // после RESUME. Смена протокола на очереди не влияет: конверт меняется
 // внутри живой сессии, стримы и паркинг не затрагиваются.
+//
+// v1.9.6: ядро буфера вынесено в internal/buf (канон Buffer/1,
+// docs/spec/buffer.md) — единая семантика с клиентским зеркалом
+// core/RrpStreamBuffer.kt; park остаётся точкой интеграции.
 package park
 
 import (
@@ -15,12 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stelgen/reverseray/server/internal/buf"
 	"github.com/stelgen/reverseray/server/internal/rrp"
 )
-
-// PendingCap — верхняя граница буфера c→p на стрим. При превышении Feed
-// блокируется (TCP backpressure к браузеру) — данные не дропаются никогда.
-const PendingCap = 256 * 1024
 
 // Parked — запаркованный стрим: браузерная сторона + цель + токен резюме.
 type Parked struct {
@@ -29,12 +30,10 @@ type Parked struct {
 	Dst    rrp.DialRequest
 	Conn   net.Conn
 
-	mu        sync.Mutex
-	cond      *sync.Cond
-	pending   [][]byte
-	pendingN  int
-	st        net.Conn // resumed rrp-стрим (после Resume)
-	closed    bool
+	buf       *buf.Buffer // канон Buffer/1: bounded FIFO c→p (MODE_BLOCK)
+	once      sync.Once   // идемпотентность Close
+	stMu      sync.Mutex
+	st        net.Conn // возобновлённый rrp-стрим (после Resume)
 	ParkedAt  time.Time
 	Transport string // proto сессии, в которой жил стрим (для телеметрии)
 
@@ -42,69 +41,43 @@ type Parked struct {
 }
 
 func New(device string, token [16]byte, dst rrp.DialRequest, conn net.Conn, transport string) *Parked {
-	p := &Parked{
+	return &Parked{
 		Device:    device,
 		Token:     token,
 		Dst:       dst,
 		Conn:      conn,
+		buf:       buf.New(),
 		Transport: transport,
 		ParkedAt:  time.Now(),
 		Done:      make(chan struct{}),
 	}
-	p.cond = sync.NewCond(&p.mu)
-	return p
 }
 
-// Feed добавляет байты c→p в буфер (bounded). Блокируется при переполнении —
-// так TCP-давление доходит до браузера и ни один байт не теряется.
-// false — паркинг закрыт (TTL/resume fail), данных больше не принимаем.
+// Feed добавляет байты c→p в буфер (bounded, MODE_BLOCK). Блокируется при
+// переполнении — так TCP-давление доходит до браузера и ни один байт не
+// теряется. false — паркинг закрыт (TTL/resume fail) или запись в живой
+// стрим не удалась.
 func (p *Parked) Feed(b []byte) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for !p.closed && p.pendingN+len(b) > PendingCap && p.st == nil {
-		p.cond.Wait()
-	}
-	if p.closed {
-		return false
-	}
-	if p.st != nil {
-		p.mu.Unlock()
-		_, err := p.st.Write(b)
-		p.mu.Lock()
-		return err == nil
-	}
-	cp := make([]byte, len(b))
-	copy(cp, b)
-	p.pending = append(p.pending, cp)
-	p.pendingN += len(cp)
-	return true
+	return p.buf.Push(b)
 }
 
-// Resume подключает новый rrp-стрим: досылает буфер, переключает режим.
+// Resume подключает новый rrp-стрим: досылает буфер (FIFO), переключает
+// режим на живой путь; downstream: io.Copy стрим → браузер. Upstream
+// продолжает вести pump-горутина релея (Feed при resume пишет напрямую в
+// стрим) — второй читатель Conn здесь недопустим (иначе данные расщепляются
+// между двумя читателями).
 func (p *Parked) Resume(st net.Conn) error {
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
+	if p.buf.Closed() {
 		return errors.New("park: closed")
 	}
-	for _, b := range p.pending {
-		if _, err := st.Write(b); err != nil {
-			p.pending = nil
-			p.pendingN = 0
-			p.mu.Unlock()
-			_ = st.Close()
-			p.closeLocked()
-			return err
-		}
+	if err := p.buf.Attach(st); err != nil {
+		_ = st.Close()
+		p.Close()
+		return err
 	}
-	p.pending = nil
-	p.pendingN = 0
+	p.stMu.Lock()
 	p.st = st
-	p.cond.Broadcast()
-	p.mu.Unlock()
-	// downstream: новый стрим → браузер. Upstream продолжает вести pump-горутина
-	// релея (Feed при resume пишет напрямую в st) — второй читатель Conn здесь
-	// недопустим (иначе данные расщепляются между двумя читателями).
+	p.stMu.Unlock()
 	go func() {
 		_, _ = io.Copy(p.Conn, st)
 		p.Close()
@@ -114,36 +87,28 @@ func (p *Parked) Resume(st net.Conn) error {
 
 // PendingLen — байтов в буфере c→p (диагностика/телеметрия).
 func (p *Parked) PendingLen() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.pendingN
+	return p.buf.Len()
 }
 
 func (p *Parked) Resumed() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.st != nil
+	return p.buf.Live()
 }
 
 func (p *Parked) Close() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.closeLocked()
-}
-
-func (p *Parked) closeLocked() {
-	if p.closed {
-		return
-	}
-	p.closed = true
-	p.cond.Broadcast()
-	if p.Conn != nil {
-		_ = p.Conn.Close()
-	}
-	if p.st != nil {
-		_ = p.st.Close()
-	}
-	close(p.Done)
+	p.once.Do(func() {
+		p.buf.Close()
+		p.stMu.Lock()
+		st := p.st
+		p.st = nil
+		p.stMu.Unlock()
+		if p.Conn != nil {
+			_ = p.Conn.Close()
+		}
+		if st != nil {
+			_ = st.Close()
+		}
+		close(p.Done)
+	})
 }
 
 // Sink — приёмник паркинга (реализует hub.Hub): только приём; изъятие

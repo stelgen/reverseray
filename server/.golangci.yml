@@ -11,6 +11,7 @@ linters:
     - govet           # canonical vet-набор (вкл. stdversion на Go 1.27)
     - ineffassign     # бесполезные присваивания
     - staticcheck     # стагнация/скрытые баги
+    - unused          # мёртвый код (v1.9.6: чистка + постоянный гейт)
   settings:
     errcheck:
       # Close-цепочки в протокольном коде: ошибка закрытия после fatal-пути

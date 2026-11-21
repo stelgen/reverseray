@@ -181,7 +181,19 @@ import java.util.concurrent.TimeUnit
      *  acquire с таймаутом: если сервер умер и не наращивает окно — поток не висит вечно. */
     internal fun RrpClient.pumpOutgoing(st: RrpClient.Stream) {
         val buf = ByteArray(16 * 1024)
+        var sendFailed = false // v1.9.6: ошибка отправки → Close(ERR_GENERAL), не ERR_OK
         try {
+            // v1.9.6 канон Buffer/1: досыл in-flight p→c ДО новых чтений
+            // (FIFO); при повторной смерти чанк возвращается в голову.
+            while (true) {
+                val chunk = st.outBuf.poll() ?: break
+                try {
+                    sendFrame(RrpFrame.Data(st.id, 0, chunk))
+                } catch (_: Exception) {
+                    st.outBuf.pushFront(chunk)
+                    break
+                }
+            }
             val input = st.socket.getInputStream()
             while (running.get() && !st.closed.get() && !st.parked.get()) {
                 // Такт чтения: pump обязан просыпаться и проверять parked —
@@ -200,9 +212,21 @@ import java.util.concurrent.TimeUnit
                     sendFrameQuiet(RrpFrame.Close(st.id, RrpClient.ERR_TIMEOUT))
                     break
                 }
-                sendFrame(RrpFrame.Data(st.id, 0, buf.copyOf(n)))
+                try {
+                    sendFrame(RrpFrame.Data(st.id, 0, buf.copyOf(n)))
+                } catch (_: Exception) {
+                    // v1.9.6 канон Buffer/1 (MODE_FAIL): прочитанный чанк НЕ
+                    // теряется — в буфер стрима; OPEN_RESUME досылает первым.
+                    st.outBuf.push(buf.copyOf(n))
+                    sendFailed = true
+                    break
+                }
             }
-            if (!st.closed.get() && !st.parked.get()) sendFrameQuiet(RrpFrame.Close(st.id, RrpClient.ERR_OK))
+            if (sendFailed) {
+                sendFrameQuiet(RrpFrame.Close(st.id, RrpClient.ERR_GENERAL))
+            } else if (!st.closed.get() && !st.parked.get()) {
+                sendFrameQuiet(RrpFrame.Close(st.id, RrpClient.ERR_OK))
+            }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         } catch (e: Exception) {
@@ -248,6 +272,7 @@ import java.util.concurrent.TimeUnit
     internal fun RrpClient.closeStreamInternal(st: RrpClient.Stream) {
         streams.remove(st.id)?.let {
             it.closed.set(true)
+            it.outBuf.clear() // канон Buffer/1: окончательное закрытие → очистка
             closeQuietly(it.socket)
         }
     }

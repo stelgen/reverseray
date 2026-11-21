@@ -109,7 +109,6 @@ type Session struct {
 
 	cfg SessionConfig
 
-	wmu  sync.Mutex
 	wc   io.ReadWriteCloser
 	outq chan outItem
 
@@ -128,7 +127,6 @@ type Session struct {
 	err          error
 
 	rtt    int64 // ms, atomic read via mu
-	bin    uint64
 	bout   uint64
 	pingAt time.Time
 	pingCh chan []byte
@@ -166,8 +164,7 @@ type outItem struct {
 }
 
 type openWait struct {
-	ch   chan error
-	data chan struct{}
+	ch chan error
 }
 
 // ErrClosed is returned by ops after the session ends.

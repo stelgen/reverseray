@@ -2,6 +2,22 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.9.6] — 2026-11-21
+
+### Добавлено
+- **Канон Buffer/1 — единая буферизация стримов (сервер+клиент из одного файла-спеки)**: `docs/spec/buffer.md` — единственный источник истины (константы `CAP=256 КиБ`, `MAX_CHUNK=16 КиБ`, семантика FIFO-push/attach/poll/pushFront, MODE_BLOCK/MODE_FAIL). Реализации-зеркала: Go `server/internal/buf` + Kotlin `core/RrpStreamBuffer.kt`; кросс-языковой KAT с одинаковыми hex-векторами (`buf_test.go` ↔ `RrpStreamBufferKATTest.kt`, Wycheproof-конвенция). Буфер живёт на слое стримов ниже конверта — при смене/добавлении протоколов поведение наследуется автоматически (смена протокола = реконнект, буферы переживают реконнект).
+
+### Исправлено
+- **Потеря in-flight байт p→c при смерти транспорта (клиент)**: `pumpOutgoing` читал чанк из сокета цели и при провале `sendFrame` терял его — позиция TCP уходила вперёд, разрыв потока для браузера. Теперь прочитанный-но-неотправленный чанк попадает в `Stream.outBuf` (MODE_FAIL) и досылается ПЕРВЫМ (FIFO) после OPEN_RESUME; при повторной смерти чанк возвращается в голову. Ограничение базовой модели (байты, уже ушедшие в мёртвый wire) задокументировано в спеке.
+
+### Изменено
+- **park на общем ядре**: `server/internal/park` переведён на `buf.Buffer` (Feed=push, Resume=attach); собственные cond/клики/мьютексы буфера удалены — одна реализация семантики на сервере вместо двух. Идемпотентность Close через `sync.Once`.
+- **Гейт против деградации**: в `.golangci.yml` включён линтер `unused` (ранее — координированная чистка, теперь — постоянный барьер).
+
+### Качество
+- **Мёртвый код удалён (по код-графу, Serena/gopls + unused с `tests:false`)**: `cmd/prodprobe/envelopes.go` целиком (221 строка: pbCrypto/writeFrame/readFrame/pbWgClient/pbBtClient/pbDataProbe — остаток снятого в v1.9.3 `-switch`); поля `Session.wmu`, `Session.bin`, `openWait.data` (rrp), `WsConn.scratch`; `ConnectionManager.resetTraffic()` (Kotlin). Ложное срабатывание `raceEnabled` (build-tag пара `!race`) сохранено намеренно.
+- Гейты: Go build/test -race/`unused`-gates зелёные; Kotlin testDebugUnitTest+detekt зелёные (включая новые KAT).
+
 ## [1.9.5] — 2026-11-21
 
 ### Изменено

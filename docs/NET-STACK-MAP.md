@@ -45,7 +45,8 @@
 | `internal/inbound/mixed_http.go` | HTTP-прокси: CONNECT, absolute-URI, basic-auth |
 | `internal/inbound/mixed_relay.go` | релей: half-close relay, stream-relay + resume-паркинг |
 | `internal/mtproto|wg|bt` | конверты (та же крипта, что client/*.kt) |
-| `cmd/prodprobe/{main,envelopes,switch}.go` | диагностика прода: линия/PROBE, конверты, цепочка свитчей |
+| `internal/buf` | канон Buffer/1 (docs/spec/buffer.md): bounded FIFO ядра буферизации |
+| `cmd/prodprobe/main.go` | диагностика прода: линия/PROBE, e2e-проба реконнектов |
 
 ## Транш-2 (v1.9.0) — выполнено
 

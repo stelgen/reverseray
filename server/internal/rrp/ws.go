@@ -150,10 +150,9 @@ type WsConn struct {
 	w io.Writer
 	c io.Closer
 
-	wmu     sync.Mutex
-	buf     []byte // pending bytes from ws messages
-	scratch []byte
-	closed  bool
+	wmu    sync.Mutex
+	buf    []byte // pending bytes from ws messages
+	closed bool
 }
 
 func (c *WsConn) Read(p []byte) (int, error) {

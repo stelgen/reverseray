@@ -134,12 +134,6 @@ class ConnectionManager(private val owner: Owner) {
             }
         }
 
-        internal fun resetTraffic() {
-            txTotal = 0
-            rxTotal = 0
-            rxRate = 0
-            txRate = 0
-        }
     }
 
     // ------------------------------------------------------------ состояние

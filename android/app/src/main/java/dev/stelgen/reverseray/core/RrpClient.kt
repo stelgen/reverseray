@@ -165,6 +165,9 @@ class RrpClient(
         var resumeToken: ByteArray? = null
         /** Сокет припаркован: pump обязан выйти БЕЗ закрытия сокета. */
         val parked = AtomicBoolean(false)
+        /** v1.9.6 канон Buffer/1: in-flight p→c — прочитанный-но-неотправленный
+         *  чанк живёт здесь (MODE_FAIL), OPEN_RESUME досылает первым (FIFO). */
+        internal val outBuf = RrpStreamBuffer()
     }
 
     internal val rnd = SecureRandom() // internal — зоны-extensions
