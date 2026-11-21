@@ -454,6 +454,19 @@ class TunnelService : Service() {
                 )
                 return START_STICKY
             }
+            ACTION_ROTATE -> {
+                // v1.9.5: галка «Ротация» на вкладке «Подключение» (из меню выбора
+                // протокола убрано). Вкл — через switchProtocol(PROTO_ROTATE)
+                // (флаг + тик + лог); выкл — turnRotationOff (сессия ЖИВЁТ).
+                val enabled = intent.getBooleanExtra(EXTRA_ENABLED, true)
+                if (enabled) {
+                    startForegroundCompat(getString(R.string.notif_starting))
+                    Thread({ switchProtocol(PROTO_ROTATE) }, "rrp-rotate-on").start()
+                } else {
+                    Thread({ turnRotationOff() }, "rrp-rotate-off").start()
+                }
+                return START_STICKY
+            }
             ACTION_SESSION -> {
                 // v1.5.0: управление ОДНОЙ сессией из дашборда/настроек
                 ensureStore()
@@ -746,6 +759,8 @@ class TunnelService : Service() {
         /** v0.9.5: управление камуфляжем «API Mask» из GUI (кадр 0x2A + pref). */
         const val ACTION_CAMO = "dev.stelgen.reverseray.action.CAMO"
         const val ACTION_UDP = "dev.stelgen.reverseray.action.UDP" // v1.0.0: гейт UDP-релея
+        /** v1.9.5: галка «Ротация» на вкладке «Подключение» (вкл/выкл EXTRA_ENABLED). */
+        const val ACTION_ROTATE = "dev.stelgen.reverseray.action.ROTATE"
         const val EXTRA_ENABLED = "enabled"
         const val EXTRA_STATUS = "status"
         const val EXTRA_TX_RATE = "tx_rate"

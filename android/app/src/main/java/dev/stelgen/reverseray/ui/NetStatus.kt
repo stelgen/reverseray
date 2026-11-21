@@ -183,6 +183,9 @@ internal fun MainActivity.refreshConnLine() {
     val t = currentTransport()
     val transportShort = if (t == RrpUri.TRANSPORT_WS) "WS" else "TCP"
     connLineViews.forEach { it.text = getString(R.string.conn_line, ProtocolState.display(), transportShort) }
+    // v1.9.5: синк галок «Ротация» с фактическим состоянием (prefs).
+    val rotateOn = prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)
+    rotateCheckViews.forEach { if (it.isChecked != rotateOn) it.isChecked = rotateOn }
 }
 
 

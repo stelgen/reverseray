@@ -25,6 +25,7 @@ import android.text.Editable
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -101,6 +102,23 @@ internal fun MainActivity.buildLinkPage(): View {
     protoCard.addView(outlined(R.string.proto_switch).apply {
         setOnClickListener { showProtocolPicker() }
     })
+    // v1.9.5: «Ротация» — отдельная галка рядом с выбором протокола (из меню
+    // убрана): меню всегда показывает актуальный подключенный протокол.
+    // Синк состояния — refreshConnLine (setChecked программно гейтится
+    // сравнением с prefs внутри listener).
+    rotateCheckViews.add(CheckBox(this).apply {
+        textSize = 15f
+        setText(R.string.proto_rotate_toggle)
+        isChecked = prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)
+        setOnCheckedChangeListener { _, on ->
+            if (on == prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)) return@setOnCheckedChangeListener
+            val i = Intent(this@buildLinkPage, TunnelService::class.java)
+                .setAction(TunnelService.ACTION_ROTATE)
+                .putExtra(TunnelService.EXTRA_ENABLED, on)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        }
+    })
+    protoCard.addView(rotateCheckViews.last())
     // v1.8.8: «Модули» переехали к Tunnel protocol — одно мульти-окно
     // (несколько модулей сразу), по аналогии с «Switch protocol».
     protoCard.addView(outlined(R.string.modules_section_modules).apply {

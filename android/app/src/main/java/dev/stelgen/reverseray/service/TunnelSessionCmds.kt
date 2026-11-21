@@ -24,6 +24,19 @@ import dev.stelgen.reverseray.core.SessionStore
      * 3) неудача (3 ретрая) → мгновенный откат UI на текущий протокол,
      *    ссылка НЕ меняется; cooldown, чтобы не молотить по rate-limit.
      */
+    /**
+     * v1.9.5: выключение режима «Ротация» галкой (вкладка «Подключение»).
+     * Флаг гасится, тик останавливается, сессия ЖИВЁТ на текущем конверте
+     * (protoOverride не трогаем — следующий реконнект вернёт протокол ссылки).
+     */
+    internal fun TunnelService.turnRotationOff() {
+        if (!prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)) return
+        prefs().edit().putBoolean(TunnelService.KEY_PROTO_ROTATE, false).apply()
+        stopRotateTick()
+        TunnelService.pushLog(getString(R.string.log_proto_rotation_off), LogKind.INFO)
+        updateStatus(TunnelService.STATE_INFO, getString(R.string.status_rotate_off))
+    }
+
     internal fun TunnelService.switchProtocol(newProtoRaw: String) {
         // v1.8.0: «Ротация» — отдельный режим выбора (взаимоисключающ с авто):
         // включаем флаг и выходим — смены делает rotateTick (каждые 30 мин,

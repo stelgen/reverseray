@@ -146,6 +146,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Строки «текущий протокол» живут на двух вкладках — обновляем все. */
     internal val connLineViews = mutableListOf<TextView>()
+    /** v1.9.5: галки «Ротация» (вкладка «Подключение»); синк из refreshConnLine. */
+    internal val rotateCheckViews = mutableListOf<android.widget.CheckBox>()
 
     /** Сводка лимита трафика — на главной и в настройках. */
     internal val usageViews = mutableListOf<TextView>()

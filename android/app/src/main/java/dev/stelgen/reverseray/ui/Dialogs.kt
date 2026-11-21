@@ -43,20 +43,20 @@ internal fun MainActivity.showProtocolPicker() {
     }
     // v0.9.5: первый пункт — AUTO (ссылка без proto=): сервер сам согласует
     // лучший общий протокол (wireguard → mtproto2 → rrp1).
-    // v1.8.0: второй пункт — «Ротация» (взаимоисключающ с AUTO).
     // v1.8.6: пункты — короткие имена протоколов БЕЗ пояснений (канон «как
     // WS»); после фоллбека сервера пикер честно показывает СОГЛАСОВАННЫЙ
     // протокол (ProtocolState), а не заявленный в ссылке.
+    // v1.9.5: «Ротация» ИЗ МЕНЮ УБРАНА — включается отдельной галкой рядом
+    // (вкладка «Подключение»); меню всегда показывает АКТУАЛЬНЫЙ
+    // подключенный протокол и не зависит от режима ротации.
     val rotateOn = prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)
     val options = mutableListOf<String>()
     options.add(ProtocolState.AUTO)
-    options.add(ProtocolState.ROTATE)
     options.addAll(ids.map { ProtocolState.plainName(it) })
     val checked = when {
-        rotateOn && ProtocolState.negotiated.isBlank() -> 1
-        ProtocolState.negotiated.isNotBlank() -> ids.indexOf(ProtocolState.actual()).let { if (it < 0) 0 else it + 2 }
+        ProtocolState.negotiated.isNotBlank() -> ids.indexOf(ProtocolState.actual()).let { if (it < 0) 0 else it + 1 }
         current.isBlank() -> 0
-        else -> ids.indexOf(ProtocolState.actual()).let { if (it < 0) 0 else it + 2 }
+        else -> ids.indexOf(ProtocolState.actual()).let { if (it < 0) 0 else it + 1 }
     }
     MaterialAlertDialogBuilder(this)
         .setTitle(R.string.proto_switch)
@@ -64,10 +64,8 @@ internal fun MainActivity.showProtocolPicker() {
             dialog.dismiss()
             if (which == 0) {
                 if (current.isNotBlank() || rotateOn) requestProtoSwitch(TunnelService.PROTO_AUTO)
-            } else if (which == 1) {
-                if (!rotateOn) requestProtoSwitch(TunnelService.PROTO_ROTATE)
             } else {
-                val picked = ids[which - 2]
+                val picked = ids[which - 1]
                 if (picked != current || rotateOn) requestProtoSwitch(picked)
             }
         }
