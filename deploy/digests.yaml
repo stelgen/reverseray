@@ -75,3 +75,5 @@ releases:
     image: ghcr.io/stelgen/reverseray@sha256:2f4c359772b5f96e5a4876113ea11c239f712b4a3ed2378230b9bdeb1b71dacc
   - tag: v1.9.3
     image: ghcr.io/stelgen/reverseray@sha256:a75aca9a043c8c4e480da448495a7f4df5c6674fc2c0ecbd2189c249ad7124bf
+  - tag: v1.9.4
+    image: ghcr.io/stelgen/reverseray@sha256:40ce4718648881b15c5396f8cbe6b8f72f9f2c7d803cea1829de7e5c2f618e43
