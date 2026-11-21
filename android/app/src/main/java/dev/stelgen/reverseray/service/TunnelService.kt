@@ -133,7 +133,12 @@ class TunnelService : Service() {
     @Volatile internal var manager: ConnectionManager? = null
 
     /** Сессия сервиса: профиль + точка агрегации состояния. */
-    internal inner class Sess(val id: String, val profile: SessionStore.Profile)
+    // v1.9.1 FIX: profile — var. commitProto мутирует ТОТ ЖЕ объект Sess,
+    // который держат sessById/runners/SessionWorker (фильтры по identity
+    // «it.sess === sess» не должны ломаться), а spawn/runLoop/ротация обязаны
+    // видеть свежий proto= сразу после свитча. val-снапшот давал баг
+    // «после смены протокола реконнект старым (работает только wg)».
+    internal inner class Sess(val id: String, var profile: SessionStore.Profile)
 
     internal val sessById = java.util.concurrent.ConcurrentHashMap<String, Sess>()
 

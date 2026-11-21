@@ -157,7 +157,15 @@ import dev.stelgen.reverseray.core.SessionStore
     internal fun TunnelService.commitProto(proto: String, cfg: RrpUriConfig, sess: TunnelService.Sess?) {
         val updated = cfg.copy(proto = proto).serialize()
         if (sess != null) {
-            sessionStore.update(sess.profile.copy(uri = updated))
+            val newProfile = sess.profile.copy(uri = updated)
+            sessionStore.update(newProfile)
+            // v1.9.1 FIX: мутируем ТОТ ЖЕ объект Sess (sessById/runners/воркеры
+            // фильтруют по identity «it.sess === sess»), чтобы spawnRunnersFor,
+            // runLoop и ротация видели новый proto= сразу после коммита.
+            // Раньше профиль обновлялся только в сторе — спавн после свитча
+            // читал старый URI и реконнектился старым протоколом
+            // (симптом «работает только wg», логи прода: non-WG EOF ~300мс → WG).
+            sess.profile = newProfile
             if (sess.id == sessionStore.activeId()) {
                 prefs().edit().putString(TunnelService.KEY_CONFIG, updated).apply()
             }
