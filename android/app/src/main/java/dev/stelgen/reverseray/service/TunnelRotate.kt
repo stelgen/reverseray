@@ -33,9 +33,10 @@ internal fun TunnelService.reconnectSwitchOf(sess: TunnelService.Sess, target: S
 }
 
 /**
- * Тик ротации: расписание ([ProtoRotator]) → обычный реконнект на следующий
- * протокол + запись причины в журнал. Кандидаты — ROTATABLE ∩ реестру
- * сервера (совпадают по HELLO_OK.protocols); строго следующий после
+ * Ротация-тик: расписание ([ProtoRotator]) → обычный реконнект на следующий
+ * протокол + запись причины в журнал. Кандидаты — ROTATABLE (v1.9.4: ЧИСТО
+ * ЛОКАЛЬНЫЙ реестр клиента; реестр сервера больше НЕ критерий — без его
+ * манифеста ротация молчала и смены юзер не видел); строго следующий после
  * текущего. Провал реконнекта НЕ карается памятью провалов (это не авто) —
  * следующий тик попробует снова по расписанию.
  */
@@ -47,9 +48,12 @@ internal fun TunnelService.rotateTick() {
         if (s.id == switchingSessionId) continue
         val client = firstClientOf(s) ?: continue
         if (client.state != RrpClient.State.READY) continue
-        val candidates = RrpProtocols.ROTATABLE.filter {
-            client.serverProtocols.contains(it)
-        }
+        // v1.9.4: ротация ЧИСТО ЛОКАЛЬНАЯ — кандидаты только из реестра
+        // клиента (RrpProtocols.ROTATABLE). Реестр сервера НЕ критерий:
+        // без его манифеста ротация молчала, юзер смены не видел. Цель,
+        // недоступная серверу, провалит реконнект — следующий тик возьмёт
+        // следующий по кругу. Ссылка НЕ мутируется.
+        val candidates = RrpProtocols.ROTATABLE
         val rot = rotators.computeIfAbsent(s.id) { ProtoRotator() }
         val from = client.negotiatedProto
         val target = rot.onTick(now, from, candidates) ?: continue
