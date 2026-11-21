@@ -47,7 +47,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
         with:
           cache-read-only: true
       - name: Render main screen to PNG (Robolectric native graphics)
@@ -74,7 +74,7 @@ jobs:
           git push origin HEAD:main 2> push.log || { echo "::error::push failed"; cp push.log git-debug.txt; git log --oneline -5 >> git-debug.txt; git status >> git-debug.txt; exit 1; }
       - name: Push failure artifact (on failure)
         if: failure()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: screenshot-push-debug
           path: |
