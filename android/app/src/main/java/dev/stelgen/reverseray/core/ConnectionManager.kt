@@ -69,8 +69,6 @@ class ConnectionManager(private val owner: Owner) {
         fun negotiatedProto(): String
         /** Реестр протоколов сервера (для кандидатов балансера). */
         fun serverProtocols(): List<String>
-        /** Бесшовная смена протокола (0x2C). */
-        fun switchProto(target: String): Boolean
         /** Воркер жив (есть хотя бы один запущенный раннер). */
         fun isRunning(): Boolean
         /** AUTO-режим ссылки (без proto=) — нужен ли пер-сессионный балансер. */
@@ -306,18 +304,6 @@ class ConnectionManager(private val owner: Owner) {
         s.stateText = reason
     }
 
-    /** Бесшовная смена протокола конкретной сессии (0x2C). */
-    fun switchProto(id: String, target: String): Boolean {
-        val s = sessions[id] ?: return false
-        return try {
-            val ok = s.worker.switchProto(target)
-            if (ok) s.protoSwitches.incrementAndGet()
-            ok
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     // ------------------------------------------------------------ тикеры
 
     private fun startBalTick(s: Session) {
@@ -391,7 +377,6 @@ class ConnectionManager(private val owner: Owner) {
         override fun healthSample(): AutoBalancer.Sample? = null
         override fun negotiatedProto(): String = ""
         override fun serverProtocols(): List<String> = emptyList()
-        override fun switchProto(target: String): Boolean = false
         override fun isRunning(): Boolean = false
         override fun autoBalance(): Boolean = false
     }

@@ -36,7 +36,6 @@ func main() {
 	proto := flag.String("proto", "", "согласовать протокол сессии: пусто/rrp1 | mtproto2 | wireguard (апгрейд после READY)")
 	streams := flag.Int("streams", 1, "параллельных PROBE-запросов (многоканальность)")
 	holdSecs := flag.Int("hold", 0, "держать сессию N секунд после проверки (отладка mixed/egress)")
-	switchList := flag.String("switch", "", "бесшовная цепочка свитчей 0x2C после согласования: mtproto2,wireguard,bittorrent[,rrp1] — прод-проба ротации")
 	flag.Parse()
 	if *streams < 1 {
 		*streams = 1
@@ -285,16 +284,6 @@ func main() {
 		fmt.Println("PONG: OK")
 	} else {
 		fmt.Printf("WARN: got 0x%02x вместо PONG\n", f.Type)
-	}
-
-	// v1.8.6: прод-проба бесшовной ротации — цепочка 0x2C против боевого
-	// сервера: ack → обмен ключами целиком → PING + DATA-проба в новом
-	// конверте (ключевой регресс «фолбэк на wireguard» ловится именно тут).
-	if *switchList != "" {
-		if err := runSwitchChain(conn, token, hok.SessionID, strings.Split(*switchList, ","), *target); err != nil {
-			fmt.Println("ERR: switch-chain:", err)
-			os.Exit(1)
-		}
 	}
 
 	// PROBE: валиден только при подключённом телефоне; streams>1 — проверка

@@ -138,11 +138,6 @@ func (c *UdpChannel) Send(atyp byte, addr []byte, port uint16, data []byte) erro
 		return ErrClosed
 	default:
 	}
-	// v1.8.6 ФИКС: как и stream.Write — UDP_DATA обязан ждать коммита
-	// смены протокола (паркинг), иначе кадр уходит старым конвертом.
-	if !c.sess.parkWait() {
-		return ErrClosed
-	}
 	select {
 	case c.sess.outq <- outItem{frame: &Frame{Type: TypeUdpData, StreamID: c.id, Payload: payload}}:
 		return nil

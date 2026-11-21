@@ -526,38 +526,6 @@ sealed class RrpFrame(val type: Int) {
         }
     }
 
-    /**
-     * 0x2C (v0.10): бесшовная смена протокола без разрыва связи.
-     * C→S: {"proto":id,"nonce":n}; S→C: {"ok":bool,"proto":id,"nonce":n,"reason":""}.
-     * После ok=true обе стороны паркуют payload-кадры и переносят обмен ключами
-     * целевого протокола; крипта подменяется атомарно (см. RrpClient.switchProto).
-     */
-    class ProtoSwitch(
-        val proto: String,
-        val nonce: String = "",
-        val ok: Boolean = true,
-        val reason: String = "",
-    ) : RrpFrame(TYPE_PROTO_SWITCH) {
-        override fun buildPayload(): ByteArray = MiniJson.obj(
-            "proto" to MiniJson.q(proto),
-            "nonce" to MiniJson.q(nonce),
-            "ok" to ok.toString(),
-            "reason" to MiniJson.q(reason),
-        ).toByteArray(Charsets.UTF_8)
-
-        companion object {
-            internal fun fromPayload(p: ByteArray): ProtoSwitch {
-                val m = MiniJson.parseFlat(p) ?: throw RrpFrameException(Msgs.KEY_REQ_BAD_JSON.t())
-                return ProtoSwitch(
-                    m["proto"] ?: "",
-                    m["nonce"] ?: "",
-                    m["ok"] == "true",
-                    m["reason"] ?: "",
-                )
-            }
-        }
-    }
-
     /** 0x2A C→S (v0.9.5): JSON {"enabled":true|false} — выбор камуфляжа устройством. */
     /** 0x2E S→C: токен привязки телефонного сокета (сразу после OPEN_OK err=0). */
     class ResumeToken(val token: ByteArray) : RrpFrame(TYPE_RESUME_TOKEN) {
@@ -661,8 +629,6 @@ sealed class RrpFrame(val type: Int) {
         // после обмена payload'ы DATA/UDP_DATA — peer-wire piece-сообщения.
         const val TYPE_BT_INIT = 0x29
         const val TYPE_BT_RESP = 0x2B
-        // v0.10: бесшовная смена протокола без разрыва связи (0x2C, двунаправленный)
-        const val TYPE_PROTO_SWITCH = 0x2C
 
         // v1.3.0 «буфер трафика»: резюме стримов при потере связи (S→C, только
         // для клиентов с HELLO caps «stream-resume»).
@@ -727,7 +693,6 @@ sealed class RrpFrame(val type: Int) {
                 TYPE_WG_RESP -> WgResp(payload)
                 TYPE_BT_INIT -> BtInit(payload)
                 TYPE_BT_RESP -> BtResp(payload)
-                TYPE_PROTO_SWITCH -> ProtoSwitch.fromPayload(payload)
                 TYPE_OPEN_RESUME -> OpenResume.fromPayload(payload)
                 TYPE_RESUME_TOKEN -> ResumeToken.fromPayload(payload)
                 TYPE_CAM_CTL -> CamCtl.fromPayload(payload)

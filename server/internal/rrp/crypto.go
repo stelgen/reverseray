@@ -62,13 +62,3 @@ var ErrKeyPlan = errors.New("rrp: key exchange plan failed")
 // KeyExchangeTimeout — жёсткий дедлайн обмена ключами после READY:
 // битый клиент не висит сессией вечно (idle-таймаут 180с слишком долгий).
 const KeyExchangeTimeout = 15 * time.Second
-
-// SwitchTimeout — дедлайн бесшовной смены протокола (0x2C, v1.8.3):
-// перехендшейк целевого протокола (KEY_REQ → INIT → RESP) обязан уложиться
-// (при мобильном RTT цепочка request→ack→park→INIT→RESP→unpark).
-// Просрочка — shutdown: свитч реально умер. Единая точка тайминга —
-// startSwitchDeadline; parkWait паркинга НЕ имеет собственного таймера
-// (фикс v1.8.3: независимый 15с-таймер паркинга рвал сессию до легитимной
-// просрочки свитча). Клиентский дедлайн ack-ожидания обязан быть СТРОГО
-// меньше (10с на клиенте против 15с на сервере).
-const SwitchTimeout = 15 * time.Second

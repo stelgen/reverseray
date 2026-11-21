@@ -103,8 +103,10 @@ import dev.stelgen.reverseray.core.SessionStore
             }
             if (stopping || r.retired) return
             // протокол перечитываем КАЖДУЮ итерацию: так подхватывается
-            // и смена протокола, и фоллбек, и заморозка обновлений (без пересоздания)
-            val useProto = protoOf(profile.uri)
+            // и смена протокола, и фоллбек, и заморозка обновлений (без пересоздания).
+            // v1.9.3: override ротации/авто-свитча имеет приоритет над ссылкой —
+            // реконнект-смена меняет ТОЛЬКО override, ссылка не мутируется.
+            val useProto = r.sess?.protoOverride ?: protoOf(profile.uri)
             val claimed = claimedOf(profile.uri)
             // v0.9.2 (R9): честный лог — протокол заявлен модулем/ссылкой,
             // но эта сборка его ещё не исполняет → коннект на rrp1.
@@ -214,6 +216,23 @@ import dev.stelgen.reverseray.core.SessionStore
      * PRIMARY), перезапускаются только раннеры этой сессии.
      */
     internal fun TunnelService.applyProtoFallback(sess: TunnelService.Sess?, brokenProto: String) {
+        // v1.9.3: сессия ротации/авто-свитча — ссылку НЕ мутируем: цель живёт в
+        // protoOverride. Провал цели = откат к протоколу ссылки (реконнект);
+        // расписание ротации продолжится тиками, авто-балансер пересчитает.
+        if (sess?.protoOverride != null) {
+            sess.protoOverride = null
+            sendBroadcast(
+                Intent(TunnelService.ACTION_STATUS).setPackage(packageName)
+                    .putExtra(TunnelService.EXTRA_STATE, TunnelService.STATE_PROTO_ROLLBACK)
+                    .putExtra(TunnelService.EXTRA_STATUS, ProtoFallback.fallbackReason(brokenProto))
+                    .putExtra(TunnelService.EXTRA_PROTO, protoOf(sess.profile.uri)),
+            )
+            if (!stopping) {
+                killRunnersOf(sess)
+                spawnRunnersFor(sess)
+            }
+            return
+        }
         // v0.9.2 (R2): протокол живёт только в ссылке
         try {
             val cfg = RrpUri.parse(sess?.profile?.uri ?: "")

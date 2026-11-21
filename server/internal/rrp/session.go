@@ -48,13 +48,6 @@ type SessionConfig struct {
 	// персистенции (сервер без state). Выбор хранится ПЕРМАНЕНТНО на сервере:
 	// действует для будущих сессий, переживает офлайн клиента.
 	CamCtl func(enabled bool)
-	// v0.10: бесшовная смена протокола в живой сессии (кадр 0x2C).
-	// TokenHash — хеш токена устройства (32 Б) для планов wg/bt;
-	// SwitchPlanner — фабрика планов (живёт в serverapp: импортирует
-	// mtproto/wg/bt; rrp не может — цикл импорта); Switchable — гейт.
-	TokenHash     []byte
-	SwitchPlanner func(proto string) (KeyPlan, error)
-	Switchable    bool
 	// v1.8.1: C→S OPEN — телефон инициирует стрим (E2E-пробник полезной
 	// нагрузки ловит сигнатурную блокировку payload-кадров). Сервер диалит
 	// цель своим egress, релей — канонный flow-control (stream.Write/pushIn).
@@ -163,16 +156,6 @@ type Session struct {
 	crypto   PayloadCrypto
 	keyPlan  KeyPlan
 	keyTimer *time.Timer
-
-	// v0.10: бесшовная смена протокола: пока смена идёт,
-	// payload-кадры паркуются (writeAsync ждёт снятия), контрольные кадры
-	// хендшейка идут свободно; pendingProto коммитится вместе с crypto.
-	parked       bool
-	parkGate     chan struct{}
-	pendingProto string
-	// v1.8.3: момент старта смены (наблюдаемость: длительность смены в
-	// commitCrypto). Ставится в handleProtoSwitch, читается там же.
-	switchStartedAt time.Time
 
 	done chan struct{}
 }
@@ -361,9 +344,6 @@ func (s *Session) handle(f *Frame) error {
 		return nil
 	case TypeBtInit:
 		s.handleBtInit(f)
-		return nil
-	case TypeProtoSwitch:
-		s.handleProtoSwitch(f)
 		return nil
 	case TypeCamCtl:
 		s.handleCamCtl(f)

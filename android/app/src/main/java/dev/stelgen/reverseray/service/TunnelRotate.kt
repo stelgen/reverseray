@@ -1,6 +1,9 @@
 // v1.8.0: зона режима «Ротация» вынесена из TunnelService.kt (дробление по
-// зонам ответственности). Pure refactor: private → internal у задетых членов,
-// поведение не меняется. Тот же пакет — вызовы из TunnelService без импортов.
+// зонам ответственности). Тот же пакет — вызовы из TunnelService без импортов.
+//
+// v1.9.3: бесшовная смена протокола (0x2C) удалена. Смена = ОБЫЧНЫЙ
+// РЕКОННЕКТ клиента на новом протоколе (killRunnersOf + spawnRunnersFor):
+// без спец-кадров, без паркинга, без перехендшейков посреди сессии.
 package dev.stelgen.reverseray.service
 
 import dev.stelgen.reverseray.R
@@ -12,20 +15,38 @@ import dev.stelgen.reverseray.core.RrpProtocols
 internal fun TunnelService.rotationEnabled(): Boolean = prefs().getBoolean(TunnelService.KEY_PROTO_ROTATE, false)
 
 /**
- * Тик ротации: расписание ([ProtoRotator]) → бесшовная смена (0x2C)
- * + запись причины в журнал. Кандидаты — ROTATABLE ∩ реестру сервера
- * (v1.8.3: apimask исключён — серверный planner не свитчит его mid-session);
- * строго следующий после текущего. Провал смены НЕ карается памятью
- * провалов (это не авто) — следующий тик попробует снова по расписанию.
+ * Реконнект-смена протокола одной сессии (v1.9.3): цель кладётся в
+ * [Sess.protoOverride] (ссылка НЕ мутируется — AUTO остаётся AUTO), раннеры
+ * убиваются и поднимаются заново с новым proto. false — реконнект не запущен
+ * (сервис останавливается).
+ */
+internal fun TunnelService.reconnectSwitchOf(sess: TunnelService.Sess, target: String): Boolean {
+    sess.protoOverride = target
+    return try {
+        if (stopping) return false
+        killRunnersOf(sess)
+        spawnRunnersFor(sess)
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/**
+ * Тик ротации: расписание ([ProtoRotator]) → обычный реконнект на следующий
+ * протокол + запись причины в журнал. Кандидаты — ROTATABLE ∩ реестру
+ * сервера (совпадают по HELLO_OK.protocols); строго следующий после
+ * текущего. Провал реконнекта НЕ карается памятью провалов (это не авто) —
+ * следующий тик попробует снова по расписанию.
  */
 internal fun TunnelService.rotateTick() {
     if (stopping || !rotationEnabled()) return
     val now = System.currentTimeMillis()
     for (s in sessById.values.toList()) {
+        // Ручная валидационная смена этой сессии — не вмешиваемся.
+        if (s.id == switchingSessionId) continue
         val client = firstClientOf(s) ?: continue
         if (client.state != RrpClient.State.READY) continue
-        // v1.8.3: кандидаты — ROTATABLE (executable без apimask: серверный
-        // planner не свитчит apimask mid-session — цикл провалов недопустим).
         val candidates = RrpProtocols.ROTATABLE.filter {
             client.serverProtocols.contains(it)
         }
@@ -41,7 +62,8 @@ internal fun TunnelService.rotateTick() {
             ),
             LogKind.INFO,
         )
-        switchProtoLiveOf(s, target)
+        reconnectSwitchOf(s, target)
+        manager?.byId(s.id)?.protoSwitches?.incrementAndGet()
     }
 }
 

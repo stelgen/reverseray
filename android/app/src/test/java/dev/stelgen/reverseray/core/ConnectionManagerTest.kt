@@ -55,7 +55,6 @@ class ConnectionManagerTest {
         override fun healthSample(): AutoBalancer.Sample? = null
         override fun negotiatedProto(): String = ""
         override fun serverProtocols(): List<String> = emptyList()
-        override fun switchProto(target: String): Boolean = false
         override fun isRunning(): Boolean = running
         override fun autoBalance(): Boolean = false
     }

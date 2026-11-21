@@ -42,11 +42,12 @@ import dev.stelgen.reverseray.core.SessionStore
             prefs().edit().putBoolean(TunnelService.KEY_PROTO_ROTATE, false).apply()
             TunnelService.pushLog(getString(R.string.log_proto_rotation_off), LogKind.INFO)
         }
+        // v1.9.3: сносим хвосты ротации/авто-свитча — цель жила в protoOverride.
+        sessById.values.forEach { it.protoOverride = null }
         // v0.9.5: "auto" — явный режим «лучший общий протокол» (ссылка без proto=).
         val isAuto = newProtoRaw == TunnelService.PROTO_AUTO
         val newProto = if (isAuto) TunnelService.PROTO_AUTO else RrpProtocols.normalize(newProtoRaw)
         val oldProto = currentProto()
-        val p = prefs()
         if (isAuto && claimedProto().isBlank()) {
             updateStatus(TunnelService.STATE_INFO, getString(R.string.status_switch_same, protoDisplayName(TunnelService.PROTO_AUTO)))
             return

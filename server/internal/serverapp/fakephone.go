@@ -50,10 +50,8 @@ type fakePhone struct {
 	// состояние mid-session свитча (v1.8.6): ack и результат установки
 	// нового конверта. Поля создаются в dialPhoneOnCapsParked; литеральные
 	// конструкторы (keyrace) получают nil — select/default страхует.
-	sid       string
-	token     string
-	ackCh     chan switchAck
-	switchRes chan error
+	sid   string
+	token string
 
 	wmu sync.Mutex
 	mu  sync.Mutex
@@ -69,9 +67,8 @@ type fakePhone struct {
 	// (читают с коротким дедлайном, чтобы увидеть флаг).
 	dead atomic.Bool
 
-	loopErr   atomic.Value // диагностика смерти loop-горутины (тесты)
-	switching atomic.Bool  // идёт бесшовный свитч: только тогда KEY_REQ-обмен пишет в switchRes
-	lastSeen  atomic.Value // трассировка: последний кадр, дошедший до loop
+	loopErr  atomic.Value // диагностика смерти loop-горутины (тесты)
+	lastSeen atomic.Value // трассировка: последний кадр, дошедший до loop
 
 	// flow-control (v0.9.3): не подтверждённые сервером байты на стрим.
 	win int64
@@ -98,19 +95,6 @@ type btEnvelope struct{ tr *bt.Transport }
 
 func (e *btEnvelope) seal(b []byte) ([]byte, error) { return e.tr.Seal(b) }
 func (e *btEnvelope) open(b []byte) ([]byte, error) { return e.tr.Open(b) }
-
-// switchAck / protoSwitchReq — кадр 0x2C бесшовной смены протокола.
-type protoSwitchReq struct {
-	Proto string `json:"proto"`
-	Nonce string `json:"nonce"`
-}
-
-type switchAck struct {
-	OK     bool   `json:"ok"`
-	Proto  string `json:"proto"`
-	Nonce  string `json:"nonce"`
-	Reason string `json:"reason"`
-}
 
 func (p *fakePhone) currentEnv() envelope {
 	p.envMu.RLock()
@@ -279,8 +263,6 @@ func dialPhoneOnCapsParked(t *testing.T, conn net.Conn, token, device, proto str
 	p.out = make(map[uint32]int64)
 	p.sid = sid
 	p.token = token
-	p.ackCh = make(chan switchAck, 8)
-	p.switchRes = make(chan error, 1)
 	if proto == "mtproto2" {
 		p.wrap, err = mtproto.UpgradeClient(conn, sid, nil)
 		if err != nil {
@@ -505,22 +487,11 @@ func (p *fakePhone) loop() {
 		case rrp.TypePing:
 			_ = p.write(rrp.TypePong, 0, f.Payload)
 		case rrp.TypeKeyReq:
-			// v1.8.6 e2e-матрица: обмен ключами целевого протокола.
-			// ВАЖНО: начальный хендшейк тоже приходит сюда (KEY_REQ при
-			// коннекте) — его результат НЕ должен попадать в switchRes,
-			// иначе следующий SwitchTo съест stale-значение и вернётся
-			// ДО завершения обмена ключами (гонка e2e-матрицы).
-			if p.switching.Load() {
-				p.handleKeyReq(f)
-			}
-		case rrp.TypeProtoSwitch:
-			var m switchAck
-			if json.Unmarshal(f.Payload, &m) == nil {
-				select {
-				case p.ackCh <- m:
-				default:
-				}
-			}
+			// v1.9.3: обмен ключами протокола — единственная механика согласования
+			// конверта (первичный хендшейк при подключении; бесшовные свитчи
+			// 0x2C удалены). Для mtproto2 KEY_REQ потребляет UpgradeClient до
+			// старта loop — сюда доходит только WG/BT.
+			p.handleKeyReq(f)
 		}
 	}
 }
@@ -634,44 +605,13 @@ func (p *fakePhone) readExpect(want uint8) (*rrp.Frame, error) {
 	}
 }
 
-// SwitchTo — инициирует бесшовную смену протокола (0x2C) и дожидается ack +
-// установки нового конверта (v1.8.6, e2e-матрица протоколов). Клиентский
-// дедлайн ack-ожидания — 10с (строго меньше серверных 15с, канон v1.8.3).
-func (p *fakePhone) SwitchTo(target, nonce string) error {
-	p.switching.Store(true)
-	defer p.switching.Store(false)
-	req, _ := json.Marshal(&protoSwitchReq{Proto: target, Nonce: nonce})
-	if err := p.write(rrp.TypeProtoSwitch, 0, req); err != nil {
-		return err
-	}
-	select {
-	case m := <-p.ackCh:
-		if !m.OK {
-			return fmt.Errorf("switch to %s denied: %s", target, m.Reason)
-		}
-		if m.Proto != target || m.Nonce != nonce {
-			return fmt.Errorf("switch ack mismatch: got %s/%s", m.Proto, m.Nonce)
-		}
-	case <-time.After(10 * time.Second):
-		return errors.New("switch ack timeout")
-	}
-	select {
-	case err := <-p.switchRes:
-		return err
-	case <-time.After(20 * time.Second):
-		return errors.New("switch exchange timeout")
-	}
-}
-
-// handleKeyReq — обмен ключами целевого протокола после свитча (выполняется
-// В loop-горутине — единственном читателе conn). Результат — в switchRes.
+// handleKeyReq — обмен ключами протокола (выполняется В loop-горутине —
+// единственном читателе conn). Успех включает конверт; провал — в loopErr
+// (тест увидит смерть цикла), сессию добьёт серверный key-deadline.
 func (p *fakePhone) handleKeyReq(f *rrp.Frame) {
 	env, w, err := p.keyExchange(f)
-	select {
-	case p.switchRes <- err:
-	default:
-	}
 	if err != nil {
+		p.loopErr.Store("key exchange: " + err.Error())
 		return
 	}
 	p.setCrypto(w, env)

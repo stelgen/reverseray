@@ -15,7 +15,6 @@ class ProdJvmProbeTest {
         val link = System.getenv("RR_PROBE_LINK")
             ?: error("RR_PROBE_LINK env is required")
         val cfg = RrpUri.parse(link)
-        val states = CountDownLatch(1)
         val client = RrpClient(
             host = cfg.host,
             port = cfg.ports.firstOrNull() ?: 4433,
@@ -58,30 +57,33 @@ class ProdJvmProbeTest {
     @Test fun probeRrp1() { runOne("rrp1") }
     @Test fun probeBt() { runOne("bittorrent") }
 
-    @Test fun switchChain() {
+    /**
+     * v1.9.3: 0x2C удалён — смена протокола = ОБЫЧНЫЙ РЕКОННЕКТ. Прода-проба
+     * «ротации»: цепочка независимых клиентов (AUTO → mtproto2 → bittorrent
+     * → wireguard), после каждого подъёма — e2e-проба в новом конверте.
+     */
+    @Test fun reconnectChain() {
         assumeTrue("RR_PROBE_LINK env is required — skip", System.getenv("RR_PROBE_LINK") != null)
         val link = System.getenv("RR_PROBE_LINK") ?: error("RR_PROBE_LINK env is required")
         val cfg = RrpUri.parse(link)
-        val client = RrpClient(
-            host = cfg.host, port = cfg.ports.firstOrNull() ?: 4433,
-            token = cfg.token, pin = cfg.pin, allowLan = false,
-            listener = object : RrpClient.Listener {
-                override fun onLog(client: RrpClient, message: String, kind: LogKind) { println("[${kind}] $message") }
-                override fun onState(client: RrpClient, state: RrpClient.State) { println("[STATE] $state") }
-            },
-            deviceName = cfg.name ?: "phone-1", transport = cfg.transport,
-            protoId = "", validateProbeTarget = "connectivitycheck.gstatic.com:80",
-        )
-        client.connect()
-        println("SWITCHTEST start negotiated=${client.negotiatedProto}")
-        val steps = listOf("mtproto2", "bittorrent", "apimask", "mtproto2")
-        for (t in steps) {
-            val ok = client.switchProto(t)
-            println("SWITCHTEST switch->$t ok=$ok")
-            Thread.sleep(3500) // перехендшейк
-            val e2e = client.e2eProbeOnce("connectivitycheck.gstatic.com:80", 8000)
-            println("SWITCHTEST e2e after->$t = $e2e (state=${client.state}, negotiated=${client.negotiatedProto})")
+        for (t in listOf("", "mtproto2", "bittorrent", "wireguard")) {
+            val client = RrpClient(
+                host = cfg.host, port = cfg.ports.firstOrNull() ?: 4433,
+                token = cfg.token, pin = cfg.pin, allowLan = false,
+                listener = object : RrpClient.Listener {
+                    override fun onLog(client: RrpClient, message: String, kind: LogKind) { println("[${kind}] $message") }
+                    override fun onState(client: RrpClient, state: RrpClient.State) { println("[STATE] $state") }
+                },
+                deviceName = cfg.name ?: "phone-1", transport = cfg.transport,
+                protoId = t, validateProbeTarget = "connectivitycheck.gstatic.com:80",
+            )
+            try {
+                client.connect()
+                val e2e = client.e2eProbeOnce("connectivitycheck.gstatic.com:80", 8000)
+                println("RECONNECTTEST proto='$t' negotiated=${client.negotiatedProto} e2e=$e2e (state=${client.state})")
+            } finally {
+                try { client.close() } catch (_: Throwable) {}
+            }
         }
-        client.close()
     }
 }

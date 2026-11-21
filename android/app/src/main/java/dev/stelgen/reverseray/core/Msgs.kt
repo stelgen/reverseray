@@ -391,28 +391,6 @@ object Msgs {
     val BT_PACKET4_DONE = Msg("bt: packet4 already consumed", "bt: packet4 уже обработан")
     val BT_HS_NOT_DONE = Msg("bt: handshake not finished", "bt: хендшейк не завершён")
 
-    // ── Бесшовная смена протокола (v0.10) ────────────────────────────
-    val PSW_REQUEST = Msg(
-        "proto-switch: requesting live switch to %s (nonce=%s)",
-        "proto-switch: запрос бесшовной смены на %s (nonce=%s)",
-    )
-    val PSW_GRANTED = Msg(
-        "proto-switch: server agreed on %s — re-keying",
-        "proto-switch: сервер согласовал %s — перехендшейк",
-    )
-    val PSW_DENIED = Msg(
-        "proto-switch: server refused: %s — old crypto alive",
-        "proto-switch: сервер отказал: %s — старая крипта жива",
-    )
-    val PSW_TIMEOUT = Msg(
-        "proto-switch: agreement timeout — old crypto alive",
-        "proto-switch: таймаут согласования — старая крипта жива",
-    )
-    val PSW_FLUSHED = Msg(
-        "proto-switch: flushed %d parked frames (new envelope)",
-        "proto-switch: отправлено накопленных кадров: %s (новый конверт)",
-    )
-
     // ── Умный балансер auto-режима (v0.10) ────────────────────────────
     val BAL_DEGRADED = Msg(
         "auto: link degraded (%s) — rotating protocol %s → %s",

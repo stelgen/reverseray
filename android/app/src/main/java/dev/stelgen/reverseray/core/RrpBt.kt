@@ -41,11 +41,9 @@ internal fun RrpClient.finishBtHandshake(frame: RrpFrame.BtResp) {
         wgCrypto = null
         btCrypto = hs.transport()
         btHandshake = null
-        negotiatedProto = Torrent.PROTO_ID // v1.8.4: финал свитча — актуальный протокол
-        pendingSwitchTarget = null
+        negotiatedProto = Torrent.PROTO_ID // актуальный протокол после поднятия крипты
         log(Msgs.BT_KEYS_AGREED.t())
         listener?.onState(this, RrpClient.State.READY) // UI: статус крипты
-        unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное
     } catch (e: Exception) {
         throw RrpClientException(Msgs.BT_FAILED.t(e.message ?: "?"), e)
     }

@@ -123,7 +123,7 @@ class StringsGateTest {
         val rel = listOf(
             File("src/main/res/values/strings.xml"),
             File("app/src/main/res/values/strings.xml"),
-        ).firstOrNull { it.isFile } ?: throw IllegalStateException("strings.xml не найден")
+        ).firstOrNull { it.isFile } ?: error("strings.xml не найден")
         val resRoot = rel.parentFile!!.parentFile!! // …/res
         fun keys(dir: String): Set<String> {
             val rx = Regex("<string name=\"([^\"]+)\"")

@@ -48,11 +48,9 @@ internal fun RrpClient.finishWgHandshake(frame: RrpFrame.WgResp) {
         wgCrypto = Wg.clientTransport(hs)
         wgHandshake = null
         wgPsk = null
-        negotiatedProto = Wg.PROTO_ID // v1.8.4: финал свитча — актуальный протокол
-        pendingSwitchTarget = null
+        negotiatedProto = Wg.PROTO_ID // актуальный протокол после поднятия крипты
         log(Msgs.WG_KEYS_AGREED.t())
         listener?.onState(this, RrpClient.State.READY) // UI: статус крипты
-        unparkAndFlush() // v0.10: смена завершена — пропускаем паркованное
     } catch (e: Exception) {
         // битый msg2 — нарушение протокола: сессия закрыта честной причиной
         throw RrpClientException(Msgs.WG_FAILED.t(e.message ?: "?"), e)

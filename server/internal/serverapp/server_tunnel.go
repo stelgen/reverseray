@@ -229,14 +229,6 @@ func (a *App) handleTunnel(conn net.Conn) {
 			}
 		}
 	}
-	// v0.10: бесшовная смена протокола (кадр 0x2C) — план целевого протокола
-	// строится на месте, крипта подменяется атомарно по завершении обмена;
-	// соединение и стримы переживают смену (паркинг payload-кадров).
-	scfg.TokenHash = a.store.HashOf(device)
-	scfg.Switchable = true
-	scfg.SwitchPlanner = func(target string) (rrp.KeyPlan, error) {
-		return a.switchKeyPlan(sid, device, target)
-	}
 	// v0.9.5: управление камуфляжем с клиента (0x2A) — персистентный выбор.
 	scfg.CamCtl = func(enabled bool) {
 		a.setCamouflageOverride(device, enabled)

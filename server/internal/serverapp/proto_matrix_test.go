@@ -1,12 +1,14 @@
 package serverapp
 
-// proto_matrix_test.go — верхнеуровневый e2e-валидатор зоопарка протоколов
-// (v1.8.6): КАЖДЫЙ протокол payload-конвертов × КАЖДЫЙ транспорт, затем
-// бесшовная смена протокола (0x2C) в каждый другой протокол — все
-// направленные пары. Проверка — РЕАЛЬНЫЙ трафик: SOCKS5-клиент гонит эхо
-// через туннель до и после каждого свитча (не «переменные в коде», а
-// честный roundtrip в запечатанном конверте). Новые протоколы добавляются
-// в один список — матрица расширяется автоматически.
+// proto_matrix_test.go — верхнеуровневый e2e-валидатор зоопарка протоколов:
+// КАЖДЫЙ протокол payload-конвертов × КАЖДЫЙ транспорт, каждый — с РЕАЛЬНЫМ
+// трафиком: SOCKS5-клиент гонит эхо через туннель в активном конверте
+// (не «переменные в коде», а честный roundtrip в запечатанном канале).
+//
+// v1.9.3: бесшовная смена протокола (0x2C) удалена — смена = обычный
+// реконнект. Пары «старый → новый» покрываются свежим dial с целевым
+// протоколом: каждая строка матрицы — независимый коннект с полным
+// хендшейком и реальным крипто-обменом (WG_INIT/BT_INIT/KEY_RESP).
 
 import (
 	"bytes"
@@ -68,7 +70,7 @@ func socksEcho(mixed, host string, port uint16, payload []byte) error {
 	}
 	rep := make([]byte, 10)
 	if _, err := io.ReadFull(c, rep); err != nil {
-		return err
+		return fmt.Errorf("socks connect: %w", err)
 	}
 	if rep[1] != 0 {
 		return fmt.Errorf("socks connect failed: code=%d", rep[1])
@@ -87,17 +89,16 @@ func socksEcho(mixed, host string, port uint16, payload []byte) error {
 	return nil
 }
 
-// TestProtoTransportMatrix — стартовая связка: {tcp, ws} × {rrp1, mtproto2,
-// wireguard, bittorrent} → эхо-трафик; затем mid-session свитч в каждый
-// другой протокол-конверт (rrp1 недостижим бесшовно — требует реконнекта,
-// сервер это и отрицает) → снова эхо на новом конверте.
+// TestProtoTransportMatrix — стартовые связки: {tcp, ws} × {rrp1, mtproto2,
+// wireguard, bittorrent} → эхо-трафик в активном конверте каждого протокола
+// (для wg/bt конверт включается серверным KEY_REQ → INIT/RESP при коннекте).
 func TestProtoTransportMatrix(t *testing.T) {
 	protos := []string{"rrp1", "mtproto2", "wireguard", "bittorrent"}
 	transports := []string{"tcp", "ws"}
 
 	for _, transport := range transports {
-		for _, initial := range protos {
-			name := transport + "/" + initial
+		for _, proto := range protos {
+			name := transport + "/" + proto
 			t.Run(name, func(t *testing.T) {
 				app, cfg, token := startTestServer(t)
 				_ = app
@@ -114,56 +115,24 @@ func TestProtoTransportMatrix(t *testing.T) {
 				var err error
 				switch transport {
 				case "tcp":
-					p, _, err = DialPhoneProto(t, cfg.Listen.Tunnels, app.CAPin(), token, "phone-matrix", initial, dial)
+					p, _, err = DialPhoneProto(t, cfg.Listen.Tunnels, app.CAPin(), token, "phone-matrix", proto, dial)
 				case "ws":
 					ws := dialWsTls(t, cfg.Listen.Tunnels, app.CAPin())
-					p, _, err = DialPhoneOnProto(t, ws, token, "phone-matrix-ws", initial, dial)
+					p, _, err = DialPhoneOnProto(t, ws, token, "phone-matrix-ws", proto, dial)
 				default:
 					t.Fatalf("unknown transport %q", transport)
 				}
 				if err != nil {
 					t.Fatalf("phone connect (%s): %v", name, err)
 				}
+				defer p.Close()
 				time.Sleep(200 * time.Millisecond) // регистрация в hub
 
-				check := func(tag string, payload []byte) {
-					t.Helper()
-					if err := socksEcho(cfg.Listen.Mixed, echoHost, echoPort, payload); err != nil {
-						if le := p.loopErr.Load(); le != nil {
-							t.Fatalf("%s: %v; fake-phone loop died: %v", tag, err, le)
-						}
-						t.Fatalf("%s: %v", tag, err)
-					}
+				if err := socksEcho(cfg.Listen.Mixed, echoHost, echoPort, []byte("matrix-ping-"+proto)); err != nil {
 					if le := p.loopErr.Load(); le != nil {
-						t.Fatalf("%s: fake-phone loop died: %v; last frame: %v", tag, le, p.lastSeen.Load())
+						t.Fatalf("echo (%s): %v; fake-phone loop died: %v", name, err, le)
 					}
-					if ls := p.lastSeen.Load(); ls != nil {
-						t.Logf("%s: phone last seen frame: %v", tag, ls)
-					}
-				}
-				check("initial "+initial, []byte("matrix-ping-"+initial))
-
-				// Свитч в каждый другой протокол; rrp1 бесшовно недостижим —
-				// сервер обязан ОТКАЗАТЬ (канон v1.8.3), это тоже проверяем.
-				n := 0
-				for _, target := range protos {
-					if target == initial {
-						continue
-					}
-					n++
-					nonce := fmt.Sprintf("matrix-n%d", n)
-					err := p.SwitchTo(target, nonce)
-					if target == "rrp1" {
-						if err == nil {
-							t.Fatalf("switch to rrp1 must be denied (seamless switch requires reconnect)")
-						}
-						continue
-					}
-					if err != nil {
-						t.Fatalf("switch %s→%s: %v", initial, target, err)
-					}
-					// Трафик в НОВОМ конверте: эхо обязан пройти.
-					check("after "+initial+"→"+target, []byte("matrix-ping-"+target))
+					t.Fatalf("echo (%s): %v", name, err)
 				}
 			})
 		}

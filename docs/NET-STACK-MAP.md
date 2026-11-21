@@ -18,7 +18,7 @@
 | `core/RrpClientStreams.kt` | стримы: OPEN/OPEN_OK/pumpOutgoing, паркинг сокетов, OPEN_RESUME | `internal/rrp/session_stream.go` |
 | `core/RrpClientUdp.kt` | UDP-ассоциации (assoc/приём/доставка) | `internal/rrp/session_udp.go` |
 | `core/RrpFrameCodec.kt` | wire-кодеки: u16/u32 BE, MiniJson, hex-дамп (rawHex) | `internal/rrp/frame.go` (кодеки) |
-| `core/RrpClientSwitch.kt` | бесшовная смена 0x2C + паркинг payload | `internal/rrp/session_switch.go` (план), `internal/hub` |
+| `service/TunnelRotate.kt` | ротация round-robin 30 мин: обычный реконнект-смена (`protoOverride`), reconnectSwitchOf | — (клиент-локальная механика; сервер видит штатный HELLO) |
 | `core/RrpClientHealth.kt` | PING-планировщик, PROBE/E2E-пробер, health-снимки | `internal/rrp` (pong/keepalive), PROBE-egress |
 | `core/RrpFrame.kt` | канон кадров: sealed-таблица типов + nested-кодеки from/encode | `internal/rrp/frame.go` |
 | `core/WsStream.kt` | транспорт ws | `internal/rrp/ws.go` |

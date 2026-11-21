@@ -277,20 +277,6 @@ class RrpClient(
     /** Активен ли BitTorrent MSE-конверт в этой сессии. */
     val btActive: Boolean get() = btCrypto != null
 
-    // ---- v0.10: бесшовная смена протокола (0x2C) ----
-
-    /**
-     * v1.8.3: очередь паркинга смены протокола (SwitchParking) — окно +
-     * backpressure (канон v1.3.0 «буфер в RAM без дропов»). Контрольные кадры
-     * идут свободно. var — для тестов (подменяется на узкое окно).
-     */
-    @Volatile internal var switchParking = SwitchParking(resolveParkedFramesMax())
-
-    /** Ожидаемый ответ 0x2C (протокол-цель, nonce); null — запроса нет. */
-    @Volatile internal var protoSwitchAck: RrpFrame.ProtoSwitch? = null // internal — зона в RrpClientSwitch.kt
-    @Volatile internal var protoSwitchNonce: String = "" // internal — зона в RrpClientSwitch.kt
-    @Volatile internal var pendingSwitchTarget: String? = null // v1.8.4: internal — финалы крипты в RrpWg/RrpBt/RrpMproto
-
     /**
      * v0.9.5: начальный выбор камуфляжа для этого устройства (кадр 0x2A после
      * READY). true/false — отправить; null — не отправлять (клиент молчит).
@@ -603,7 +589,6 @@ class RrpClient(
             is RrpFrame.KeyResp -> debug(Msgs.KEY_RESP_UNEXPECTED.t())
             is RrpFrame.BtResp -> finishBtHandshake(frame)
             is RrpFrame.BtInit -> debug(Msgs.BT_INIT_UNEXPECTED.t())
-            is RrpFrame.ProtoSwitch -> handleProtoSwitchAck(frame)
             is RrpFrame.WgResp -> {
                 // v0.9.5: WG msg2 — активируем клиентский транспорт WG-конвертов.
                 // v0.9.6: дедлок-фикс — consume ЗДЕСЬ (reader-поток), а не в
@@ -731,17 +716,6 @@ class RrpClient(
 
     internal fun sendFrame(frame: RrpFrame) {
         val out = wireOut ?: throw RrpClientException(Msgs.NO_CONNECTION.t())
-        // v0.10: во время бесшовной смены протокола payload-кадры копятся
-        // и уходят новым конвертом после завершения перехендшейка.
-        when (frame) {
-            is RrpFrame.Data, is RrpFrame.UdpData -> {
-                // v1.8.3: backpressure — окно очереди паркинга; переполнение
-                // ставит отправителя на паузу до снятия паркинга или смерти
-                // сессии (канон «ноль потерь», дропа нет).
-                if (switchParking.offer(frame) { running.get() && wireOut != null }) return
-            }
-            else -> {}
-        }
         var wire: RrpFrame = frame
         when (frame) {
             is RrpFrame.Data -> {
@@ -850,16 +824,12 @@ class RrpClient(
      * явный stop пользователем: чистое закрытие всего.
      */
     fun close(parkLive: Boolean) {
-        pendingSwitchTarget = null // v1.8.4: свитч не переживает смерть транспорта
         running.set(false)
         setState(State.CLOSED)
         helloLatch.countDown()
         readyLatch.countDown()
         try { pingExecutor.shutdownNow() } catch (_: Exception) {}
         try { relayExecutor.shutdownNow() } catch (_: Exception) {}
-        // v1.8.3: очередь паркинга очищена, заблокированные отправители
-        // (backpressure) выходят с ошибкой — сессия мертва.
-        switchParking.close()
         if (parkLive) {
             streams.values.toList().forEach { st ->
                 if (st.resumeToken != null && !st.parked.get()) {
@@ -1017,15 +987,6 @@ class RrpClient(
 
         /** Окно flow-control по умолчанию: 512 КБ на стрим. */
         const val DEFAULT_TUNNEL_WINDOW = 512 * 1024L
-
-        // v1.8.3: окно очереди паркинга смены протокола (backpressure,
-        // канон v1.3.0 «буфер в RAM без дропов»). Env-override по образцу
-        // окон flow-control: RR_PARKED_FRAMES_MAX (16..4096).
-        const val DEFAULT_PARKED_FRAMES_MAX = 256
-
-        internal fun resolveParkedFramesMax(): Int =
-            System.getenv("RR_PARKED_FRAMES_MAX")?.toIntOrNull()
-                ?.coerceIn(16, 4096) ?: DEFAULT_PARKED_FRAMES_MAX
 
         // err_code для OPEN/OPEN_OK и sendOpen()
         const val ERR_OK = 0

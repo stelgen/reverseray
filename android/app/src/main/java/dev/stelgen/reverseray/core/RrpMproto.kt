@@ -9,11 +9,10 @@ package dev.stelgen.reverseray.core
  * долю, шлём KEY_RESP и включаем MTProto-конверт на DATA/UDP_DATA.
  */
 internal fun RrpClient.handleKeyReq(frame: RrpFrame.KeyReq) {
-    // v1.8.4: во время бесшовной смены целевой KEY_REQ приходит ПРИ старой
-    // крипте (сервер держит старый план до Complete) — игнор ломал свитч
-    // из-под крипты: сервер ждал целевой ответ, тайм-аут закрывал сессию.
-    val switching = pendingSwitchTarget != null
-    if (!switching && (mtCrypto != null || wgCrypto != null || btCrypto != null)) {
+    // v1.9.3: бесшовные свитчи 0x2C удалены — обмен ключами живёт ТОЛЬКО
+    // при первичном подключении (крипта ещё пуста). Повторный KEY_REQ при
+    // активной крипте — игнор (анти-мусор).
+    if (mtCrypto != null || wgCrypto != null || btCrypto != null) {
         log(Msgs.KEY_REQ_IGNORED.t())
         return
     }
@@ -45,9 +44,8 @@ internal fun RrpClient.handleKeyReq(frame: RrpFrame.KeyReq) {
         val gABytes = MtProto.b64urlDecode(frame.gA)
         val authKey = dh.shared(gA)
         val sid = sessionId ?: throw MtProto.MtProtoException(Msgs.NO_SESSION_ID.t())
-        // v1.8.4: атомарная подмена конверта — старые крипты гасим ДО ответа
-        // и снятия паркинга, иначе unpark уйдёт старым конвертом, а сервер
-        // после коммита ждёт новый.
+        // v1.8.4: атомарная подмена конверта — старые крипты гасим ДО ответа,
+        // иначе первый DATA уйдёт старым конвертом после включения новой.
         wgCrypto = null
         btCrypto = null
         mtCrypto = MtProto.SessionCrypto(
@@ -55,15 +53,10 @@ internal fun RrpClient.handleKeyReq(frame: RrpFrame.KeyReq) {
             MtProto.saltFor(sid, gABytes, gB),
             MtProto.sessionId8(sid),
         )
-        negotiatedProto = MtProto.PROTO_ID // v1.8.4: финал свитча — актуальный протокол
-        pendingSwitchTarget = null
+        negotiatedProto = MtProto.PROTO_ID // актуальный протокол после поднятия крипты
         log(Msgs.MTPROTO_KEYS_OK.t())
         listener?.onState(this, RrpClient.State.READY) // уведомить UI о включении крипто
-        // v0.10: при бесшовной смене порядок строгий: КЛЮЧЕВОЙ ОТВЕТ уходит
-        // РАНЬШЕ снятия паркинга (сервер коммитит крипту при Complete(KEY_RESP)
-        // и должен успеть до первого нового-envelope DATA).
         sendFrame(RrpFrame.KeyResp(MtProto.b64url(gB)))
-        unparkAndFlush()
     } catch (e: Exception) {
         log(Msgs.MTPROTO_EXCHANGE_FAILED.t(e.message))
         close()

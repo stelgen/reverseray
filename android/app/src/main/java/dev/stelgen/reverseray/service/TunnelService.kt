@@ -37,7 +37,6 @@ import dev.stelgen.reverseray.core.ProtoFallback
 import dev.stelgen.reverseray.core.ProtocolState
 import dev.stelgen.reverseray.core.RrpAuthException
 import dev.stelgen.reverseray.core.RrpClient
-import dev.stelgen.reverseray.core.switchProto // v1.8.10: зона свитча вынесена в core/RrpClientSwitch.kt (extension)
 import dev.stelgen.reverseray.core.healthSample // v1.8.10: зона health вынесена в core/RrpClientHealth.kt (extension)
 import dev.stelgen.reverseray.core.RrpProtocols
 import dev.stelgen.reverseray.core.RrpUri
@@ -138,7 +137,11 @@ class TunnelService : Service() {
     // «it.sess === sess» не должны ломаться), а spawn/runLoop/ротация обязаны
     // видеть свежий proto= сразу после свитча. val-снапшот давал баг
     // «после смены протокола реконнект старым (работает только wg)».
-    internal inner class Sess(val id: String, var profile: SessionStore.Profile)
+    internal inner class Sess(val id: String, var profile: SessionStore.Profile) {
+        /** v1.9.3: пер-сессионное переопределение протокола (ротация/авто-свитч).
+         *  Реконнект-смена: ссылка НЕ мутируется; null — протокол из ссылки. */
+        @Volatile internal var protoOverride: String? = null
+    }
 
     internal val sessById = java.util.concurrent.ConcurrentHashMap<String, Sess>()
 
@@ -174,30 +177,9 @@ class TunnelService : Service() {
     internal var rotateTask: java.util.concurrent.ScheduledFuture<*>? = null
 
     // ---------- v1.5.0: балансер пер-сессионный (в ConnectionManager);
-    // решение балансера исполняет sessionOwner.onBalancerSwitch (ниже).
-
-    /**
-     * Бесшовная смена протокола в живых раннерах ОДНОЙ сессии (кадр 0x2C —
-     * согласование без разрыва связи). Ссылка НЕ меняется (AUTO остаётся AUTO —
-     * сервер переговорит при реконнекте сам). false — хоть один раннер отказал.
-     */
-    internal fun switchProtoLiveOf(sess: Sess, target: String): Boolean {
-        var all = true
-        val list = synchronized(runners) { runners.filter { it.sess === sess } }
-        for (r in list) {
-            val c = r.client
-            if (c == null) {
-                all = false
-                continue
-            }
-            try {
-                if (c.state == RrpClient.State.READY && !c.switchProto(target)) all = false
-            } catch (_: Exception) {
-                all = false
-            }
-        }
-        return all
-    }
+    // решение балансера исполняет sessionOwner.onBalancerSwitch (ниже) —
+    // v1.9.3: сменой протокола служит ОБЫЧНЫЙ РЕКОННЕКТ (killRunnersOf +
+    // spawnRunnersFor; см. TunnelRotate.kt reconnectSwitchOf).
 
     /** Сессия-владелец для менеджера: создаёт воркеры, принимает события. */
     internal val sessionOwner = object : ConnectionManager.Owner {
@@ -242,7 +224,7 @@ class TunnelService : Service() {
                     RrpProtocols.labelWithVer(target),
                 ),
             )
-            val ok = switchProtoLiveOf(sessById[session.id] ?: return, target)
+            val ok = reconnectSwitchOf(sessById[session.id] ?: return, target)
             session.balancer.onSwitchResult(System.currentTimeMillis(), target, ok)
             if (ok) {
                 val msg = getString(R.string.status_switch_done, RrpProtocols.labelWithVer(target))
@@ -297,8 +279,6 @@ class TunnelService : Service() {
         override fun negotiatedProto(): String = firstClientOf(sess)?.negotiatedProto ?: ""
 
         override fun serverProtocols(): List<String> = firstClientOf(sess)?.serverProtocols ?: emptyList()
-
-        override fun switchProto(target: String): Boolean = switchProtoLiveOf(sess, target)
 
         override fun isRunning(): Boolean = runnersOf(sess).isNotEmpty()
 

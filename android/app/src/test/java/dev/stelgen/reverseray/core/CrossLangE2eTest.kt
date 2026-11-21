@@ -174,29 +174,20 @@ class CrossLangE2eTest {
 
 
     /**
-     * v1.8.4: БЕСШОВНАЯ СМЕНА (0x2C) из-под крипты — цепочка
-     * rrp1 → wireguard → bittorrent → mtproto2 на живом сервере.
-     * Регресс на клиент-серверный баг: целевой KEY_REQ при активной крипте
-     * игнорировался (клиент) / глотался (сервер) → дедлайн закрывал сессию.
-     * RR_E2E_MIXED задан → после КАЖДОГО свитча гоняем реальный DATA
-     * (socksGet) уже новым конвертом.
+     * v1.9.3: смена протокола = ОБЫЧНЫЙ РЕКОННЕКТ (0x2C удалён). Цепочка
+     * независимых клиентов wireguard → bittorrent → mtproto2 на живом
+     * сервере: после каждого подъёма — крипта цели + реальный DATA (socksGet).
      */
     @Test
-    fun e2e_seamlessSwitchChainFromUnderCrypto() {
+    fun e2e_reconnectSwitchChain() {
         assumeNotNull("RR_E2E_LINK не задан — пропуск (локальная сборка без сервера)", link)
         val chain = listOf(Wg.PROTO_ID, Torrent.PROTO_ID, MtProto.PROTO_ID)
-        val logs = CopyOnWriteArrayList<String>()
-        val client = connectProto(RrpProtocols.DEFAULT, logs, validate = false, allowLan = mixed != null)
-        try {
-            assertEquals("стартовый протокол", RrpProtocols.DEFAULT, client.negotiatedProto)
-            for (target in chain) {
-                assertTrue(
-                    "свитч $target отклонён сервером\n--- лог ---\n${logs.joinToString("\n")}",
-                    client.switchProto(target),
-                )
+        for (target in chain) {
+            val logs = CopyOnWriteArrayList<String>()
+            val client = connectProto(target, logs, validate = false, allowLan = mixed != null)
+            try {
+                assertEquals("стартовый протокол", target, client.negotiatedProto)
                 awaitCrypto(client, target, 8000, logs)
-                assertEquals("после свитча negotiated должен быть $target", target, client.negotiatedProto)
-                Thread.sleep(300) // серверный flush/дата-плоскость после коммита
                 val mixedAddr = mixed
                 if (mixedAddr != null) {
                     // цель DATA-ноги — LAN-заглушка (серверный SSRF-гвард
@@ -204,14 +195,14 @@ class CrossLangE2eTest {
                     val tgt = firstLanAddr18099()
                     val html = socksGet(mixedAddr, tgt[0], tgt[1].toInt(), "/")
                     assertTrue(
-                        "DATA после свитча на $target не прошёл новым конвертом html=${html.take(240).replace("\n", "\\n")}\n--- лог ---\n${logs.joinToString("\n")}",
+                        "DATA в конверте $target не прошёл html=${html.take(240).replace("\n", "\\n")}\n--- лог ---\n${logs.joinToString("\n")}",
                         html.contains("HTTP/1."),
                     )
                 }
-                println("E2E SWITCH OK: → $target crypto=${client.tunnelCryptoActive}")
+                println("E2E RECONNECT OK: $target crypto=${client.tunnelCryptoActive}")
+            } finally {
+                try { client.close() } catch (_: Exception) {}
             }
-        } finally {
-            try { client.close() } catch (_: Exception) {}
         }
     }
 
