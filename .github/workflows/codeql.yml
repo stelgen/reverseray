@@ -23,7 +23,7 @@ jobs:
         language: [go, java-kotlin]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: github/codeql-action/init@800a1d8701a65d150a672fef0923dbf2660a62ec # v4
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
         with:
           languages: ${{ matrix.language }}
       - if: matrix.language == 'java-kotlin'
@@ -40,4 +40,4 @@ jobs:
             echo "gradle attempt $i failed — retry in 20s"; sleep 20
           done
           [ "$ok" = "1" ] || exit 1
-      - uses: github/codeql-action/analyze@800a1d8701a65d150a672fef0923dbf2660a62ec # v4
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4
