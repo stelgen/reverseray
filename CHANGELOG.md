@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версионирование — [SemVer](https://semver.org/lang/ru/).
 
+## [1.9.1] — 2026-11-21
+
+### Исправлено
+- **Свитч протокола поднимал СТАРЫЙ протокол (симптом «работает только wg», присутствовал и в 1.8.10)**: `Sess.profile` был `val`-снапшотом — `commitProto` обновлял только стор, а `sessById`/раннеры/`SessionWorker` держали старый объект с `proto=` предыдущего свитча. Спавн после свитча (`kill → validate → commit → spawn`) читал stale URI и реконнектился старым протоколом (прод-логи: non-WG туннель валидируется, штатно закрывается через ~300 мс, а спавн поднимает WG). Фикс: `profile — var`, `commitProto` мутирует тот же объект `Sess` (identity-фильтры `it.sess === sess` сохранены).
+- **CI (Android-флейк)**: префетч robolectric переведён на best-effort (без `exit 1`; `[ … ] && break` под `bash -e` убивал степ на первой сетевой осечке), фетчер Robolectric качает со стабильного Google-зеркала (`-Drobolectric.dependency.repo.url`), а не с repo1 edge-CDN с отравленным 404.
+
 ## [1.9.0] — 2026-11-21
 
 ### Исправлено
