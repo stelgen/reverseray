@@ -1,3 +1,9 @@
-# Ложноположительное срабатывание generic-api-key на YAML-ключ actions/cache
-# (robolectric-m2-4.14.1-v1) — не секрет, кэш-ключ Gradle.
+# v1.8.3: ложное срабатывание generic-api-key — это описание схемы WG-хендшейка
+# («PSK=SHA256(token)» — канон доверия из docs/WORKFLOW.md), НЕ секрет.
+# Обоснование: лог server/internal/wg/plan.go:102 документирует процедуру,
+# реального токена в строке нет (канон «ничего не прячем, ничего не сливаем»).
+6d982113cf897b6c0066f5b762c2a4ae0a685794:server/internal/wg/plan.go:generic-api-key:102
+
+# v1.9.0: ФП generic-api-key на YAML-ключ actions/cache (robolectric-m2-4.14.1-v1)
+# в ci.yml — кэш-ключ Gradle, не секрет.
 7cb65bbce3fdbdf01bf2eb3fd7e50f5b8ce99d6d:.github/workflows/ci.yml:generic-api-key:150
