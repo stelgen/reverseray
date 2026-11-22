@@ -24,16 +24,28 @@ func (s *Session) writeAsync(f *Frame) {
 	}
 }
 
-// commitCrypto — включение крипто-конверта протокола (однократно, при
-// первичном обмене ключами). Вызывается ТОЛЬКО из читающей горутины
-// (Run) — гонок нет.
+// commitCrypto — включение крипто-конверта протокола. Вызывается ТОЛЬКО из
+// читающей горутины (Run) — гонок нет.
+// v1.9.9: активный конверт (если был — ре-кей) ретирится в prev-окно:
+// кадры в полёте, запечатанные телефоном до получения RESP, декодируются
+// старым конвертом в течение prevGrace (session_rekey.go).
 func (s *Session) commitCrypto(pc PayloadCrypto) {
 	s.mu.Lock()
+	if s.crypto != nil {
+		s.cryptoPrev = s.crypto
+		s.prevUntil = time.Now().Add(prevGrace)
+	}
 	s.crypto = pc
 	if s.keyTimer != nil {
 		s.keyTimer.Stop()
 		s.keyTimer = nil
 	}
+	// v1.9.9: сброс rekeying безопасен при живом prev-окне — кадры в полёте
+	// расшифровываются через cryptoPrev, а спекулятивный Open (bt.openPeek)
+	// не потребляет кейстрим при фейле: ни активный, ни prev конверт
+	// битым/чужим кадром не отравляются.
+	s.rekeying = false
+	s.fails = 0
 	s.mu.Unlock()
 }
 
@@ -97,12 +109,33 @@ func (s *Session) emit(f *Frame) error {
 
 // decryptDown расшифровывает входящий payload-кадр (если крипта включена).
 // До завершения обмена ключами крипто nil — кадры идут открытыми.
+// v1.9.9 dual-window: сначала активный конверт; на фейл — prev (кадры,
+// запечатанные телефоном до получения RESP в момент ре-кея).
 func (s *Session) decryptDown(payload []byte) ([]byte, error) {
 	s.mu.Lock()
 	crypto := s.crypto
+	var prev PayloadCrypto
+	if crypto == nil || time.Now().Before(s.prevUntil) {
+		prev = s.cryptoPrev
+	}
 	s.mu.Unlock()
 	if crypto == nil || len(payload) == 0 {
 		return payload, nil
 	}
-	return crypto.DecryptDown(payload)
+	plain, err := crypto.DecryptDown(payload)
+	if err == nil {
+		s.mu.Lock()
+	s.fails = 0
+		s.mu.Unlock()
+		return plain, nil
+	}
+	if prev != nil {
+		if p2, e2 := prev.DecryptDown(payload); e2 == nil {
+			s.mu.Lock()
+			s.fails = 0
+			s.mu.Unlock()
+			return p2, nil
+		}
+	}
+	return nil, err
 }

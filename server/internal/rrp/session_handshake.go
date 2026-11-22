@@ -19,9 +19,11 @@ import (
 // handleWgInit: бинарный кадр WG_INIT (v0.9.6, wireguard/Noise_IKpsk2) —
 // маршрутизация в план обмена ключами (rrp.InitResponder). Вызывается из
 // Run — гонок нет.
+// v1.9.9: при живой крипте INIT принимается только как ответ на наш
+// ре-кей (rekeyAccept) — иначе анти-мусор, как раньше.
 func (s *Session) handleWgInit(f *Frame) {
 	s.mu.Lock()
-	if s.crypto != nil || s.keyPlan == nil {
+	if s.keyPlan == nil || !s.rekeyAccept() {
 		s.mu.Unlock()
 		return // повторный/неожиданный INIT — игнор (анти-мусор)
 	}
@@ -46,9 +48,11 @@ func (s *Session) handleWgInit(f *Frame) {
 
 // handleBtInit: бинарный кадр BT_INIT (v0.10, bittorrent/MSE) — маршрутизация
 // в план обмена ключами (rrp.InitResponder). Вызывается из Run — гонок нет.
+// v1.9.9: при живой крипте INIT принимается только как ответ на наш
+// ре-кей (rekeyAccept) — иначе анти-мусор, как раньше.
 func (s *Session) handleBtInit(f *Frame) {
 	s.mu.Lock()
-	if s.crypto != nil || s.keyPlan == nil {
+	if s.keyPlan == nil || !s.rekeyAccept() {
 		s.mu.Unlock()
 		return // повторный/неожиданный INIT — игнор (анти-мусор)
 	}
@@ -96,7 +100,7 @@ func (s *Session) handleCamCtl(f *Frame) {
 // Вызывается из Run (единственный читатель) — гонок нет.
 func (s *Session) handleKeyResp(f *Frame) {
 	s.mu.Lock()
-	if s.crypto != nil || s.keyPlan == nil {
+	if s.keyPlan == nil || !s.rekeyAccept() {
 		s.mu.Unlock()
 		return // повторный/неожиданный KEY_RESP — игнор (анти-мусор)
 	}

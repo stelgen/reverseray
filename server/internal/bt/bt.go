@@ -34,7 +34,6 @@ package bt
 
 import (
 	"crypto/rand"
-	"crypto/rc4"
 	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/binary"
@@ -134,28 +133,73 @@ func be96(v *big.Int) [KeySize]byte {
 	return out
 }
 
+// rc4State — собственный RC4 (KSA+PRGA) с клонируемым состоянием:
+// спекулятивный Open обязан пробовать расшифровку по КОПИИ и коммитить
+// кейстрим только при успехе, иначе одиночный битый кадр навсегда
+// рассинхронизирует позиционный поток (crypto/rc4.Cipher состояние
+// приватное и не копируется).
+type rc4State struct {
+	s    [256]byte
+	i, j uint8
+}
+
+func newRC4State(key []byte) *rc4State {
+	st := &rc4State{}
+	for k := range st.s {
+		st.s[k] = byte(k)
+	}
+	var j uint8
+	for k := 0; k < 256; k++ {
+		j += st.s[k] + key[k%len(key)]
+		st.s[k], st.s[j] = st.s[j], st.s[k]
+	}
+	return st
+}
+
+func (s *rc4State) xor(dst, src []byte) {
+	for k := range src {
+		s.i++
+		s.j += s.s[s.i]
+		s.s[s.i], s.s[s.j] = s.s[s.j], s.s[s.i]
+		dst[k] = src[k] ^ s.s[s.s[s.i]+s.s[s.j]]
+	}
+}
+
 // rc4Stream — RC4-кейстрим с канонным drop и мьютексом (потоки Seal/Open
 // могут приходить параллельно — как WG Transport).
 type rc4Stream struct {
-	c  *rc4.Cipher
+	st *rc4State
 	mu sync.Mutex
 }
 
 func newRC4Stream(key []byte) (*rc4Stream, error) {
-	c, err := rc4.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	st := &rc4Stream{c: c}
+	st := &rc4Stream{st: newRC4State(key)}
 	// канон: drop первых KeyDrop байт кейстрима
-	st.c.XORKeyStream(make([]byte, KeyDrop), make([]byte, KeyDrop))
+	st.st.xor(make([]byte, KeyDrop), make([]byte, KeyDrop))
 	return st, nil
 }
 
 func (r *rc4Stream) xor(dst, src []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.c.XORKeyStream(dst, src)
+	r.st.xor(dst, src)
+}
+
+// openPeek — спекулятивная расшифровка: XOR по КОПИИ состояния, валидация
+// открытого текста, коммит кейстрима ТОЛЬКО при успехе. Фейл конверта
+// (битый кадр, кадр чужого конверта во время ре-кея) не съедает ни байта
+// потока — активный конверт остаётся синхронным.
+func (r *rc4Stream) openPeek(box []byte, validate func(msg []byte) error) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snap := *r.st
+	msg := make([]byte, len(box))
+	snap.xor(msg, box)
+	if verr := validate(msg); verr != nil {
+		return nil, verr // состояние не тронуто
+	}
+	*r.st = snap
+	return msg[PieceOverhead:], nil
 }
 
 // rc4Key — канонный вывод ключей MSE: SHA1(label + S + SKEY),
@@ -438,16 +482,18 @@ func (t *Transport) Open(box []byte) ([]byte, error) {
 	if len(box) < PieceOverhead {
 		return nil, fmt.Errorf("%w: len %d < %d", ErrEnvelope, len(box), PieceOverhead)
 	}
-	msg := make([]byte, len(box))
-	t.in.xor(msg, box)
-	ml := binary.BigEndian.Uint32(msg[0:4])
-	if int(ml) != len(box) {
-		return nil, fmt.Errorf("%w: msg len %d ≠ frame %d", ErrEnvelope, ml, len(box))
-	}
-	if msg[4] != MsgPiece {
-		return nil, fmt.Errorf("%w: msg type 0x%02x", ErrEnvelope, msg[4])
-	}
-	return msg[PieceOverhead:], nil
+	// v1.9.9: расшифровка по копии кейстрима; коммит только при валидном
+	// piece-заголовке (см. openPeek) — битый кадр не рвёт поток.
+	return t.in.openPeek(box, func(msg []byte) error {
+		ml := binary.BigEndian.Uint32(msg[0:4])
+		if int(ml) != len(box) {
+			return fmt.Errorf("%w: msg len %d ≠ frame %d", ErrEnvelope, ml, len(box))
+		}
+		if msg[4] != MsgPiece {
+			return fmt.Errorf("%w: msg type 0x%02x", ErrEnvelope, msg[4])
+		}
+		return nil
+	})
 }
 
 // ---- helpers ----

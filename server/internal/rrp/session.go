@@ -160,7 +160,15 @@ type Session struct {
 	keyPlan  KeyPlan
 	keyTimer *time.Timer
 
-	done chan struct{}
+	// v1.9.9 self-heal: ретирнутый конверт (prev-окно на приёме) + состояние
+	// ре-кея. Всё под s.mu; см. session_rekey.go.
+	cryptoPrev PayloadCrypto
+	prevUntil  time.Time
+	rekeying   bool
+	lastRekey  time.Time
+	fails      int
+	rekeys     int
+	done       chan struct{}
 }
 
 type outItem struct {
@@ -259,10 +267,14 @@ func (s *Session) handle(f *Frame) error {
 	switch f.Type {
 	case TypeData:
 		// v0.9.2: крипто-конверт (mtproto2) — расшифровка payload на входе.
-		// Битый конверт = нарушение протокола (DATA всегда идут конвертом).
+		// v1.9.9: одиночный битый кадр больше не убивает сессию — дроп кадра
+		// + ре-кей (self-heal, session_rekey.go); лимиты исчерпаны — shutdown.
 		plain, err := s.decryptDown(f.Payload)
 		if err != nil {
-			return fmt.Errorf("payload decrypt: %w", err)
+			if ferr := s.onDecryptFail("data", err); ferr != nil {
+				return fmt.Errorf("payload decrypt: %w", ferr)
+			}
+			return nil
 		}
 		f.Payload = plain
 		st := s.getStream(f.StreamID)
@@ -384,7 +396,10 @@ func (s *Session) handle(f *Frame) error {
 	case TypeUdpData:
 		plain, err := s.decryptDown(f.Payload)
 		if err != nil {
-			return fmt.Errorf("udp payload decrypt: %w", err)
+			if ferr := s.onDecryptFail("udp", err); ferr != nil {
+				return fmt.Errorf("udp payload decrypt: %w", ferr)
+			}
+			return nil
 		}
 		s.mu.Lock()
 		s.udpDg++
