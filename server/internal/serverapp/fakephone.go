@@ -589,7 +589,6 @@ func (p *fakePhone) pumpToPhone(id uint32, dst net.Conn) {
 // ждём, пока не подтверждённые байты стрима не влезут в кредит win.
 // win == 0 — старое поведение без пейсинга (транспортные тесты net.Pipe).
 func (p *fakePhone) writePaced(id uint32, b []byte) error {
-	defer func() { /* debug hook */ }()
 	if p.win <= 0 {
 		return p.write(rrp.TypeData, id, b)
 	}
@@ -610,7 +609,8 @@ func (p *fakePhone) writePaced(id uint32, b []byte) error {
 		if time.Now().After(deadline) {
 			return errors.New("fake-phone: flow-control wait timeout")
 		}
-		debugf("FAKE writePaced WAIT sid=%d unacked=%d win=%d", id, p.out[id], p.win)
+		// race-safe: unacked посчитан под fmu выше; p.out напрямую не читаем.
+		debugf("FAKE writePaced WAIT sid=%d unacked=%d win=%d", id, unacked, p.win)
 		time.Sleep(2 * time.Millisecond)
 	}
 }
